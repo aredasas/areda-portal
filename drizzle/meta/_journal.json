@@ -1,0 +1,27 @@
+{
+  "version": "7",
+  "dialect": "mysql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "5",
+      "when": 1782840300848,
+      "tag": "0000_slippery_lord_hawal",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "5",
+      "when": 1782840645766,
+      "tag": "0001_sour_captain_midlands",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1782852103223,
+      "tag": "0002_great_spiral",
+      "breakpoints": true
+    }
+  ]
+}

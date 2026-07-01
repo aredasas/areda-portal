@@ -1,0 +1,191 @@
+import { int, mysqlEnum, mysqlTable, text, timestamp, varchar, boolean, json } from "drizzle-orm/mysql-core";
+
+/**
+ * Users table - Colaboradores de la firma
+ * Roles: admin, contador_senior, contador_junior, asistente
+ * Auth: username (cédula o nombre de usuario) + password hash
+ */
+export const users = mysqlTable("users", {
+  id: int("id").autoincrement().primaryKey(),
+  openId: varchar("openId", { length: 64 }).notNull().unique(),
+  /** Username for local auth - can be cédula number or custom username */
+  username: varchar("username", { length: 64 }).unique(),
+  /** Bcrypt password hash for local auth */
+  passwordHash: varchar("passwordHash", { length: 255 }),
+  name: text("name"),
+  email: varchar("email", { length: 320 }),
+  cedula: varchar("cedula", { length: 20 }),
+  loginMethod: varchar("loginMethod", { length: 64 }),
+  role: mysqlEnum("role", ["admin", "contador_senior", "contador_junior", "asistente"]).default("asistente").notNull(),
+  isActive: boolean("isActive").default(true).notNull(),
+  phone: varchar("phone", { length: 20 }),
+  position: varchar("position", { length: 100 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull(),
+});
+
+export type User = typeof users.$inferSelect;
+export type InsertUser = typeof users.$inferInsert;
+
+/**
+ * Clients table - Clientes de la firma contable
+ * Includes managerId for the assigned collaborator
+ */
+export const clients = mysqlTable("clients", {
+  id: int("id").autoincrement().primaryKey(),
+  razonSocial: varchar("razonSocial", { length: 255 }).notNull(),
+  nit: varchar("nit", { length: 20 }).notNull(),
+  digitoVerificacion: varchar("digitoVerificacion", { length: 1 }),
+  direccion: text("direccion"),
+  ciudad: varchar("ciudad", { length: 100 }),
+  departamento: varchar("departamento", { length: 100 }),
+  telefono: varchar("telefono", { length: 20 }),
+  email: varchar("email", { length: 320 }),
+  actividadEconomica: varchar("actividadEconomica", { length: 255 }),
+  codigoCIIU: varchar("codigoCIIU", { length: 10 }),
+  representanteLegal: varchar("representanteLegal", { length: 255 }),
+  rutFileUrl: text("rutFileUrl"),
+  rutFileKey: varchar("rutFileKey", { length: 255 }),
+  /** Manager: collaborator assigned as responsible for this client */
+  managerId: int("managerId"),
+  isActive: boolean("isActive").default(true).notNull(),
+  notes: text("notes"),
+  createdById: int("createdById"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type Client = typeof clients.$inferSelect;
+export type InsertClient = typeof clients.$inferInsert;
+
+/**
+ * Tax obligations catalog - Obligaciones tributarias colombianas predefinidas
+ */
+export const taxObligations = mysqlTable("taxObligations", {
+  id: int("id").autoincrement().primaryKey(),
+  code: varchar("code", { length: 20 }).notNull().unique(),
+  name: varchar("name", { length: 100 }).notNull(),
+  description: text("description"),
+  frequency: mysqlEnum("frequency", ["mensual", "bimestral", "cuatrimestral", "anual"]).notNull(),
+  isActive: boolean("isActive").default(true).notNull(),
+});
+
+export type TaxObligation = typeof taxObligations.$inferSelect;
+export type InsertTaxObligation = typeof taxObligations.$inferInsert;
+
+/**
+ * Client-obligation relationship - Obligaciones asignadas a cada cliente
+ */
+export const clientObligations = mysqlTable("clientObligations", {
+  id: int("id").autoincrement().primaryKey(),
+  clientId: int("clientId").notNull(),
+  obligationId: int("obligationId").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type ClientObligation = typeof clientObligations.$inferSelect;
+export type InsertClientObligation = typeof clientObligations.$inferInsert;
+
+/**
+ * Tax deadlines - Vencimientos tributarios generados automáticamente
+ */
+export const taxDeadlines = mysqlTable("taxDeadlines", {
+  id: int("id").autoincrement().primaryKey(),
+  clientId: int("clientId").notNull(),
+  obligationId: int("obligationId").notNull(),
+  period: varchar("period", { length: 20 }).notNull(),
+  dueDate: timestamp("dueDate").notNull(),
+  lastDigitNit: varchar("lastDigitNit", { length: 1 }),
+  status: mysqlEnum("status", ["pendiente", "completado", "vencido"]).default("pendiente").notNull(),
+  completedAt: timestamp("completedAt"),
+  completedById: int("completedById"),
+  notes: text("notes"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type TaxDeadline = typeof taxDeadlines.$inferSelect;
+export type InsertTaxDeadline = typeof taxDeadlines.$inferInsert;
+
+/**
+ * Tasks - Tareas manuales asignadas a colaboradores
+ * Now supports attachments, evidence for completion, and reopening
+ */
+export const tasks = mysqlTable("tasks", {
+  id: int("id").autoincrement().primaryKey(),
+  title: varchar("title", { length: 255 }).notNull(),
+  description: text("description"),
+  clientId: int("clientId").notNull(),
+  assignedToId: int("assignedToId"),
+  createdById: int("createdById").notNull(),
+  dueDate: timestamp("dueDate"),
+  status: mysqlEnum("status", ["pendiente", "en_progreso", "completada", "vencida"]).default("pendiente").notNull(),
+  priority: mysqlEnum("priority", ["baja", "media", "alta", "urgente"]).default("media").notNull(),
+  /** Whether this task was auto-generated from tax deadlines */
+  isAutoGenerated: boolean("isAutoGenerated").default(false).notNull(),
+  /** Reference to the tax deadline that generated this task (if auto-generated) */
+  taxDeadlineId: int("taxDeadlineId"),
+  completedAt: timestamp("completedAt"),
+  /** Evidence file URL required to complete the task */
+  evidenceFileUrl: text("evidenceFileUrl"),
+  evidenceFileKey: varchar("evidenceFileKey", { length: 255 }),
+  /** Notes when completing the task */
+  completionNotes: text("completionNotes"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type Task = typeof tasks.$inferSelect;
+export type InsertTask = typeof tasks.$inferInsert;
+
+/**
+ * Task attachments - Files attached to tasks (Excel, Word, PDF, etc.)
+ */
+export const taskAttachments = mysqlTable("taskAttachments", {
+  id: int("id").autoincrement().primaryKey(),
+  taskId: int("taskId").notNull(),
+  fileName: varchar("fileName", { length: 255 }).notNull(),
+  fileUrl: text("fileUrl").notNull(),
+  fileKey: varchar("fileKey", { length: 255 }).notNull(),
+  contentType: varchar("contentType", { length: 100 }),
+  fileSize: int("fileSize"),
+  uploadedById: int("uploadedById").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type TaskAttachment = typeof taskAttachments.$inferSelect;
+export type InsertTaskAttachment = typeof taskAttachments.$inferInsert;
+
+/**
+ * App settings - Configurable settings (Drive folder URL, DIAN calendar, etc.)
+ */
+export const appSettings = mysqlTable("appSettings", {
+  id: int("id").autoincrement().primaryKey(),
+  key: varchar("key", { length: 100 }).notNull().unique(),
+  value: text("value"),
+  description: varchar("description", { length: 255 }),
+  updatedById: int("updatedById"),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type AppSetting = typeof appSettings.$inferSelect;
+export type InsertAppSetting = typeof appSettings.$inferInsert;
+
+/**
+ * DIAN Calendar entries - Custom uploaded calendar entries by admin
+ * Each entry represents a specific deadline date for a specific obligation and NIT digit
+ */
+export const dianCalendar = mysqlTable("dianCalendar", {
+  id: int("id").autoincrement().primaryKey(),
+  year: int("year").notNull(),
+  obligationCode: varchar("obligationCode", { length: 20 }).notNull(),
+  period: varchar("period", { length: 20 }).notNull(),
+  lastDigitNit: varchar("lastDigitNit", { length: 1 }).notNull(),
+  dueDate: timestamp("dueDate").notNull(),
+  uploadedById: int("uploadedById"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type DianCalendar = typeof dianCalendar.$inferSelect;
+export type InsertDianCalendar = typeof dianCalendar.$inferInsert;
