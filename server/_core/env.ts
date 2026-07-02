@@ -14,7 +14,9 @@ export const ENV = {
 
   // Legacy Manus OAuth fields, kept only so the (now unused) invite-claim
   // route in oauth.ts doesn't error on import. Not required for local login.
-  appId: process.env.VITE_APP_ID ?? "",
+  // appId still gets signed into every session JWT and checked on verify,
+  // so it needs a non-empty fallback even without Manus configured.
+  appId: process.env.VITE_APP_ID ?? "areda-portal",
   oAuthServerUrl: process.env.OAUTH_SERVER_URL ?? "",
   ownerOpenId: process.env.OWNER_OPEN_ID ?? "",
 };
