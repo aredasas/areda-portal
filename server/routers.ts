@@ -223,7 +223,7 @@ export const appRouter = router({
             accessUrl = input.fileUrl;
           } else {
             // Try to get signed URL from the key in the path
-            const key = input.fileUrl.replace(/^\/manus-storage\//, "");
+            const key = input.fileUrl.replace(/^\/files\//, "");
             accessUrl = await storageGetSignedUrl(key);
           }
           

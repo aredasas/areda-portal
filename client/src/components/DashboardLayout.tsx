@@ -179,7 +179,7 @@ function DashboardLayoutContent({
               {!isCollapsed ? (
                 <div className="flex items-center gap-2 min-w-0">
                   <img
-                    src="/manus-storage/areda-logo_9d63d3fc.jpg"
+                    src="https://assets.zyrosite.com/A0x38ZWxPKt66ygM/group-292-A0xrkNGgxrh4G9QM.png"
                     alt="Areda"
                     className="h-7 w-7 rounded object-contain"
                   />
