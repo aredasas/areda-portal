@@ -1,3 +1,4 @@
+import DashboardLayout from "@/components/DashboardLayout";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -18,6 +19,7 @@ export default function Configuracion() {
 
   if (!isAdmin) {
     return (
+      <DashboardLayout>
       <div className="flex items-center justify-center py-20">
         <div className="text-center">
           <AlertCircle className="h-12 w-12 mx-auto mb-4 text-muted-foreground/40" />
@@ -25,10 +27,12 @@ export default function Configuracion() {
           <p className="text-muted-foreground">Solo los administradores pueden acceder a esta sección.</p>
         </div>
       </div>
+      </DashboardLayout>
     );
   }
 
   return (
+    <DashboardLayout>
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-[#42302E]">Configuración</h1>
@@ -54,6 +58,7 @@ export default function Configuracion() {
         </TabsContent>
       </Tabs>
     </div>
+    </DashboardLayout>
   );
 }
 

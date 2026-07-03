@@ -1,3 +1,4 @@
+import DashboardLayout from "@/components/DashboardLayout";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -242,6 +243,7 @@ export default function Tareas() {
   });
 
   return (
+    <DashboardLayout>
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
@@ -554,5 +556,6 @@ export default function Tareas() {
         </DialogContent>
       </Dialog>
     </div>
+    </DashboardLayout>
   );
 }
