@@ -4,12 +4,14 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { trpc } from "@/lib/trpc";
-import { Settings, Upload, Calendar, Loader2, FileSpreadsheet, Trash2, AlertCircle } from "lucide-react";
+import { Settings, Upload, Calendar, Loader2, FileSpreadsheet, Trash2, AlertCircle, FileText, Plus, Pencil } from "lucide-react";
 import { useState, useRef } from "react";
 import { toast } from "sonner";
 
@@ -44,6 +46,9 @@ export default function Configuracion() {
           <TabsTrigger value="dian" className="gap-2">
             <Calendar className="h-4 w-4" /> Calendario DIAN
           </TabsTrigger>
+          <TabsTrigger value="obligaciones" className="gap-2">
+            <FileText className="h-4 w-4" /> Obligaciones Tributarias
+          </TabsTrigger>
           <TabsTrigger value="general" className="gap-2">
             <Settings className="h-4 w-4" /> General
           </TabsTrigger>
@@ -51,6 +56,10 @@ export default function Configuracion() {
 
         <TabsContent value="dian" className="mt-4">
           <DianCalendarSection />
+        </TabsContent>
+
+        <TabsContent value="obligaciones" className="mt-4">
+          <TaxObligationsSection />
         </TabsContent>
 
         <TabsContent value="general" className="mt-4">
@@ -407,6 +416,211 @@ function GeneralSettingsSection() {
           })}
         </div>
       </CardContent>
+    </Card>
+  );
+}
+
+const frequencyLabels: Record<string, string> = {
+  mensual: "Mensual",
+  bimestral: "Bimestral",
+  cuatrimestral: "Cuatrimestral",
+  anual: "Anual",
+};
+
+function TaxObligationsSection() {
+  const { data: obligations, isLoading, refetch } = trpc.obligations.listAll.useQuery();
+  const createObligation = trpc.obligations.create.useMutation();
+  const updateObligation = trpc.obligations.update.useMutation();
+  const setActive = trpc.obligations.setActive.useMutation();
+
+  const [showForm, setShowForm] = useState(false);
+  const [editingObligation, setEditingObligation] = useState<any>(null);
+  const [form, setForm] = useState({ code: "", name: "", description: "", frequency: "mensual" });
+
+  const resetForm = () => {
+    setForm({ code: "", name: "", description: "", frequency: "mensual" });
+    setEditingObligation(null);
+  };
+
+  const handleOpenNew = () => { resetForm(); setShowForm(true); };
+
+  const handleEdit = (obligation: any) => {
+    setEditingObligation(obligation);
+    setForm({
+      code: obligation.code,
+      name: obligation.name,
+      description: obligation.description || "",
+      frequency: obligation.frequency,
+    });
+    setShowForm(true);
+  };
+
+  const handleSave = async () => {
+    if (!form.code || !form.name) {
+      toast.error("Código y nombre son obligatorios");
+      return;
+    }
+    try {
+      if (editingObligation) {
+        await updateObligation.mutateAsync({ id: editingObligation.id, ...form });
+        toast.success("Obligación actualizada correctamente");
+      } else {
+        await createObligation.mutateAsync(form);
+        toast.success("Obligación creada correctamente");
+      }
+      setShowForm(false);
+      resetForm();
+      refetch();
+    } catch (error: any) {
+      toast.error(error.message || "Error al guardar la obligación");
+    }
+  };
+
+  const handleToggleActive = async (obligation: any) => {
+    try {
+      await setActive.mutateAsync({ id: obligation.id, isActive: !obligation.isActive });
+      toast.success(obligation.isActive ? "Obligación desactivada" : "Obligación reactivada");
+      refetch();
+    } catch {
+      toast.error("Error al cambiar el estado de la obligación");
+    }
+  };
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center py-12">
+        <Loader2 className="h-6 w-6 animate-spin text-[#EDA011]" />
+      </div>
+    );
+  }
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
+        <div>
+          <CardTitle className="text-base flex items-center gap-2">
+            <FileText className="h-4 w-4" /> Catálogo de Obligaciones Tributarias
+          </CardTitle>
+          <p className="text-sm text-muted-foreground mt-1">
+            Estas son las obligaciones que se pueden asignar a cada cliente para generar sus vencimientos
+          </p>
+        </div>
+        <Button onClick={handleOpenNew} className="gap-2 bg-[#EDA011] hover:bg-[#d48f0f] text-white">
+          <Plus className="h-4 w-4" /> Nueva Obligación
+        </Button>
+      </CardHeader>
+      <CardContent>
+        {obligations && obligations.length > 0 ? (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Código</TableHead>
+                <TableHead>Nombre</TableHead>
+                <TableHead>Periodicidad</TableHead>
+                <TableHead>Estado</TableHead>
+                <TableHead className="text-right">Acciones</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {obligations.map((obligation: any) => (
+                <TableRow key={obligation.id}>
+                  <TableCell className="font-mono text-sm">{obligation.code}</TableCell>
+                  <TableCell className="font-medium">{obligation.name}</TableCell>
+                  <TableCell className="text-sm">{frequencyLabels[obligation.frequency]}</TableCell>
+                  <TableCell>
+                    <Badge variant="outline" className={obligation.isActive ? "bg-green-50 text-green-700 border-green-200" : "bg-gray-100 text-gray-600"}>
+                      {obligation.isActive ? "Activa" : "Inactiva"}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <div className="flex gap-1 justify-end">
+                      <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleEdit(obligation)} title="Editar">
+                        <Pencil className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className={obligation.isActive ? "text-red-600" : "text-green-700"}
+                        onClick={() => handleToggleActive(obligation)}
+                      >
+                        {obligation.isActive ? "Desactivar" : "Reactivar"}
+                      </Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        ) : (
+          <div className="text-center py-12 text-muted-foreground">
+            <FileText className="h-12 w-12 mx-auto mb-3 opacity-40" />
+            <p>Aún no hay obligaciones tributarias registradas</p>
+          </div>
+        )}
+      </CardContent>
+
+      <Dialog open={showForm} onOpenChange={(open) => { setShowForm(open); if (!open) resetForm(); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>{editingObligation ? "Editar Obligación" : "Nueva Obligación Tributaria"}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-2">
+              <Label>Código *</Label>
+              <Input
+                value={form.code}
+                onChange={(e) => setForm({ ...form, code: e.target.value.toUpperCase() })}
+                placeholder="Ej: IVA, RETEFUENTE, ICA"
+              />
+              <p className="text-xs text-muted-foreground">
+                Debe coincidir con el código usado en el calendario DIAN que se cargue
+              </p>
+            </div>
+            <div className="space-y-2">
+              <Label>Nombre *</Label>
+              <Input
+                value={form.name}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+                placeholder="Ej: Declaración de IVA"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Periodicidad *</Label>
+              <Select value={form.frequency} onValueChange={(v) => setForm({ ...form, frequency: v })}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="mensual">Mensual</SelectItem>
+                  <SelectItem value="bimestral">Bimestral</SelectItem>
+                  <SelectItem value="cuatrimestral">Cuatrimestral</SelectItem>
+                  <SelectItem value="anual">Anual</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Descripción</Label>
+              <Textarea
+                value={form.description}
+                onChange={(e) => setForm({ ...form, description: e.target.value })}
+                placeholder="Notas adicionales sobre esta obligación..."
+                rows={2}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setShowForm(false); resetForm(); }}>Cancelar</Button>
+            <Button
+              onClick={handleSave}
+              disabled={createObligation.isPending || updateObligation.isPending}
+              className="bg-[#EDA011] hover:bg-[#d48f0f] text-white"
+            >
+              {(createObligation.isPending || updateObligation.isPending) && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
+              {editingObligation ? "Actualizar" : "Crear Obligación"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 }

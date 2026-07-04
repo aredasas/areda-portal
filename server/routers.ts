@@ -314,6 +314,39 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
     list: protectedProcedure.query(async () => {
       return db.getAllTaxObligations();
     }),
+    listAll: adminProcedure.query(async () => {
+      return db.getAllTaxObligationsForAdmin();
+    }),
+    create: adminProcedure
+      .input(z.object({
+        code: z.string().min(1),
+        name: z.string().min(1),
+        description: z.string().optional(),
+        frequency: z.enum(["mensual", "bimestral", "cuatrimestral", "anual"]),
+      }))
+      .mutation(async ({ input }) => {
+        const id = await db.createTaxObligation({ ...input, description: input.description || null });
+        return { id };
+      }),
+    update: adminProcedure
+      .input(z.object({
+        id: z.number(),
+        code: z.string().min(1).optional(),
+        name: z.string().min(1).optional(),
+        description: z.string().optional(),
+        frequency: z.enum(["mensual", "bimestral", "cuatrimestral", "anual"]).optional(),
+      }))
+      .mutation(async ({ input }) => {
+        const { id, ...data } = input;
+        await db.updateTaxObligation(id, data);
+        return { success: true };
+      }),
+    setActive: adminProcedure
+      .input(z.object({ id: z.number(), isActive: z.boolean() }))
+      .mutation(async ({ input }) => {
+        await db.setTaxObligationActive(input.id, input.isActive);
+        return { success: true };
+      }),
     getClientObligations: protectedProcedure
       .input(z.object({ clientId: z.number() }))
       .query(async ({ input }) => {
@@ -389,6 +422,14 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
       .input(z.object({ id: z.number(), status: z.enum(["pendiente", "completado", "vencido"]) }))
       .mutation(async ({ input, ctx }) => {
         await db.updateDeadlineStatus(input.id, input.status, ctx.user.id);
+        return { success: true };
+      }),
+    /** Manually correct a deadline's due date when detected to be wrong
+     * (e.g. an error in the DIAN calendar import or the fallback estimate) */
+    updateDueDate: adminProcedure
+      .input(z.object({ id: z.number(), dueDate: z.string() }))
+      .mutation(async ({ input }) => {
+        await db.updateDeadlineDueDate(input.id, new Date(input.dueDate));
         return { success: true };
       }),
   }),

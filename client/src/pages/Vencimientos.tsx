@@ -1,7 +1,9 @@
 import DashboardLayout from "@/components/DashboardLayout";
+import { useAuth } from "@/_core/hooks/useAuth";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
@@ -10,7 +12,7 @@ import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { trpc } from "@/lib/trpc";
-import { Calendar, Loader2, RefreshCw, Settings2, CheckCircle2, ChevronLeft, ChevronRight, List, CalendarDays } from "lucide-react";
+import { Calendar, Loader2, RefreshCw, Settings2, CheckCircle2, ChevronLeft, ChevronRight, List, CalendarDays, Pencil } from "lucide-react";
 import { useState, useMemo } from "react";
 import { toast } from "sonner";
 
@@ -53,6 +55,8 @@ function getCalendarDays(year: number, month: number) {
 }
 
 export default function Vencimientos() {
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
   const { data: clients, isLoading: loadingClients } = trpc.clients.list.useQuery();
   const { data: obligations } = trpc.obligations.list.useQuery();
   const { data: upcomingDeadlines, isLoading: loadingUpcoming, refetch: refetchUpcoming } = trpc.deadlines.getUpcoming.useQuery({ daysAhead: 90 });
@@ -70,6 +74,31 @@ export default function Vencimientos() {
   const setObligations = trpc.obligations.setClientObligations.useMutation();
   const generateDeadlines = trpc.deadlines.generate.useMutation();
   const updateStatus = trpc.deadlines.updateStatus.useMutation();
+  const updateDueDate = trpc.deadlines.updateDueDate.useMutation();
+
+  const [showEditDateDialog, setShowEditDateDialog] = useState(false);
+  const [editingDeadline, setEditingDeadline] = useState<any>(null);
+  const [newDueDate, setNewDueDate] = useState("");
+
+  const handleOpenEditDate = (deadline: any) => {
+    setEditingDeadline(deadline);
+    setNewDueDate(new Date(deadline.dueDate).toISOString().slice(0, 10));
+    setShowEditDateDialog(true);
+  };
+
+  const handleConfirmEditDate = async () => {
+    if (!editingDeadline || !newDueDate) return;
+    try {
+      await updateDueDate.mutateAsync({ id: editingDeadline.id, dueDate: newDueDate });
+      toast.success("Fecha de vencimiento actualizada correctamente");
+      setShowEditDateDialog(false);
+      setEditingDeadline(null);
+      refetchClientDeadlines();
+      refetchUpcoming();
+    } catch (error: any) {
+      toast.error(error.message || "Error al actualizar la fecha");
+    }
+  };
 
   const [showObligationsDialog, setShowObligationsDialog] = useState(false);
   const [selectedObligationIds, setSelectedObligationIds] = useState<number[]>([]);
@@ -440,6 +469,7 @@ export default function Vencimientos() {
                         <TableHead>Vencimiento</TableHead>
                         <TableHead>Días</TableHead>
                         <TableHead>Estado</TableHead>
+                        {isAdmin && <TableHead className="text-right">Acción</TableHead>}
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -473,6 +503,19 @@ export default function Vencimientos() {
                                 {statusLabels[d.status]}
                               </Badge>
                             </TableCell>
+                            {isAdmin && (
+                              <TableCell className="text-right">
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-8 w-8"
+                                  title="Corregir fecha de vencimiento"
+                                  onClick={() => handleOpenEditDate(d)}
+                                >
+                                  <Pencil className="h-3.5 w-3.5" />
+                                </Button>
+                              </TableCell>
+                            )}
                           </TableRow>
                         );
                       })}
@@ -669,17 +712,30 @@ export default function Vencimientos() {
                             </Badge>
                           </TableCell>
                           <TableCell className="text-right">
-                            {d.status === "pendiente" && (
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                className="gap-1"
-                                onClick={() => handleStatusChange(d.id, "completado")}
-                              >
-                                <CheckCircle2 className="h-3 w-3" />
-                                Completar
-                              </Button>
-                            )}
+                            <div className="flex gap-1 justify-end">
+                              {d.status === "pendiente" && (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="gap-1"
+                                  onClick={() => handleStatusChange(d.id, "completado")}
+                                >
+                                  <CheckCircle2 className="h-3 w-3" />
+                                  Completar
+                                </Button>
+                              )}
+                              {isAdmin && (
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-8 w-8"
+                                  title="Corregir fecha de vencimiento"
+                                  onClick={() => handleOpenEditDate(d)}
+                                >
+                                  <Pencil className="h-3.5 w-3.5" />
+                                </Button>
+                              )}
+                            </div>
                           </TableCell>
                         </TableRow>
                       ))}
@@ -747,6 +803,45 @@ export default function Vencimientos() {
               <Button onClick={handleSaveObligations} disabled={setObligations.isPending}>
                 {setObligations.isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
                 Guardar Obligaciones
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Edit deadline due date dialog (admin only) */}
+        <Dialog open={showEditDateDialog} onOpenChange={(open) => { setShowEditDateDialog(open); if (!open) setEditingDeadline(null); }}>
+          <DialogContent className="max-w-sm">
+            <DialogHeader>
+              <DialogTitle>Corregir Fecha de Vencimiento</DialogTitle>
+            </DialogHeader>
+            {editingDeadline && (
+              <div className="space-y-4 py-2">
+                <div className="text-sm text-muted-foreground">
+                  <p><span className="font-medium text-foreground">{editingDeadline.obligationName}</span></p>
+                  <p>{editingDeadline.clientName} — Período {editingDeadline.period}</p>
+                </div>
+                <div className="space-y-2">
+                  <Label>Nueva fecha de vencimiento</Label>
+                  <Input
+                    type="date"
+                    value={newDueDate}
+                    onChange={(e) => setNewDueDate(e.target.value)}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Use esto cuando detecte que una fecha quedó mal calculada o mal importada del calendario DIAN.
+                  </p>
+                </div>
+              </div>
+            )}
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setShowEditDateDialog(false)}>Cancelar</Button>
+              <Button
+                onClick={handleConfirmEditDate}
+                disabled={updateDueDate.isPending || !newDueDate}
+                className="bg-[#EDA011] hover:bg-[#d48f0f] text-white"
+              >
+                {updateDueDate.isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
+                Guardar
               </Button>
             </DialogFooter>
           </DialogContent>

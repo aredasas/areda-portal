@@ -1,6 +1,6 @@
 import { eq, and, desc, asc, like, sql, inArray, gte, lte, or } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
-import { InsertUser, users, clients, InsertClient, taxObligations, clientObligations, InsertClientObligation, taxDeadlines, InsertTaxDeadline, tasks, InsertTask, taskAttachments, InsertTaskAttachment, appSettings, InsertAppSetting, dianCalendar, InsertDianCalendar } from "../drizzle/schema";
+import { InsertUser, users, clients, InsertClient, taxObligations, InsertTaxObligation, clientObligations, InsertClientObligation, taxDeadlines, InsertTaxDeadline, tasks, InsertTask, taskAttachments, InsertTaskAttachment, appSettings, InsertAppSetting, dianCalendar, InsertDianCalendar } from "../drizzle/schema";
 import { ENV } from './_core/env';
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -254,6 +254,32 @@ export async function getAllTaxObligations() {
   return db.select().from(taxObligations).where(eq(taxObligations.isActive, true)).orderBy(asc(taxObligations.name));
 }
 
+/** For the admin management screen: includes inactive obligations too */
+export async function getAllTaxObligationsForAdmin() {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(taxObligations).orderBy(asc(taxObligations.name));
+}
+
+export async function createTaxObligation(data: InsertTaxObligation) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const result = await db.insert(taxObligations).values(data);
+  return result[0].insertId;
+}
+
+export async function updateTaxObligation(id: number, data: Partial<InsertTaxObligation>) {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(taxObligations).set(data).where(eq(taxObligations.id, id));
+}
+
+export async function setTaxObligationActive(id: number, isActive: boolean) {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(taxObligations).set({ isActive }).where(eq(taxObligations.id, id));
+}
+
 export async function getClientObligations(clientId: number) {
   const db = await getDb();
   if (!db) return [];
@@ -376,6 +402,14 @@ export async function updateDeadlineStatus(id: number, status: "pendiente" | "co
     if (completedById) data.completedById = completedById;
   }
   await db.update(taxDeadlines).set(data).where(eq(taxDeadlines.id, id));
+}
+
+/** Manually correct a single deadline's due date, e.g. when the auto-generated
+ * or DIAN-imported date turns out to be wrong for that specific client/period. */
+export async function updateDeadlineDueDate(id: number, dueDate: Date) {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(taxDeadlines).set({ dueDate }).where(eq(taxDeadlines.id, id));
 }
 
 export async function deleteClientDeadlines(clientId: number) {
