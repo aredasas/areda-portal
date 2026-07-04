@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { trpc } from "@/lib/trpc";
-import { ClipboardList, Plus, Loader2, Calendar, Upload, CheckCircle2, RotateCcw, Paperclip, FileText, Eye } from "lucide-react";
+import { ClipboardList, Plus, Loader2, Calendar, Upload, CheckCircle2, RotateCcw, Paperclip, FileText, Eye, FolderOpen } from "lucide-react";
 import { useState, useRef } from "react";
 import { toast } from "sonner";
 
@@ -250,9 +250,11 @@ export default function Tareas() {
           <h1 className="text-2xl font-bold text-[#42302E]">Tareas</h1>
           <p className="text-muted-foreground mt-1">Gestión de tareas asignadas a colaboradores</p>
         </div>
-        <Button onClick={handleOpenNew} className="gap-2 bg-[#EDA011] hover:bg-[#d48f0f] text-white">
-          <Plus className="h-4 w-4" /> Nueva Tarea
-        </Button>
+        {isAdmin && (
+          <Button onClick={handleOpenNew} className="gap-2 bg-[#EDA011] hover:bg-[#d48f0f] text-white">
+            <Plus className="h-4 w-4" /> Nueva Tarea
+          </Button>
+        )}
       </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
@@ -315,7 +317,7 @@ export default function Tareas() {
                             <Badge className="bg-green-100 text-green-800 border-green-200">
                               <CheckCircle2 className="h-3 w-3 mr-1" /> Completada
                             </Badge>
-                          ) : (
+                          ) : isAdmin ? (
                             <Select value={task.status} onValueChange={(v) => handleStatusChange(task.id, v)}>
                               <SelectTrigger className="h-7 w-[140px]">
                                 <Badge variant="outline" className={statusColors[task.status]}>
@@ -329,6 +331,10 @@ export default function Tareas() {
                                 <SelectItem value="vencida">Vencida</SelectItem>
                               </SelectContent>
                             </Select>
+                          ) : (
+                            <Badge variant="outline" className={statusColors[task.status]}>
+                              {statusLabels[task.status]}
+                            </Badge>
                           )}
                         </TableCell>
                         <TableCell className="text-right">
@@ -336,8 +342,18 @@ export default function Tareas() {
                             <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleViewDetail(task)} title="Ver detalle">
                               <Eye className="w-4 h-4" />
                             </Button>
-                            {task.status !== "completada" && (
+                            {isAdmin && task.status !== "completada" && (
                               <Button variant="ghost" size="sm" onClick={() => handleEdit(task)}>Editar</Button>
+                            )}
+                            {!isAdmin && task.status !== "completada" && task.assignedToId === user?.id && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="text-green-700"
+                                onClick={() => { setCompletingTaskId(task.id); setShowCompleteDialog(true); }}
+                              >
+                                <Upload className="w-3.5 h-3.5 mr-1" /> Subir soporte
+                              </Button>
                             )}
                             {task.status === "completada" && isAdmin && (
                               <Button variant="ghost" size="sm" className="text-orange-600" onClick={() => handleReopen(task.id)} title="Reabrir tarea">
@@ -444,6 +460,20 @@ export default function Tareas() {
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-2">
+            {(() => {
+              const completingTask = tasks?.find((t: any) => t.id === completingTaskId);
+              return completingTask?.clientDriveFolderUrl ? (
+                <a
+                  href={completingTask.clientDriveFolderUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-2 text-sm text-[#EDA011] hover:underline bg-[#FFF8E2] border border-[#EDA011]/30 rounded-md px-3 py-2"
+                >
+                  <FolderOpen className="h-4 w-4 flex-shrink-0" />
+                  Abrir carpeta de Drive de {completingTask.clientName}
+                </a>
+              ) : null;
+            })()}
             <div className="space-y-2">
               <Label>Archivo de evidencia *</Label>
               <div className="border-2 border-dashed rounded-lg p-4 text-center cursor-pointer hover:border-[#EDA011] transition-colors" onClick={() => evidenceInputRef.current?.click()}>

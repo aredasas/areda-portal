@@ -1,4 +1,5 @@
 import { COOKIE_NAME } from "@shared/const";
+import { TRPCError } from "@trpc/server";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, protectedProcedure, adminProcedure, router } from "./_core/trpc";
@@ -139,15 +140,19 @@ export const appRouter = router({
   }),
 
   clients: router({
-    list: protectedProcedure.query(async () => {
-      return db.getAllClients();
+    list: protectedProcedure.query(async ({ ctx }) => {
+      return db.getAllClients(ctx.user.role === "admin" ? undefined : ctx.user.id);
     }),
     getById: protectedProcedure
       .input(z.object({ id: z.number() }))
-      .query(async ({ input }) => {
-        return db.getClientById(input.id);
+      .query(async ({ input, ctx }) => {
+        const client = await db.getClientById(input.id);
+        if (client && ctx.user.role !== "admin" && client.managerId !== ctx.user.id) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "No tiene acceso a este cliente" });
+        }
+        return client;
       }),
-    create: protectedProcedure
+    create: adminProcedure
       .input(z.object({
         razonSocial: z.string().min(1),
         nit: z.string().min(1),
@@ -163,13 +168,14 @@ export const appRouter = router({
         rutFileUrl: z.string().optional(),
         rutFileKey: z.string().optional(),
         managerId: z.number().optional(),
+        driveFolderUrl: z.string().optional(),
         notes: z.string().optional(),
       }))
       .mutation(async ({ input, ctx }) => {
         const id = await db.createClient({ ...input, createdById: ctx.user.id });
         return { id };
       }),
-    update: protectedProcedure
+    update: adminProcedure
       .input(z.object({
         id: z.number(),
         razonSocial: z.string().optional(),
@@ -186,6 +192,7 @@ export const appRouter = router({
         rutFileUrl: z.string().optional(),
         rutFileKey: z.string().optional(),
         managerId: z.number().nullable().optional(),
+        driveFolderUrl: z.string().optional(),
         notes: z.string().optional(),
       }))
       .mutation(async ({ input }) => {
@@ -323,13 +330,22 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
   deadlines: router({
     getByClient: protectedProcedure
       .input(z.object({ clientId: z.number() }))
-      .query(async ({ input }) => {
+      .query(async ({ input, ctx }) => {
+        if (ctx.user.role !== "admin") {
+          const client = await db.getClientById(input.clientId);
+          if (!client || client.managerId !== ctx.user.id) {
+            throw new TRPCError({ code: "FORBIDDEN", message: "No tiene acceso a este cliente" });
+          }
+        }
         return db.getClientDeadlines(input.clientId);
       }),
     getUpcoming: protectedProcedure
       .input(z.object({ daysAhead: z.number().optional() }).optional())
-      .query(async ({ input }) => {
-        return db.getUpcomingDeadlines(input?.daysAhead || 30);
+      .query(async ({ input, ctx }) => {
+        return db.getUpcomingDeadlines(
+          input?.daysAhead || 30,
+          ctx.user.role === "admin" ? undefined : ctx.user.id
+        );
       }),
     getForMonth: protectedProcedure
       .input(z.object({ year: z.number(), month: z.number() }))
@@ -378,8 +394,8 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
   }),
 
   tasks: router({
-    list: protectedProcedure.query(async () => {
-      return db.getAllTasks();
+    list: protectedProcedure.query(async ({ ctx }) => {
+      return db.getAllTasks(ctx.user.role === "admin" ? undefined : ctx.user.id);
     }),
     getByAssignee: protectedProcedure
       .input(z.object({ userId: z.number() }))
@@ -394,7 +410,7 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
         const attachments = await db.getTaskAttachments(input.id);
         return { ...task, attachments };
       }),
-    create: protectedProcedure
+    create: adminProcedure
       .input(z.object({
         title: z.string().min(1),
         description: z.string().optional(),
@@ -416,7 +432,7 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
         });
         return { id };
       }),
-    update: protectedProcedure
+    update: adminProcedure
       .input(z.object({
         id: z.number(),
         title: z.string().optional(),
@@ -435,7 +451,8 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
         await db.updateTask(id, updateData);
         return { success: true };
       }),
-    /** Complete task with evidence (confirmation + file upload) */
+    /** Complete task with evidence (confirmation + file upload). Non-admins may
+     * only complete tasks assigned directly to them. */
     complete: protectedProcedure
       .input(z.object({
         id: z.number(),
@@ -446,6 +463,15 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
       .mutation(async ({ input, ctx }) => {
         if (!input.evidenceFileUrl) {
           throw new Error("Debe adjuntar evidencia para completar la tarea");
+        }
+        if (ctx.user.role !== "admin") {
+          const task = await db.getTaskById(input.id);
+          if (!task || task.assignedToId !== ctx.user.id) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: "Solo puede completar tareas asignadas a usted",
+            });
+          }
         }
         await db.updateTask(input.id, {
           status: "completada",

@@ -1,4 +1,5 @@
 import DashboardLayout from "@/components/DashboardLayout";
+import { useAuth } from "@/_core/hooks/useAuth";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -11,11 +12,28 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Separator } from "@/components/ui/separator";
 import { trpc } from "@/lib/trpc";
-import { Building2, Plus, Upload, Loader2, Search, FileText, Sparkles, UserCheck } from "lucide-react";
+import { Building2, Plus, Upload, Loader2, Search, FileText, Sparkles, UserCheck, AlertCircle, FolderOpen } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
 import { toast } from "sonner";
 
 export default function Clientes() {
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
+
+  if (!isAdmin) {
+    return (
+      <DashboardLayout>
+      <div className="flex items-center justify-center py-20">
+        <div className="text-center">
+          <AlertCircle className="h-12 w-12 mx-auto mb-4 text-muted-foreground/40" />
+          <h2 className="text-lg font-medium mb-2">Acceso Restringido</h2>
+          <p className="text-muted-foreground">Solo los administradores pueden acceder a esta sección.</p>
+        </div>
+      </div>
+      </DashboardLayout>
+    );
+  }
+
   const { data: clients, isLoading, refetch } = trpc.clients.list.useQuery();
   const { data: obligations } = trpc.obligations.list.useQuery();
   const { data: collaborators } = trpc.collaborators.getActive.useQuery();
@@ -47,6 +65,7 @@ export default function Clientes() {
     rutFileUrl: "",
     rutFileKey: "",
     managerId: "",
+    driveFolderUrl: "",
     notes: "",
   });
 
@@ -55,7 +74,7 @@ export default function Clientes() {
       razonSocial: "", nit: "", digitoVerificacion: "", direccion: "",
       ciudad: "", departamento: "", telefono: "", email: "",
       actividadEconomica: "", codigoCIIU: "", representanteLegal: "",
-      rutFileUrl: "", rutFileKey: "", managerId: "", notes: "",
+      rutFileUrl: "", rutFileKey: "", managerId: "", driveFolderUrl: "", notes: "",
     });
     setEditingClient(null);
     setSelectedObligationIds([]);
@@ -92,6 +111,7 @@ export default function Clientes() {
       rutFileUrl: client.rutFileUrl || "",
       rutFileKey: client.rutFileKey || "",
       managerId: client.managerId ? String(client.managerId) : "",
+      driveFolderUrl: client.driveFolderUrl || "",
       notes: client.notes || "",
     });
     setShowForm(true);
@@ -207,6 +227,7 @@ export default function Clientes() {
         rutFileUrl: form.rutFileUrl || undefined,
         rutFileKey: form.rutFileKey || undefined,
         managerId: form.managerId ? parseInt(form.managerId) : undefined,
+        driveFolderUrl: form.driveFolderUrl || undefined,
         notes: form.notes || undefined,
       };
 
@@ -435,6 +456,21 @@ export default function Clientes() {
               </Select>
               <p className="text-xs text-muted-foreground">
                 El manager es responsable de las obligaciones tributarias de este cliente
+              </p>
+            </div>
+
+            <div className="space-y-2 md:col-span-2">
+              <Label className="flex items-center gap-2">
+                <FolderOpen className="h-4 w-4 text-[#A9AD94]" />
+                Carpeta de Drive del Cliente
+              </Label>
+              <Input
+                value={form.driveFolderUrl}
+                onChange={(e) => setForm({ ...form, driveFolderUrl: e.target.value })}
+                placeholder="https://drive.google.com/drive/folders/..."
+              />
+              <p className="text-xs text-muted-foreground">
+                Los colaboradores verán un enlace directo a esta carpeta al subir soportes de las tareas de este cliente
               </p>
             </div>
 

@@ -18,6 +18,10 @@ function getR2Client() {
     region: "auto",
     endpoint: `https://${ENV.r2AccountId}.r2.cloudflarestorage.com`,
     forcePathStyle: true,
+    // R2 doesn't fully support the SDK's newer automatic checksum behavior,
+    // which can break presigned URLs in particular.
+    requestChecksumCalculation: "WHEN_REQUIRED",
+    responseChecksumValidation: "WHEN_REQUIRED",
     credentials: {
       accessKeyId: ENV.r2AccessKeyId,
       secretAccessKey: ENV.r2SecretAccessKey,

@@ -43,7 +43,7 @@ import { Badge } from "./ui/badge";
 
 const menuItems = [
   { icon: LayoutDashboard, label: "Dashboard", path: "/" },
-  { icon: Building2, label: "Clientes", path: "/clientes" },
+  { icon: Building2, label: "Clientes", path: "/clientes", adminOnly: true },
   { icon: ClipboardList, label: "Tareas", path: "/tareas" },
   { icon: Calendar, label: "Vencimientos", path: "/vencimientos" },
   { icon: FolderOpen, label: "Documentos", path: "/documentos" },

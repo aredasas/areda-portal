@@ -49,6 +49,8 @@ export const clients = mysqlTable("clients", {
   rutFileKey: varchar("rutFileKey", { length: 255 }),
   /** Manager: collaborator assigned as responsible for this client */
   managerId: int("managerId"),
+  /** URL of the Google Drive folder where this client's supporting documents are stored */
+  driveFolderUrl: text("driveFolderUrl"),
   isActive: boolean("isActive").default(true).notNull(),
   notes: text("notes"),
   createdById: int("createdById"),

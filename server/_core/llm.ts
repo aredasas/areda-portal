@@ -72,6 +72,12 @@ const assertApiKey = () => {
 async function fetchAsBase64(url: string): Promise<{ data: string; mediaType: string }> {
   const resp = await fetch(url);
   if (!resp.ok) {
+    const bodyText = await resp.text().catch(() => "(no se pudo leer el cuerpo)");
+    console.error(
+      `[fetchAsBase64] ${resp.status} ${resp.statusText} al pedir la URL firmada.\n` +
+        `URL (recortada): ${url.split("?")[0]}\n` +
+        `Respuesta del servidor de almacenamiento: ${bodyText.slice(0, 500)}`
+    );
     throw new Error(`No se pudo descargar el archivo para la IA (${resp.status})`);
   }
   const mediaType = resp.headers.get("content-type")?.split(";")[0] || "application/octet-stream";

@@ -191,9 +191,12 @@ export async function createClient(data: InsertClient) {
   return result[0].insertId;
 }
 
-export async function getAllClients() {
+export async function getAllClients(managerId?: number) {
   const db = await getDb();
   if (!db) return [];
+  const conditions = managerId
+    ? and(eq(clients.isActive, true), eq(clients.managerId, managerId))
+    : eq(clients.isActive, true);
   return db.select({
     id: clients.id,
     razonSocial: clients.razonSocial,
@@ -211,6 +214,7 @@ export async function getAllClients() {
     rutFileKey: clients.rutFileKey,
     managerId: clients.managerId,
     managerName: users.name,
+    driveFolderUrl: clients.driveFolderUrl,
     isActive: clients.isActive,
     notes: clients.notes,
     createdById: clients.createdById,
@@ -219,7 +223,7 @@ export async function getAllClients() {
   })
     .from(clients)
     .leftJoin(users, eq(clients.managerId, users.id))
-    .where(eq(clients.isActive, true))
+    .where(conditions)
     .orderBy(asc(clients.razonSocial));
 }
 
@@ -308,12 +312,17 @@ export async function getClientDeadlines(clientId: number) {
     .orderBy(asc(taxDeadlines.dueDate));
 }
 
-export async function getUpcomingDeadlines(daysAhead: number = 30) {
+export async function getUpcomingDeadlines(daysAhead: number = 30, managerId?: number) {
   const db = await getDb();
   if (!db) return [];
   const now = new Date();
   const future = new Date();
   future.setDate(future.getDate() + daysAhead);
+  const baseConditions = and(
+    eq(taxDeadlines.status, "pendiente"),
+    gte(taxDeadlines.dueDate, now),
+    lte(taxDeadlines.dueDate, future),
+  );
   return db.select({
     id: taxDeadlines.id,
     clientId: taxDeadlines.clientId,
@@ -328,11 +337,7 @@ export async function getUpcomingDeadlines(daysAhead: number = 30) {
     .from(taxDeadlines)
     .innerJoin(taxObligations, eq(taxDeadlines.obligationId, taxObligations.id))
     .innerJoin(clients, eq(taxDeadlines.clientId, clients.id))
-    .where(and(
-      eq(taxDeadlines.status, "pendiente"),
-      gte(taxDeadlines.dueDate, now),
-      lte(taxDeadlines.dueDate, future),
-    ))
+    .where(managerId ? and(baseConditions, eq(clients.managerId, managerId)) : baseConditions)
     .orderBy(asc(taxDeadlines.dueDate));
 }
 
@@ -388,15 +393,16 @@ export async function createTask(data: InsertTask) {
   return result[0].insertId;
 }
 
-export async function getAllTasks() {
+export async function getAllTasks(managerId?: number) {
   const db = await getDb();
   if (!db) return [];
-  return db.select({
+  const query = db.select({
     id: tasks.id,
     title: tasks.title,
     description: tasks.description,
     clientId: tasks.clientId,
     clientName: clients.razonSocial,
+    clientDriveFolderUrl: clients.driveFolderUrl,
     assignedToId: tasks.assignedToId,
     assignedToName: users.name,
     createdById: tasks.createdById,
@@ -413,8 +419,12 @@ export async function getAllTasks() {
   })
     .from(tasks)
     .leftJoin(clients, eq(tasks.clientId, clients.id))
-    .leftJoin(users, eq(tasks.assignedToId, users.id))
-    .orderBy(desc(tasks.createdAt));
+    .leftJoin(users, eq(tasks.assignedToId, users.id));
+
+  if (managerId) {
+    return query.where(eq(clients.managerId, managerId)).orderBy(desc(tasks.createdAt));
+  }
+  return query.orderBy(desc(tasks.createdAt));
 }
 
 export async function getTasksByAssignee(userId: number) {
