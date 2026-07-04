@@ -214,8 +214,8 @@ export const appRouter = router({
       }))
       .mutation(async ({ input, ctx }) => {
         const buffer = Buffer.from(input.fileBase64, "base64");
-        const key = `rut/${Date.now()}_${input.fileName}`;
-        const { url } = await storagePut(key, buffer, input.contentType);
+        const rawKey = `rut/${Date.now()}_${input.fileName}`;
+        const { url, key } = await storagePut(rawKey, buffer, input.contentType);
         return { url, key };
       }),
     extractRutData: protectedProcedure
@@ -506,8 +506,8 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
       }))
       .mutation(async ({ input, ctx }) => {
         const buffer = Buffer.from(input.fileBase64, "base64");
-        const key = `tasks/${input.taskId}/${Date.now()}_${input.fileName}`;
-        const { url } = await storagePut(key, buffer, input.contentType);
+        const rawKey = `tasks/${input.taskId}/${Date.now()}_${input.fileName}`;
+        const { url, key } = await storagePut(rawKey, buffer, input.contentType);
         const id = await db.createTaskAttachment({
           taskId: input.taskId,
           fileName: input.fileName,
@@ -528,8 +528,8 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
       }))
       .mutation(async ({ input }) => {
         const buffer = Buffer.from(input.fileBase64, "base64");
-        const key = `evidence/${Date.now()}_${input.fileName}`;
-        const { url } = await storagePut(key, buffer, input.contentType);
+        const rawKey = `evidence/${Date.now()}_${input.fileName}`;
+        const { url, key } = await storagePut(rawKey, buffer, input.contentType);
         return { url, key };
       }),
     getAttachments: protectedProcedure
