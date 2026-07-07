@@ -781,6 +781,24 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
       .query(async ({ input }) => {
         return db.getDianCalendarEntries(input.year, input.obligationCode);
       }),
+    /** Copies already-loaded calendar dates from one obligation to another
+     * for the same year — e.g. "Consumo" officially follows the same dates
+     * as "IVA Bimestral", so there's no need to re-extract or retype them. */
+    copyFromObligation: adminProcedure
+      .input(z.object({
+        year: z.number(),
+        fromObligationCode: z.string(),
+        toObligationCode: z.string(),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        const count = await db.copyDianCalendarEntries(
+          input.year,
+          input.fromObligationCode,
+          input.toObligationCode,
+          ctx.user.id
+        );
+        return { count };
+      }),
     /** Admin uploads DIAN calendar data (parsed from Excel/CSV) */
     upload: adminProcedure
       .input(z.object({

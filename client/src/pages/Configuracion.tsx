@@ -87,6 +87,29 @@ function DianCalendarSection() {
 
   const { data: obligations } = trpc.obligations.list.useQuery();
   const uploadCalendar = trpc.dianCalendar.upload.useMutation();
+  const copyEntries = trpc.dianCalendar.copyFromObligation.useMutation();
+  const [copyFromCode, setCopyFromCode] = useState("");
+  const [copyToCode, setCopyToCode] = useState("");
+
+  const handleCopyEntries = async () => {
+    try {
+      const result = await copyEntries.mutateAsync({
+        year: parseInt(selectedYear),
+        fromObligationCode: copyFromCode,
+        toObligationCode: copyToCode,
+      });
+      if (result.count === 0) {
+        toast.error(`No hay fechas cargadas para ${copyFromCode} en ${selectedYear}. Cargue primero su calendario.`);
+        return;
+      }
+      toast.success(`${result.count} fechas copiadas a ${copyToCode} correctamente.`);
+      setCopyFromCode("");
+      setCopyToCode("");
+      refetch();
+    } catch (error: any) {
+      toast.error(error.message || "Error al copiar el calendario");
+    }
+  };
   const uploadPdf = trpc.dianCalendar.uploadPdf.useMutation();
   const startExtraction = trpc.dianCalendar.startExtraction.useMutation();
   const pdfInputRef = useRef<HTMLInputElement>(null);
@@ -426,6 +449,47 @@ function DianCalendarSection() {
           </div>
         </CardHeader>
         <CardContent>
+          <div className="flex flex-wrap items-end gap-2 mb-4 p-3 bg-muted/40 rounded-lg">
+            <div className="space-y-1">
+              <Label className="text-xs">Copiar fechas de</Label>
+              <Select value={copyFromCode} onValueChange={setCopyFromCode}>
+                <SelectTrigger className="w-[200px] h-9">
+                  <SelectValue placeholder="Obligación origen" />
+                </SelectTrigger>
+                <SelectContent>
+                  {obligations?.map((ob: any) => (
+                    <SelectItem key={ob.id} value={ob.code}>{ob.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Hacia</Label>
+              <Select value={copyToCode} onValueChange={setCopyToCode}>
+                <SelectTrigger className="w-[200px] h-9">
+                  <SelectValue placeholder="Obligación destino" />
+                </SelectTrigger>
+                <SelectContent>
+                  {obligations?.map((ob: any) => (
+                    <SelectItem key={ob.id} value={ob.code}>{ob.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <Button
+              variant="outline"
+              className="h-9"
+              disabled={!copyFromCode || !copyToCode || copyFromCode === copyToCode || copyEntries.isPending}
+              onClick={handleCopyEntries}
+            >
+              {copyEntries.isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
+              Copiar fechas
+            </Button>
+            <p className="w-full text-xs text-muted-foreground">
+              Úselo cuando el calendario indique que una obligación comparte exactamente las mismas fechas que otra (ej: Consumo sigue las mismas fechas que IVA Bimestral).
+            </p>
+          </div>
+
           {isLoading ? (
             <div className="flex items-center justify-center py-8">
               <Loader2 className="h-6 w-6 animate-spin text-[#EDA011]" />

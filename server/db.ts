@@ -655,6 +655,42 @@ export async function insertDianCalendarEntries(entries: InsertDianCalendar[]) {
   }
 }
 
+/** Copies calendar entries from one obligation to another for the same year
+ * — useful when the DIAN calendar states an obligation shares its exact
+ * dates with another (e.g. "Consumo" follows "IVA Bimestral"'s schedule). */
+export async function copyDianCalendarEntries(
+  year: number,
+  fromObligationCode: string,
+  toObligationCode: string,
+  uploadedById?: number
+) {
+  const db = await getDb();
+  if (!db) return 0;
+
+  const sourceEntries = await db
+    .select()
+    .from(dianCalendar)
+    .where(and(eq(dianCalendar.year, year), eq(dianCalendar.obligationCode, fromObligationCode)));
+
+  if (sourceEntries.length === 0) return 0;
+
+  // Remove any existing entries for the target obligation/year first, so
+  // re-running this doesn't create duplicates.
+  await db.delete(dianCalendar).where(and(eq(dianCalendar.year, year), eq(dianCalendar.obligationCode, toObligationCode)));
+
+  const copies: InsertDianCalendar[] = sourceEntries.map(e => ({
+    year: e.year,
+    obligationCode: toObligationCode,
+    period: e.period,
+    lastDigitNit: e.lastDigitNit,
+    dueDate: e.dueDate,
+    uploadedById: uploadedById ?? e.uploadedById,
+  }));
+
+  await insertDianCalendarEntries(copies);
+  return copies.length;
+}
+
 // ==================== CLIENTS BY MANAGER ====================
 
 export async function getClientsByManager(managerId: number) {
