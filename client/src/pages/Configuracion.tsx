@@ -11,7 +11,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { trpc } from "@/lib/trpc";
-import { Settings, Upload, Calendar, Loader2, FileSpreadsheet, Trash2, AlertCircle, FileText, Plus, Pencil } from "lucide-react";
+import { Settings, Upload, Calendar, Loader2, FileSpreadsheet, Trash2, AlertCircle, FileText, Plus, Pencil, Sparkles } from "lucide-react";
 import { useState, useRef } from "react";
 import { toast } from "sonner";
 
@@ -87,6 +87,62 @@ function DianCalendarSection() {
 
   const { data: obligations } = trpc.obligations.list.useQuery();
   const uploadCalendar = trpc.dianCalendar.upload.useMutation();
+  const uploadPdf = trpc.dianCalendar.uploadPdf.useMutation();
+  const extractFromPdf = trpc.dianCalendar.extractFromPdf.useMutation();
+  const pdfInputRef = useRef<HTMLInputElement>(null);
+  const [isExtractingPdf, setIsExtractingPdf] = useState(false);
+
+  const handlePdfSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.type !== "application/pdf") {
+      toast.error("Solo se aceptan archivos PDF");
+      return;
+    }
+
+    setIsExtractingPdf(true);
+    try {
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve((reader.result as string).split(",")[1]);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+
+      const uploadResult = await uploadPdf.mutateAsync({
+        fileName: file.name,
+        fileBase64: base64,
+        contentType: file.type,
+      });
+
+      toast.info("Leyendo el calendario con IA, esto puede tardar un momento...");
+
+      const result = await extractFromPdf.mutateAsync({
+        fileKey: uploadResult.key,
+        year: parseInt(selectedYear),
+      });
+
+      if (result.error) {
+        toast.error(result.error);
+        return;
+      }
+
+      if (result.entries.length === 0) {
+        toast.error("No se encontraron registros en el PDF. Intente con el formato CSV o revise el archivo.");
+        return;
+      }
+
+      setParsedEntries(result.entries);
+      setShowPreview(true);
+      toast.success(`${result.entries.length} registros extraídos con IA. Revise la vista previa antes de guardar.`);
+    } catch (error: any) {
+      toast.error(error.message || "Error al procesar el PDF");
+    } finally {
+      setIsExtractingPdf(false);
+      if (pdfInputRef.current) pdfInputRef.current.value = "";
+    }
+  };
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -164,42 +220,74 @@ function DianCalendarSection() {
         </CardHeader>
         <CardContent>
           <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label>Año del calendario</Label>
-                <Select value={selectedYear} onValueChange={setSelectedYear}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {[currentYear - 1, currentYear, currentYear + 1, currentYear + 2].map(y => (
-                      <SelectItem key={y} value={String(y)}>{y}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+            <div className="space-y-2 max-w-xs">
+              <Label>Año del calendario</Label>
+              <Select value={selectedYear} onValueChange={setSelectedYear}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {[currentYear - 1, currentYear, currentYear + 1, currentYear + 2].map(y => (
+                    <SelectItem key={y} value={String(y)}>{y}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-2 border rounded-lg p-3">
+                <Label className="flex items-center gap-2">
+                  <Sparkles className="h-4 w-4 text-[#EDA011]" />
+                  PDF oficial de la DIAN (con IA)
+                </Label>
+                <p className="text-xs text-muted-foreground">
+                  Suba el PDF del calendario tributario tal como lo publica la DIAN. La IA extrae las fechas automáticamente.
+                </p>
+                <Button
+                  variant="outline"
+                  className="gap-2 w-full"
+                  onClick={() => pdfInputRef.current?.click()}
+                  disabled={isExtractingPdf}
+                >
+                  {isExtractingPdf ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                  {isExtractingPdf ? "Leyendo con IA..." : "Subir PDF del calendario"}
+                </Button>
+                <input
+                  ref={pdfInputRef}
+                  type="file"
+                  className="hidden"
+                  accept=".pdf"
+                  onChange={handlePdfSelect}
+                />
               </div>
-              <div className="space-y-2">
-                <Label>Archivo CSV del calendario</Label>
-                <div className="flex gap-2">
-                  <Button
-                    variant="outline"
-                    className="gap-2 flex-1"
-                    onClick={() => fileInputRef.current?.click()}
-                    disabled={isUploading}
-                  >
-                    {isUploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileSpreadsheet className="h-4 w-4" />}
-                    Seleccionar archivo
-                  </Button>
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    className="hidden"
-                    accept=".csv,.txt"
-                    onChange={handleFileSelect}
-                  />
-                </div>
+
+              <div className="space-y-2 border rounded-lg p-3">
+                <Label className="flex items-center gap-2">
+                  <FileSpreadsheet className="h-4 w-4" />
+                  Archivo CSV (manual)
+                </Label>
+                <p className="text-xs text-muted-foreground">
+                  Si prefiere transcribir el calendario usted mismo, o para corregir un archivo ya preparado.
+                </p>
+                <Button
+                  variant="outline"
+                  className="gap-2 w-full"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={isUploading}
+                >
+                  {isUploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileSpreadsheet className="h-4 w-4" />}
+                  Seleccionar archivo CSV
+                </Button>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  className="hidden"
+                  accept=".csv,.txt"
+                  onChange={handleFileSelect}
+                />
               </div>
             </div>
+
             <div className="bg-muted/50 rounded-lg p-3 text-sm">
               <p className="font-medium mb-1">Formato esperado del archivo CSV:</p>
               <code className="text-xs bg-background px-2 py-1 rounded block">
@@ -210,6 +298,9 @@ function DianCalendarSection() {
               </p>
               <p className="text-xs text-muted-foreground mt-1">
                 Separadores aceptados: coma, punto y coma, o tabulación.
+              </p>
+              <p className="text-xs text-muted-foreground mt-2">
+                {'\u26a0'} Ya sea que use el PDF con IA o el CSV manual, siempre podrá revisar y corregir los registros antes de guardarlos.
               </p>
             </div>
           </div>
@@ -435,10 +526,10 @@ function TaxObligationsSection() {
 
   const [showForm, setShowForm] = useState(false);
   const [editingObligation, setEditingObligation] = useState<any>(null);
-  const [form, setForm] = useState({ code: "", name: "", description: "", frequency: "mensual" });
+  const [form, setForm] = useState({ code: "", name: "", description: "", frequency: "mensual", installments: "1" });
 
   const resetForm = () => {
-    setForm({ code: "", name: "", description: "", frequency: "mensual" });
+    setForm({ code: "", name: "", description: "", frequency: "mensual", installments: "1" });
     setEditingObligation(null);
   };
 
@@ -451,6 +542,7 @@ function TaxObligationsSection() {
       name: obligation.name,
       description: obligation.description || "",
       frequency: obligation.frequency,
+      installments: String(obligation.installments || 1),
     });
     setShowForm(true);
   };
@@ -461,11 +553,12 @@ function TaxObligationsSection() {
       return;
     }
     try {
+      const payload = { ...form, installments: parseInt(form.installments) || 1 };
       if (editingObligation) {
-        await updateObligation.mutateAsync({ id: editingObligation.id, ...form });
+        await updateObligation.mutateAsync({ id: editingObligation.id, ...payload });
         toast.success("Obligación actualizada correctamente");
       } else {
-        await createObligation.mutateAsync(form);
+        await createObligation.mutateAsync(payload);
         toast.success("Obligación creada correctamente");
       }
       setShowForm(false);
@@ -526,7 +619,12 @@ function TaxObligationsSection() {
                 <TableRow key={obligation.id}>
                   <TableCell className="font-mono text-sm">{obligation.code}</TableCell>
                   <TableCell className="font-medium">{obligation.name}</TableCell>
-                  <TableCell className="text-sm">{frequencyLabels[obligation.frequency]}</TableCell>
+                  <TableCell className="text-sm">
+                    {frequencyLabels[obligation.frequency]}
+                    {obligation.frequency === "anual" && obligation.installments > 1 && (
+                      <span className="text-muted-foreground"> ({obligation.installments} cuotas)</span>
+                    )}
+                  </TableCell>
                   <TableCell>
                     <Badge variant="outline" className={obligation.isActive ? "bg-green-50 text-green-700 border-green-200" : "bg-gray-100 text-gray-600"}>
                       {obligation.isActive ? "Activa" : "Inactiva"}
@@ -598,6 +696,21 @@ function TaxObligationsSection() {
                 </SelectContent>
               </Select>
             </div>
+            {form.frequency === "anual" && (
+              <div className="space-y-2">
+                <Label>Número de cuotas</Label>
+                <Input
+                  type="number"
+                  min={1}
+                  max={12}
+                  value={form.installments}
+                  onChange={(e) => setForm({ ...form, installments: e.target.value })}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Use 1 para una sola declaración/pago. Use más de 1 si se paga en varias cuotas dentro del año (ej: Renta Grandes Contribuyentes = 3 cuotas, Personas Jurídicas = 2 cuotas).
+                </p>
+              </div>
+            )}
             <div className="space-y-2">
               <Label>Descripción</Label>
               <Textarea

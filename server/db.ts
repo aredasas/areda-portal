@@ -290,6 +290,7 @@ export async function getClientObligations(clientId: number) {
     obligationName: taxObligations.name,
     obligationCode: taxObligations.code,
     frequency: taxObligations.frequency,
+    installments: taxObligations.installments,
   })
     .from(clientObligations)
     .innerJoin(taxObligations, eq(clientObligations.obligationId, taxObligations.id))
@@ -607,18 +608,34 @@ export async function getDianCalendarEntries(year: number, obligationCode?: stri
   return db.select().from(dianCalendar).where(and(...conditions)).orderBy(asc(dianCalendar.dueDate));
 }
 
-export async function getDianCalendarForDeadline(year: number, obligationCode: string, lastDigitNit: string, period: string) {
+/** Matches a client's NIT against a DIAN calendar grouping value, which can be:
+ * - "ALL": the deadline applies to everyone regardless of NIT (e.g. RUB, informe país por país)
+ * - a two-digit range like "01-02": matches clients whose NIT ends in 01 or 02
+ *   (used by Renta - Personas Naturales, grouped by the last TWO digits)
+ * - a single digit "0"-"9": matches clients whose NIT ends in that digit (most obligations)
+ */
+export function nitMatchesGroup(nit: string | null | undefined, groupValue: string): boolean {
+  if (groupValue === "ALL") return true;
+  if (!nit) return false;
+  const digits = nit.replace(/\D/g, "");
+  if (groupValue.includes("-")) {
+    const last2 = digits.slice(-2).padStart(2, "0");
+    const parts = groupValue.split("-").map(p => p.padStart(2, "0"));
+    return parts.includes(last2);
+  }
+  return digits.slice(-1) === groupValue;
+}
+
+export async function getDianCalendarForDeadline(year: number, obligationCode: string, clientNit: string, period: string) {
   const db = await getDb();
   if (!db) return null;
-  const result = await db.select().from(dianCalendar)
+  const candidates = await db.select().from(dianCalendar)
     .where(and(
       eq(dianCalendar.year, year),
       eq(dianCalendar.obligationCode, obligationCode),
-      eq(dianCalendar.lastDigitNit, lastDigitNit),
       eq(dianCalendar.period, period),
-    ))
-    .limit(1);
-  return result.length > 0 ? result[0] : null;
+    ));
+  return candidates.find(c => nitMatchesGroup(clientNit, c.lastDigitNit)) || null;
 }
 
 export async function clearDianCalendar(year: number) {

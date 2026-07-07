@@ -323,6 +323,7 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
         name: z.string().min(1),
         description: z.string().optional(),
         frequency: z.enum(["mensual", "bimestral", "cuatrimestral", "anual"]),
+        installments: z.number().min(1).max(12).optional(),
       }))
       .mutation(async ({ input }) => {
         const id = await db.createTaxObligation({ ...input, description: input.description || null });
@@ -335,6 +336,7 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
         name: z.string().min(1).optional(),
         description: z.string().optional(),
         frequency: z.enum(["mensual", "bimestral", "cuatrimestral", "anual"]).optional(),
+        installments: z.number().min(1).max(12).optional(),
       }))
       .mutation(async ({ input }) => {
         const { id, ...data } = input;
@@ -394,21 +396,21 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
         if (obligations.length === 0) throw new Error("El cliente no tiene obligaciones asignadas");
 
         const lastDigit = client.nit ? client.nit.slice(-1) : "0";
-        
+
         // Try to use DIAN calendar entries first
         const deadlines: any[] = [];
         for (const obl of obligations) {
-          const periods = generatePeriods(obl.frequency, input.year);
+          const periods = generatePeriods(obl.frequency, input.year, obl.installments || 1);
           for (const period of periods) {
-            // Look up DIAN calendar
-            const dianEntry = await db.getDianCalendarForDeadline(input.year, obl.obligationCode, lastDigit, period);
+            // Look up DIAN calendar (matches by single digit, two-digit range, or "ALL")
+            const dianEntry = await db.getDianCalendarForDeadline(input.year, obl.obligationCode, client.nit || "", period);
             const dueDate = dianEntry ? new Date(dianEntry.dueDate) : generateDefaultDueDate(obl.frequency, period, input.year, lastDigit);
             deadlines.push({
               clientId: input.clientId,
               obligationId: obl.obligationId,
               period,
               dueDate,
-              lastDigitNit: lastDigit,
+              lastDigitNit: dianEntry ? dianEntry.lastDigitNit : lastDigit,
               status: "pendiente",
             });
           }
@@ -631,6 +633,98 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
         await db.setSetting("dian_calendar_year", String(input.year), "Año del calendario DIAN cargado", ctx.user.id);
         return { count: entries.length };
       }),
+    uploadPdf: adminProcedure
+      .input(z.object({
+        fileName: z.string(),
+        fileBase64: z.string(),
+        contentType: z.string(),
+      }))
+      .mutation(async ({ input }) => {
+        const buffer = Buffer.from(input.fileBase64, "base64");
+        const rawKey = `dian-calendar/${Date.now()}_${input.fileName}`;
+        const { url, key } = await storagePut(rawKey, buffer, input.contentType);
+        return { url, key };
+      }),
+    /** Reads the official DIAN calendar PDF with AI and extracts entries in
+     * the same shape the CSV upload expects, for review before saving. */
+    extractFromPdf: adminProcedure
+      .input(z.object({ fileKey: z.string(), year: z.number() }))
+      .mutation(async ({ input }) => {
+        try {
+          const accessUrl = await storageGetSignedUrl(input.fileKey);
+          const activeObligations = await db.getAllTaxObligations();
+          const codesList = activeObligations
+            .map(o => {
+              const cuotasNote = o.frequency === "anual" && o.installments > 1 ? `, ${o.installments} cuotas` : "";
+              return `${o.code} (${o.name} — ${o.frequency}${cuotasNote})`;
+            })
+            .join("\n- ");
+
+          const response = await invokeLLM({
+            max_tokens: 8000,
+            messages: [
+              {
+                role: "system",
+                content: `Eres un asistente experto en el calendario tributario de la DIAN (Colombia). Vas a recibir el PDF oficial del calendario tributario del año ${input.year}. Debes extraer TODAS las fechas de vencimiento que encuentres.
+
+Las obligaciones tributarias registradas en el sistema son:
+- ${codesList}
+
+Para cada obligación, usa el código EXACTO de la lista de arriba (no inventes códigos nuevos). Si el calendario menciona una obligación, un tipo de contribuyente, o un impuesto que no está en la lista, ignóralo por completo.
+
+IMPORTANTE — el calendario DIAN agrupa las fechas de tres formas distintas según la obligación. Debes identificar cuál aplica en cada tabla del documento:
+
+1. Por UN SOLO dígito del NIT (0 al 9) — la mayoría de las obligaciones (IVA, Retención en la Fuente, RST, Renta Grandes Contribuyentes, Renta Personas Jurídicas). Usa "lastDigitNit": "0" hasta "9", un registro por cada dígito.
+
+2. Por los ÚLTIMOS DOS dígitos del NIT, agrupados en pares (ej: "01-02", "03-04"... "99-00") — así funciona típicamente Renta Personas Naturales. Usa "lastDigitNit": "01-02" (con el guion, ambos dígitos con cero a la izquierda), un registro por cada par que encuentres en la tabla.
+
+3. Fecha ÚNICA sin importar el NIT (ej: RUB, informe país por país, o cualquier tabla que diga "independientemente del número de identificación tributaria"). Usa "lastDigitNit": "ALL", un solo registro.
+
+Formato del campo "period" según la periodicidad y las cuotas de cada obligación:
+- Mensual: "${input.year}-01", "${input.year}-02", ... "${input.year}-12"
+- Bimestral: "${input.year}-01-02", "${input.year}-03-04", "${input.year}-05-06", "${input.year}-07-08", "${input.year}-09-10", "${input.year}-11-12"
+- Cuatrimestral: "${input.year}-01-04", "${input.year}-05-08", "${input.year}-09-12"
+- Anual sin cuotas (1 sola declaración/pago): "${input.year}"
+- Anual CON cuotas (ej: Renta que se paga en 2 o 3 pagos dentro del año): "${input.year}-cuota1", "${input.year}-cuota2", "${input.year}-cuota3" — usa cuota1 para el primer pago del año, cuota2 para el segundo, y así sucesivamente, en el mismo orden en que aparecen en el calendario (ej: "Pago 1a. cuota" = cuota1, "Declaración y pago 2a. cuota" = cuota2).
+
+Nota: si una fecha de vencimiento cae en enero o febrero del año siguiente (ej: "Enero ${input.year + 1}"), igual regístrala bajo el año ${input.year} ya que corresponde al período de ese año fiscal.
+
+Devuelve ÚNICAMENTE un JSON con esta forma exacta, sin explicaciones ni markdown:
+{
+  "entries": [
+    { "obligationCode": "IVA_BIM", "period": "${input.year}-01-02", "lastDigitNit": "1", "dueDate": "${input.year}-03-15" },
+    { "obligationCode": "RENTA_PN", "period": "${input.year}", "lastDigitNit": "01-02", "dueDate": "${input.year}-08-12" },
+    { "obligationCode": "RUB", "period": "${input.year}", "lastDigitNit": "ALL", "dueDate": "${input.year}-02-02" }
+  ]
+}
+El campo "dueDate" debe tener formato YYYY-MM-DD. Incluye un registro por cada combinación de período y grupo de NIT que encuentres en el documento para las obligaciones de la lista.`
+              },
+              {
+                role: "user",
+                content: [
+                  { type: "text" as const, text: `Extrae todas las fechas de vencimiento del calendario tributario DIAN ${input.year} de este documento:` },
+                  { type: "file_url" as const, file_url: { url: accessUrl, mime_type: "application/pdf" } },
+                ],
+              },
+            ],
+          });
+
+          const rawContent = response.choices?.[0]?.message?.content || "";
+          const content = typeof rawContent === "string" ? rawContent : JSON.stringify(rawContent);
+          let jsonStr = content;
+          if (content.includes("```")) {
+            const match = content.match(/```(?:json)?\s*([\s\S]*?)```/);
+            jsonStr = match ? match[1].trim() : content;
+          }
+
+          const parsed = JSON.parse(jsonStr);
+          const entries = Array.isArray(parsed.entries) ? parsed.entries : [];
+          return { entries, error: null };
+        } catch (error) {
+          console.error("[DIAN Calendar Extraction] Failed:", error);
+          return { entries: [], error: "No se pudo leer el PDF automáticamente. Intente con el formato CSV o revise el archivo." };
+        }
+      }),
   }),
 
   dashboard: router({
@@ -650,7 +744,7 @@ export type AppRouter = typeof appRouter;
 
 // ==================== HELPER FUNCTIONS ====================
 
-function generatePeriods(frequency: string, year: number): string[] {
+function generatePeriods(frequency: string, year: number, installments: number = 1): string[] {
   switch (frequency) {
     case "mensual":
       return Array.from({ length: 12 }, (_, i) => `${year}-${String(i + 1).padStart(2, "0")}`);
@@ -659,6 +753,9 @@ function generatePeriods(frequency: string, year: number): string[] {
     case "cuatrimestral":
       return [`${year}-01-04`, `${year}-05-08`, `${year}-09-12`];
     case "anual":
+      if (installments > 1) {
+        return Array.from({ length: installments }, (_, i) => `${year}-cuota${i + 1}`);
+      }
       return [`${year}`];
     default:
       return [`${year}`];
@@ -688,8 +785,16 @@ function generateDefaultDueDate(frequency: string, period: string, year: number,
       const cuatYear = endM + 1 > 12 ? year + 1 : year;
       return new Date(cuatYear, cuatMonth - 1, 10 + digitOffset);
     }
-    case "anual":
+    case "anual": {
+      const cuotaMatch = period.match(/cuota(\d+)/);
+      if (cuotaMatch) {
+        const cuotaNum = parseInt(cuotaMatch[1]);
+        // Rough fallback spacing between installments (only used if no DIAN entry exists)
+        const month = 3 + (cuotaNum - 1) * 2; // cuota1 → abr, cuota2 → jun, cuota3 → ago
+        return new Date(year + 1, month, 10 + digitOffset);
+      }
       return new Date(year + 1, 3, 10 + digitOffset); // April next year
+    }
     default:
       return new Date(year, 11, 31);
   }

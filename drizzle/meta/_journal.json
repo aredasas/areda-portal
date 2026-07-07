@@ -36,6 +36,13 @@
       "when": 1783201246915,
       "tag": "0004_seed_tax_obligations",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "5",
+      "when": 1783382914166,
+      "tag": "0005_dian_calendar_flexibility",
+      "breakpoints": true
     }
   ]
 }

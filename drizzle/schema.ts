@@ -70,6 +70,9 @@ export const taxObligations = mysqlTable("taxObligations", {
   name: varchar("name", { length: 100 }).notNull(),
   description: text("description"),
   frequency: mysqlEnum("frequency", ["mensual", "bimestral", "cuatrimestral", "anual"]).notNull(),
+  /** For "anual" obligations paid in installments (e.g. Renta Grandes
+   * Contribuyentes = 3 cuotas, Personas Jurídicas = 2 cuotas). 1 = single payment. */
+  installments: int("installments").default(1).notNull(),
   isActive: boolean("isActive").default(true).notNull(),
 });
 
@@ -98,7 +101,7 @@ export const taxDeadlines = mysqlTable("taxDeadlines", {
   obligationId: int("obligationId").notNull(),
   period: varchar("period", { length: 20 }).notNull(),
   dueDate: timestamp("dueDate").notNull(),
-  lastDigitNit: varchar("lastDigitNit", { length: 1 }),
+  lastDigitNit: varchar("lastDigitNit", { length: 10 }),
   status: mysqlEnum("status", ["pendiente", "completado", "vencido"]).default("pendiente").notNull(),
   completedAt: timestamp("completedAt"),
   completedById: int("completedById"),
@@ -183,7 +186,7 @@ export const dianCalendar = mysqlTable("dianCalendar", {
   year: int("year").notNull(),
   obligationCode: varchar("obligationCode", { length: 20 }).notNull(),
   period: varchar("period", { length: 20 }).notNull(),
-  lastDigitNit: varchar("lastDigitNit", { length: 1 }).notNull(),
+  lastDigitNit: varchar("lastDigitNit", { length: 10 }).notNull(),
   dueDate: timestamp("dueDate").notNull(),
   uploadedById: int("uploadedById"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
