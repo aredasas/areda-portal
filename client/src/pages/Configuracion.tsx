@@ -116,7 +116,7 @@ function DianCalendarSection() {
         contentType: file.type,
       });
 
-      toast.info("Leyendo el calendario con IA, obligación por obligación. Esto puede tardar 1-2 minutos...");
+      toast.info("Leyendo el calendario con IA, obligación por obligación. Esto puede tardar varios minutos, no cierre esta pantalla...");
 
       const result = await extractFromPdf.mutateAsync({
         fileKey: uploadResult.key,

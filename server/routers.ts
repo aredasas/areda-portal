@@ -681,13 +681,20 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
             }
           })();
 
-          try {
-            const response = await invokeLLM({
-              max_tokens: 4000,
-              messages: [
-                {
-                  role: "system",
-                  content: `Eres un asistente experto en el calendario tributario de la DIAN (Colombia). Vas a recibir el PDF oficial del calendario tributario del año ${input.year}. Tu ÚNICA tarea es extraer las fechas de vencimiento de UNA sola obligación: "${obl.code}" (${obl.name}${cuotasNote}). Ignora completamente cualquier otra tabla u obligación del documento, aunque aparezcan cerca.
+          let entries: any[] = [];
+          let lastError: unknown = null;
+
+          // Up to 3 attempts: the org rate limit (5 req/min) can still be hit
+          // even with spacing between calls if other extractions run at the
+          // same time, so we back off and retry before giving up.
+          for (let attempt = 1; attempt <= 3; attempt++) {
+            try {
+              const response = await invokeLLM({
+                max_tokens: 4000,
+                messages: [
+                  {
+                    role: "system",
+                    content: `Eres un asistente experto en el calendario tributario de la DIAN (Colombia). Vas a recibir el PDF oficial del calendario tributario del año ${input.year}. Tu ÚNICA tarea es extraer las fechas de vencimiento de UNA sola obligación: "${obl.code}" (${obl.name}${cuotasNote}). Ignora completamente cualquier otra tabla u obligación del documento, aunque aparezcan cerca.
 
 Formato de agrupación por NIT — identifica cuál usa esta obligación específica en el documento:
 1. Un solo dígito del NIT (0 al 9): "lastDigitNit": "0" a "9", un registro por dígito.
@@ -702,31 +709,53 @@ Si NO encuentras la obligación "${obl.code}" en el documento, devuelve { "entri
 
 Devuelve ÚNICAMENTE un JSON con esta forma exacta, sin explicaciones ni markdown:
 { "entries": [ { "obligationCode": "${obl.code}", "period": "...", "lastDigitNit": "...", "dueDate": "YYYY-MM-DD" } ] }`
-                },
-                {
-                  role: "user",
-                  content: [
-                    { type: "text" as const, text: `Extrae únicamente las fechas de "${obl.name}" (${obl.code}) del calendario tributario DIAN ${input.year}:` },
-                    { type: "file_url" as const, file_url: { url: accessUrl, mime_type: "application/pdf" } },
-                  ],
-                },
-              ],
-            });
+                  },
+                  {
+                    role: "user",
+                    content: [
+                      { type: "text" as const, text: `Extrae únicamente las fechas de "${obl.name}" (${obl.code}) del calendario tributario DIAN ${input.year}:` },
+                      { type: "file_url" as const, file_url: { url: accessUrl, mime_type: "application/pdf" } },
+                    ],
+                  },
+                ],
+              });
 
-            const rawContent = response.choices?.[0]?.message?.content || "";
-            const content = typeof rawContent === "string" ? rawContent : JSON.stringify(rawContent);
-            let jsonStr = content;
-            if (content.includes("```")) {
-              const match = content.match(/```(?:json)?\s*([\s\S]*?)```/);
-              jsonStr = match ? match[1].trim() : content;
+              const rawContent = response.choices?.[0]?.message?.content || "";
+              const content = typeof rawContent === "string" ? rawContent : JSON.stringify(rawContent);
+              let jsonStr = content;
+              if (content.includes("```")) {
+                const match = content.match(/```(?:json)?\s*([\s\S]*?)```/);
+                jsonStr = match ? match[1].trim() : content;
+              }
+
+              const parsed = JSON.parse(jsonStr);
+              entries = Array.isArray(parsed.entries) ? parsed.entries : [];
+              lastError = null;
+              break; // success, no need to retry
+            } catch (error) {
+              lastError = error;
+              const message = error instanceof Error ? error.message : String(error);
+              const isRateLimit = message.includes("429") || message.includes("rate_limit");
+              if (isRateLimit && attempt < 3) {
+                console.warn(`[DIAN Calendar Extraction] Rate limited on ${obl.code}, esperando antes de reintentar (intento ${attempt})...`);
+                await sleep(20000 * attempt); // 20s, then 40s
+                continue;
+              }
+              break; // non-rate-limit error, or out of attempts: give up on this obligation
             }
+          }
 
-            const parsed = JSON.parse(jsonStr);
-            const entries = Array.isArray(parsed.entries) ? parsed.entries : [];
-            allEntries.push(...entries);
-          } catch (error) {
-            console.error(`[DIAN Calendar Extraction] Failed for ${obl.code}:`, error);
+          if (lastError) {
+            console.error(`[DIAN Calendar Extraction] Failed for ${obl.code}:`, lastError);
             failedObligations.push(obl.code);
+          } else {
+            allEntries.push(...entries);
+          }
+
+          // Proactive spacing between obligations to stay under the 5 req/min
+          // organization rate limit (skip after the very last one).
+          if (obl !== activeObligations[activeObligations.length - 1]) {
+            await sleep(13000);
           }
         }
 
@@ -756,6 +785,10 @@ Devuelve ÚNICAMENTE un JSON con esta forma exacta, sin explicaciones ni markdow
 export type AppRouter = typeof appRouter;
 
 // ==================== HELPER FUNCTIONS ====================
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
 function generatePeriods(frequency: string, year: number, installments: number = 1): string[] {
   switch (frequency) {
