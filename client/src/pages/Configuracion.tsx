@@ -12,7 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Badge } from "@/components/ui/badge";
 import { trpc } from "@/lib/trpc";
 import { Settings, Upload, Calendar, Loader2, FileSpreadsheet, Trash2, AlertCircle, FileText, Plus, Pencil, Sparkles } from "lucide-react";
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { toast } from "sonner";
 
 export default function Configuracion() {
@@ -88,9 +88,60 @@ function DianCalendarSection() {
   const { data: obligations } = trpc.obligations.list.useQuery();
   const uploadCalendar = trpc.dianCalendar.upload.useMutation();
   const uploadPdf = trpc.dianCalendar.uploadPdf.useMutation();
-  const extractFromPdf = trpc.dianCalendar.extractFromPdf.useMutation();
+  const startExtraction = trpc.dianCalendar.startExtraction.useMutation();
   const pdfInputRef = useRef<HTMLInputElement>(null);
   const [isExtractingPdf, setIsExtractingPdf] = useState(false);
+  const [activeJobId, setActiveJobId] = useState<string | null>(null);
+
+  // Poll the background extraction job every few seconds instead of waiting
+  // on a single long HTTP request, which would time out for a calendar this
+  // large (one AI call per obligation, several minutes total).
+  const { data: jobStatus } = trpc.dianCalendar.getExtractionStatus.useQuery(
+    { jobId: activeJobId ?? "" },
+    {
+      enabled: !!activeJobId,
+      refetchInterval: (query) => (query.state.data?.status === "processing" ? 4000 : false),
+    }
+  );
+
+  useEffect(() => {
+    if (!jobStatus || jobStatus.status === "processing") return;
+
+    setIsExtractingPdf(false);
+    setActiveJobId(null);
+    if (pdfInputRef.current) pdfInputRef.current.value = "";
+
+    if (jobStatus.status === "failed" || jobStatus.status === "not_found") {
+      toast.error(jobStatus.error || "Error al procesar el PDF");
+      return;
+    }
+
+    const result = jobStatus.result;
+    if (!result) return;
+
+    if (result.error) {
+      toast.error(result.error);
+      return;
+    }
+
+    if (result.entries.length === 0) {
+      toast.error("No se encontraron registros en el PDF. Intente con el formato CSV o revise el archivo.");
+      return;
+    }
+
+    setParsedEntries(result.entries);
+    setShowPreview(true);
+    toast.success(`${result.entries.length} registros extraídos con IA. Revise la vista previa antes de guardar.`);
+
+    if (result.failedObligations && result.failedObligations.length > 0) {
+      toast.warning(`No se pudo leer del PDF: ${result.failedObligations.join(", ")}. Revise esas obligaciones manualmente o cárguelas por CSV.`);
+    }
+
+    if (result.partialObligations && result.partialObligations.length > 0) {
+      toast.warning(`Atención: ${result.partialObligations.join(", ")} se leyó de forma incompleta (la respuesta de la IA se cortó). Revise esos registros con cuidado en la vista previa antes de guardar.`);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jobStatus]);
 
   const handlePdfSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -116,37 +167,17 @@ function DianCalendarSection() {
         contentType: file.type,
       });
 
-      toast.info("Leyendo el calendario con IA, obligación por obligación. Esto puede tardar varios minutos, no cierre esta pantalla...");
-
-      const result = await extractFromPdf.mutateAsync({
+      const { jobId } = await startExtraction.mutateAsync({
         fileKey: uploadResult.key,
         year: parseInt(selectedYear),
       });
 
-      if (result.error) {
-        toast.error(result.error);
-        return;
-      }
-
-      if (result.entries.length === 0) {
-        toast.error("No se encontraron registros en el PDF. Intente con el formato CSV o revise el archivo.");
-        return;
-      }
-
-      setParsedEntries(result.entries);
-      setShowPreview(true);
-      toast.success(`${result.entries.length} registros extraídos con IA. Revise la vista previa antes de guardar.`);
-
-      if (result.failedObligations && result.failedObligations.length > 0) {
-        toast.warning(`No se pudo leer del PDF: ${result.failedObligations.join(", ")}. Revise esas obligaciones manualmente o cárguelas por CSV.`);
-      }
-
-      if (result.partialObligations && result.partialObligations.length > 0) {
-        toast.warning(`Atención: ${result.partialObligations.join(", ")} se leyó de forma incompleta (la respuesta de la IA se cortó). Revise esos registros con cuidado en la vista previa antes de guardar.`);
-      }
+      toast.info("Leyendo el calendario con IA, obligación por obligación. Esto puede tardar varios minutos — puede navegar a otra pestaña, el proceso sigue en el servidor.");
+      setActiveJobId(jobId);
+      // Note: isExtractingPdf stays true and the file input isn't reset yet —
+      // both get cleared by the polling effect once the job actually finishes.
     } catch (error: any) {
       toast.error(error.message || "Error al procesar el PDF");
-    } finally {
       setIsExtractingPdf(false);
       if (pdfInputRef.current) pdfInputRef.current.value = "";
     }
@@ -260,6 +291,11 @@ function DianCalendarSection() {
                   {isExtractingPdf ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
                   {isExtractingPdf ? "Leyendo con IA..." : "Subir PDF del calendario"}
                 </Button>
+                {isExtractingPdf && jobStatus?.progress && jobStatus.progress.total > 0 && (
+                  <p className="text-xs text-muted-foreground text-center">
+                    Procesando {jobStatus.progress.current} de {jobStatus.progress.total}: {jobStatus.progress.currentObligation}
+                  </p>
+                )}
                 <input
                   ref={pdfInputRef}
                   type="file"

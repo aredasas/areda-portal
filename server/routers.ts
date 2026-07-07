@@ -1,4 +1,5 @@
 import { COOKIE_NAME } from "@shared/const";
+import crypto from "crypto";
 import { TRPCError } from "@trpc/server";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
@@ -10,6 +11,181 @@ import { invokeLLM } from "./_core/llm";
 import { sdk } from "./_core/sdk";
 import { ONE_YEAR_MS } from "@shared/const";
 import bcrypt from "bcryptjs";
+
+// In-memory job store for the DIAN calendar PDF extraction. Reading a full
+// calendar can take several minutes (one AI call per obligation, spaced out
+// to respect the API rate limit) — far too long for a single HTTP request to
+// survive proxies/load balancers. Instead, the request that starts the job
+// returns immediately with a jobId, and the client polls for progress.
+// Job data only needs to live for the few minutes the admin is waiting on
+// this screen, so in-memory (lost on restart) is an acceptable tradeoff here.
+type DianExtractionJob = {
+  status: "processing" | "completed" | "failed";
+  progress: { current: number; total: number; currentObligation: string };
+  result?: { entries: any[]; failedObligations: string[]; partialObligations: string[]; error: string | null };
+  error?: string;
+  startedAt: number;
+};
+
+const dianExtractionJobs = new Map<string, DianExtractionJob>();
+
+// Jobs older than this are dropped on next access so the map doesn't grow
+// unbounded if an admin never comes back to check on one.
+const JOB_MAX_AGE_MS = 30 * 60 * 1000; // 30 minutes
+
+function pruneOldExtractionJobs() {
+  const now = Date.now();
+  for (const [id, job] of dianExtractionJobs.entries()) {
+    if (now - job.startedAt > JOB_MAX_AGE_MS) dianExtractionJobs.delete(id);
+  }
+}
+
+async function runDianExtractionJob(jobId: string, fileKey: string, year: number) {
+  const job = dianExtractionJobs.get(jobId);
+  if (!job) return;
+
+  try {
+    const accessUrl = await storageGetSignedUrl(fileKey);
+    const activeObligations = await db.getAllTaxObligations();
+    job.progress.total = activeObligations.length;
+
+    const allEntries: any[] = [];
+    const failedObligations: string[] = [];
+    const partialObligations: string[] = [];
+
+    for (let i = 0; i < activeObligations.length; i++) {
+      const obl = activeObligations[i];
+      job.progress.current = i + 1;
+      job.progress.currentObligation = `${obl.code} (${obl.name})`;
+
+      const cuotasNote = obl.frequency === "anual" && obl.installments > 1 ? `, pagada en ${obl.installments} cuotas` : "";
+
+      const periodFormatHint = (() => {
+        switch (obl.frequency) {
+          case "mensual":
+            return `Mensual: un registro por cada mes ("${year}-01" a "${year}-12"), para cada dígito o rango de NIT que encuentre.`;
+          case "bimestral":
+            return `Bimestral: períodos "${year}-01-02", "${year}-03-04", "${year}-05-06", "${year}-07-08", "${year}-09-10", "${year}-11-12".`;
+          case "cuatrimestral":
+            return `Cuatrimestral: períodos "${year}-01-04", "${year}-05-08", "${year}-09-12".`;
+          case "semestral":
+            return `Semestral: períodos "${year}-01-06", "${year}-07-12".`;
+          case "anual":
+            return obl.installments > 1
+              ? `Anual con cuotas: use "${year}-cuota1", "${year}-cuota2"${obl.installments > 2 ? `, "${year}-cuota3"` : ""}, en el mismo orden en que aparecen las cuotas en el calendario (la primera cuota del año es cuota1, y así sucesivamente).`
+              : `Anual sin cuotas: un solo período, "${year}".`;
+          default:
+            return `Use "${year}" como período.`;
+        }
+      })();
+
+      let entries: any[] = [];
+      let lastError: unknown = null;
+
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        let jsonStr = "";
+        try {
+          const response = await invokeLLM({
+            max_tokens: 8000,
+            messages: [
+              {
+                role: "system",
+                content: `Eres un asistente experto en el calendario tributario de la DIAN (Colombia). Vas a recibir el PDF oficial del calendario tributario del año ${year}. Tu ÚNICA tarea es extraer las fechas de vencimiento de UNA sola obligación: "${obl.code}" (${obl.name}${cuotasNote}). Ignora completamente cualquier otra tabla u obligación del documento, aunque aparezcan cerca.
+
+Formato de agrupación por NIT — identifica cuál usa esta obligación específica en el documento:
+1. Un solo dígito del NIT (0 al 9): "lastDigitNit": "0" a "9", un registro por dígito.
+2. Últimos DOS dígitos del NIT en pares (ej. "01-02", "03-04"... "99-00"): "lastDigitNit": "01-02" (con guion, ambos dígitos con cero a la izquierda), un registro por cada par.
+3. Fecha única sin importar el NIT (tabla que diga "independientemente del número de identificación tributaria"): "lastDigitNit": "ALL", un solo registro.
+
+Formato del campo "period" para esta obligación: ${periodFormatHint}
+
+Nota: si una fecha cae en enero o febrero del año siguiente (ej. "Enero ${year + 1}"), regístrala igual bajo el año ${year}, ya que corresponde a ese período fiscal.
+
+Si NO encuentras la obligación "${obl.code}" en el documento, devuelve { "entries": [] }. NUNCA respondas con una explicación en texto — ni siquiera si no encuentras la obligación, tu respuesta completa debe ser solo el JSON.
+
+Devuelve ÚNICAMENTE un JSON con esta forma exacta, sin explicaciones ni markdown:
+{ "entries": [ { "obligationCode": "${obl.code}", "period": "...", "lastDigitNit": "...", "dueDate": "YYYY-MM-DD" } ] }`
+              },
+              {
+                role: "user",
+                content: [
+                  { type: "text" as const, text: `Extrae únicamente las fechas de "${obl.name}" (${obl.code}) del calendario tributario DIAN ${year}:` },
+                  { type: "file_url" as const, file_url: { url: accessUrl, mime_type: "application/pdf" } },
+                ],
+              },
+            ],
+          });
+
+          const rawContent = response.choices?.[0]?.message?.content || "";
+          const content = typeof rawContent === "string" ? rawContent : JSON.stringify(rawContent);
+          jsonStr = content;
+          if (content.includes("```")) {
+            const match = content.match(/```(?:json)?\s*([\s\S]*?)```/);
+            jsonStr = match ? match[1].trim() : content;
+          }
+
+          const parsed = JSON.parse(jsonStr);
+          entries = Array.isArray(parsed.entries) ? parsed.entries : [];
+          lastError = null;
+          break;
+        } catch (error) {
+          const salvaged = rescueEntriesFromTruncatedJson(jsonStr);
+          if (salvaged.length > 0) {
+            entries = salvaged;
+            lastError = null;
+            partialObligations.push(obl.code);
+            console.warn(`[DIAN Calendar Extraction] ${obl.code}: respuesta cortada, se rescataron ${salvaged.length} registros parciales.`);
+            break;
+          }
+
+          const lowerJson = jsonStr.toLowerCase();
+          const looksLikeNotFound = /no\s+(encontr|encuentr|aparece|est(a|á)\s+presente|se menciona|hay informaci)/i.test(lowerJson);
+          if (looksLikeNotFound) {
+            entries = [];
+            lastError = null;
+            console.warn(`[DIAN Calendar Extraction] ${obl.code}: la IA indicó que no encontró esta obligación en el documento.`);
+            break;
+          }
+
+          lastError = error;
+          const message = error instanceof Error ? error.message : String(error);
+          const isRateLimit = message.includes("429") || message.includes("rate_limit");
+          if (isRateLimit && attempt < 3) {
+            console.warn(`[DIAN Calendar Extraction] Rate limited on ${obl.code}, esperando antes de reintentar (intento ${attempt})...`);
+            await sleep(25000 * attempt);
+            continue;
+          }
+          break;
+        }
+      }
+
+      if (lastError) {
+        console.error(`[DIAN Calendar Extraction] Failed for ${obl.code}:`, lastError);
+        failedObligations.push(obl.code);
+      } else {
+        allEntries.push(...entries);
+      }
+
+      if (i < activeObligations.length - 1) {
+        await sleep(16000);
+      }
+    }
+
+    job.status = "completed";
+    job.result = {
+      entries: allEntries,
+      failedObligations,
+      partialObligations,
+      error: allEntries.length === 0
+        ? "No se pudo extraer ninguna fecha del PDF. Revise el archivo o intente con el formato CSV."
+        : null,
+    };
+  } catch (error) {
+    job.status = "failed";
+    job.error = error instanceof Error ? error.message : "Error inesperado procesando el PDF";
+    console.error("[DIAN Calendar Extraction] Job failed:", error);
+  }
+}
 
 export const appRouter = router({
   system: systemRouter,
@@ -645,155 +821,41 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
         const { url, key } = await storagePut(rawKey, buffer, input.contentType);
         return { url, key };
       }),
-    /** Reads the official DIAN calendar PDF with AI and extracts entries in
-     * the same shape the CSV upload expects, for review before saving.
-     * Processes ONE obligation per AI call — the full calendar has hundreds
-     * of rows (e.g. Retención = 12 months × 10 digits), too many for a
-     * single response without truncating the JSON output. */
-    extractFromPdf: adminProcedure
+    /** Starts reading the official DIAN calendar PDF with AI in the
+     * background and returns immediately with a jobId. The full extraction
+     * (one AI call per obligation, spaced out to respect the API rate limit)
+     * can take several minutes — far too long for a single HTTP request to
+     * survive proxies/load balancers, so the client polls getExtractionStatus
+     * instead of waiting on this call. */
+    startExtraction: adminProcedure
       .input(z.object({ fileKey: z.string(), year: z.number() }))
       .mutation(async ({ input }) => {
-        const accessUrl = await storageGetSignedUrl(input.fileKey);
-        const activeObligations = await db.getAllTaxObligations();
-
-        const allEntries: any[] = [];
-        const failedObligations: string[] = [];
-        const partialObligations: string[] = [];
-
-        for (const obl of activeObligations) {
-          const cuotasNote = obl.frequency === "anual" && obl.installments > 1 ? `, pagada en ${obl.installments} cuotas` : "";
-
-          const periodFormatHint = (() => {
-            switch (obl.frequency) {
-              case "mensual":
-                return `Mensual: un registro por cada mes ("${input.year}-01" a "${input.year}-12"), para cada dígito o rango de NIT que encuentre.`;
-              case "bimestral":
-                return `Bimestral: períodos "${input.year}-01-02", "${input.year}-03-04", "${input.year}-05-06", "${input.year}-07-08", "${input.year}-09-10", "${input.year}-11-12".`;
-              case "cuatrimestral":
-                return `Cuatrimestral: períodos "${input.year}-01-04", "${input.year}-05-08", "${input.year}-09-12".`;
-              case "semestral":
-                return `Semestral: períodos "${input.year}-01-06", "${input.year}-07-12".`;
-              case "anual":
-                return obl.installments > 1
-                  ? `Anual con cuotas: use "${input.year}-cuota1", "${input.year}-cuota2"${obl.installments > 2 ? `, "${input.year}-cuota3"` : ""}, en el mismo orden en que aparecen las cuotas en el calendario (la primera cuota del año es cuota1, y así sucesivamente).`
-                  : `Anual sin cuotas: un solo período, "${input.year}".`;
-              default:
-                return `Use "${input.year}" como período.`;
-            }
-          })();
-
-          let entries: any[] = [];
-          let lastError: unknown = null;
-
-          // Up to 3 attempts: the org rate limit (5 req/min) can still be hit
-          // even with spacing between calls if other extractions run at the
-          // same time, so we back off and retry before giving up.
-          for (let attempt = 1; attempt <= 3; attempt++) {
-            let jsonStr = "";
-            try {
-              const response = await invokeLLM({
-                max_tokens: 8000,
-                messages: [
-                  {
-                    role: "system",
-                    content: `Eres un asistente experto en el calendario tributario de la DIAN (Colombia). Vas a recibir el PDF oficial del calendario tributario del año ${input.year}. Tu ÚNICA tarea es extraer las fechas de vencimiento de UNA sola obligación: "${obl.code}" (${obl.name}${cuotasNote}). Ignora completamente cualquier otra tabla u obligación del documento, aunque aparezcan cerca.
-
-Formato de agrupación por NIT — identifica cuál usa esta obligación específica en el documento:
-1. Un solo dígito del NIT (0 al 9): "lastDigitNit": "0" a "9", un registro por dígito.
-2. Últimos DOS dígitos del NIT en pares (ej. "01-02", "03-04"... "99-00"): "lastDigitNit": "01-02" (con guion, ambos dígitos con cero a la izquierda), un registro por cada par.
-3. Fecha única sin importar el NIT (tabla que diga "independientemente del número de identificación tributaria"): "lastDigitNit": "ALL", un solo registro.
-
-Formato del campo "period" para esta obligación: ${periodFormatHint}
-
-Nota: si una fecha cae en enero o febrero del año siguiente (ej. "Enero ${input.year + 1}"), regístrala igual bajo el año ${input.year}, ya que corresponde a ese período fiscal.
-
-Si NO encuentras la obligación "${obl.code}" en el documento, devuelve { "entries": [] }. NUNCA respondas con una explicación en texto — ni siquiera si no encuentras la obligación, tu respuesta completa debe ser solo el JSON.
-
-Devuelve ÚNICAMENTE un JSON con esta forma exacta, sin explicaciones ni markdown:
-{ "entries": [ { "obligationCode": "${obl.code}", "period": "...", "lastDigitNit": "...", "dueDate": "YYYY-MM-DD" } ] }`
-                  },
-                  {
-                    role: "user",
-                    content: [
-                      { type: "text" as const, text: `Extrae únicamente las fechas de "${obl.name}" (${obl.code}) del calendario tributario DIAN ${input.year}:` },
-                      { type: "file_url" as const, file_url: { url: accessUrl, mime_type: "application/pdf" } },
-                    ],
-                  },
-                ],
-              });
-
-              const rawContent = response.choices?.[0]?.message?.content || "";
-              const content = typeof rawContent === "string" ? rawContent : JSON.stringify(rawContent);
-              jsonStr = content;
-              if (content.includes("```")) {
-                const match = content.match(/```(?:json)?\s*([\s\S]*?)```/);
-                jsonStr = match ? match[1].trim() : content;
-              }
-
-              const parsed = JSON.parse(jsonStr);
-              entries = Array.isArray(parsed.entries) ? parsed.entries : [];
-              lastError = null;
-              break; // success, no need to retry
-            } catch (error) {
-              // If the response got cut off mid-way (e.g. "Unterminated string"),
-              // salvage whichever individual entry objects DID complete before
-              // the cutoff, instead of losing the whole obligation's data.
-              const salvaged = rescueEntriesFromTruncatedJson(jsonStr);
-              if (salvaged.length > 0) {
-                entries = salvaged;
-                lastError = null;
-                partialObligations.push(obl.code);
-                console.warn(`[DIAN Calendar Extraction] ${obl.code}: respuesta cortada, se rescataron ${salvaged.length} registros parciales.`);
-                break;
-              }
-
-              // The model sometimes ignores the "respond with JSON only"
-              // instruction and explains in plain text that it couldn't find
-              // the obligation. That's a legitimate "zero results", not a
-              // failure — don't burn retries or flag it as an error.
-              const lowerJson = jsonStr.toLowerCase();
-              const looksLikeNotFound = /no\s+(encontr|encuentr|aparece|est(a|á)\s+presente|se menciona|hay informaci)/i.test(lowerJson);
-              if (looksLikeNotFound) {
-                entries = [];
-                lastError = null;
-                console.warn(`[DIAN Calendar Extraction] ${obl.code}: la IA indicó que no encontró esta obligación en el documento.`);
-                break;
-              }
-
-              lastError = error;
-              const message = error instanceof Error ? error.message : String(error);
-              const isRateLimit = message.includes("429") || message.includes("rate_limit");
-              if (isRateLimit && attempt < 3) {
-                console.warn(`[DIAN Calendar Extraction] Rate limited on ${obl.code}, esperando antes de reintentar (intento ${attempt})...`);
-                await sleep(25000 * attempt); // 25s, then 50s
-                continue;
-              }
-              break; // non-rate-limit error, or out of attempts: give up on this obligation
-            }
+        pruneOldExtractionJobs();
+        const jobId = crypto.randomUUID();
+        dianExtractionJobs.set(jobId, {
+          status: "processing",
+          progress: { current: 0, total: 0, currentObligation: "" },
+          startedAt: Date.now(),
+        });
+        // Intentionally not awaited: this runs in the background while the
+        // mutation itself returns right away.
+        runDianExtractionJob(jobId, input.fileKey, input.year).catch(err => {
+          const job = dianExtractionJobs.get(jobId);
+          if (job) {
+            job.status = "failed";
+            job.error = err instanceof Error ? err.message : "Error inesperado";
           }
-
-          if (lastError) {
-            console.error(`[DIAN Calendar Extraction] Failed for ${obl.code}:`, lastError);
-            failedObligations.push(obl.code);
-          } else {
-            allEntries.push(...entries);
-          }
-
-          // Proactive spacing between obligations to stay under the 5 req/min
-          // organization rate limit (skip after the very last one).
-          if (obl !== activeObligations[activeObligations.length - 1]) {
-            await sleep(16000);
-          }
+        });
+        return { jobId };
+      }),
+    getExtractionStatus: adminProcedure
+      .input(z.object({ jobId: z.string() }))
+      .query(async ({ input }) => {
+        const job = dianExtractionJobs.get(input.jobId);
+        if (!job) {
+          return { status: "not_found" as const, progress: null, result: null, error: "El trabajo ya no está disponible (puede haber expirado)." };
         }
-
-        return {
-          entries: allEntries,
-          error: allEntries.length === 0
-            ? "No se pudo extraer ninguna fecha del PDF. Revise el archivo o intente con el formato CSV."
-            : null,
-          failedObligations,
-          partialObligations,
-        };
+        return { status: job.status, progress: job.progress, result: job.result ?? null, error: job.error ?? null };
       }),
   }),
 
