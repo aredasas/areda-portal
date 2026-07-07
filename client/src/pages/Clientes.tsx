@@ -20,20 +20,6 @@ export default function Clientes() {
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
 
-  if (!isAdmin) {
-    return (
-      <DashboardLayout>
-      <div className="flex items-center justify-center py-20">
-        <div className="text-center">
-          <AlertCircle className="h-12 w-12 mx-auto mb-4 text-muted-foreground/40" />
-          <h2 className="text-lg font-medium mb-2">Acceso Restringido</h2>
-          <p className="text-muted-foreground">Solo los administradores pueden acceder a esta sección.</p>
-        </div>
-      </div>
-      </DashboardLayout>
-    );
-  }
-
   const { data: clients, isLoading, refetch } = trpc.clients.list.useQuery();
   const { data: obligations } = trpc.obligations.list.useQuery();
   const { data: collaborators } = trpc.collaborators.getActive.useQuery();
@@ -267,6 +253,23 @@ export default function Clientes() {
       c.razonSocial.toLowerCase().includes(searchTerm.toLowerCase()) ||
       c.nit.includes(searchTerm)
   );
+
+  // Admin-only guard — placed after all hooks are declared (never skip hook
+  // calls conditionally, that breaks React's "same hooks every render" rule
+  // and throws "Rendered more hooks than during the previous render").
+  if (!isAdmin) {
+    return (
+      <DashboardLayout>
+      <div className="flex items-center justify-center py-20">
+        <div className="text-center">
+          <AlertCircle className="h-12 w-12 mx-auto mb-4 text-muted-foreground/40" />
+          <h2 className="text-lg font-medium mb-2">Acceso Restringido</h2>
+          <p className="text-muted-foreground">Solo los administradores pueden acceder a esta sección.</p>
+        </div>
+      </div>
+      </DashboardLayout>
+    );
+  }
 
   return (
     <DashboardLayout>

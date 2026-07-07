@@ -499,6 +499,166 @@ export async function updateTask(id: number, data: Partial<InsertTask>) {
   await db.update(tasks).set(data).where(eq(tasks.id, id));
 }
 
+// Local date key ("YYYY-MM-DD") — avoids UTC-shift bugs from toISOString()
+// when the server and the accounting firm are in different timezones.
+function localDateKey(d: Date): string {
+  const yr = d.getFullYear();
+  const mo = String(d.getMonth() + 1).padStart(2, "0");
+  const da = String(d.getDate()).padStart(2, "0");
+  return `${yr}-${mo}-${da}`;
+}
+
+export type DashboardFilters = {
+  month: string; // "YYYY-MM"
+  clientId?: number;
+  assignedToId?: number;
+  obligationId?: number;
+  managerId?: number; // role-scoping for non-admins: only their managed clients
+};
+
+export async function getDashboardData(filters: DashboardFilters) {
+  const db = await getDb();
+  const empty = {
+    taskStats: { pendiente: 0, en_progreso: 0, completada: 0, vencida: 0 },
+    tasksByStatus: { pendiente: [], en_progreso: [], completada: [], vencida: [] },
+    upcomingItems: [] as any[],
+    workload: [] as any[],
+    heatmap: [] as { date: string; count: number }[],
+  };
+  if (!db) return empty;
+
+  const [yearStr, monthStr] = filters.month.split("-");
+  const year = parseInt(yearStr);
+  const monthIdx = parseInt(monthStr) - 1; // 0-based
+  const monthStart = new Date(year, monthIdx, 1, 0, 0, 0);
+  const monthEnd = new Date(year, monthIdx + 1, 0, 23, 59, 59);
+
+  // ---- Tasks due within the selected month ----
+  const taskConditions = [gte(tasks.dueDate, monthStart), lte(tasks.dueDate, monthEnd)];
+  if (filters.clientId) taskConditions.push(eq(tasks.clientId, filters.clientId));
+  if (filters.assignedToId) taskConditions.push(eq(tasks.assignedToId, filters.assignedToId));
+  if (filters.managerId) taskConditions.push(eq(clients.managerId, filters.managerId));
+  if (filters.obligationId) taskConditions.push(eq(taxDeadlines.obligationId, filters.obligationId));
+
+  const taskRows = await db.select({
+    id: tasks.id,
+    title: tasks.title,
+    clientId: tasks.clientId,
+    clientName: clients.razonSocial,
+    assignedToId: tasks.assignedToId,
+    assignedToName: users.name,
+    dueDate: tasks.dueDate,
+    status: tasks.status,
+    priority: tasks.priority,
+  })
+    .from(tasks)
+    .leftJoin(clients, eq(tasks.clientId, clients.id))
+    .leftJoin(users, eq(tasks.assignedToId, users.id))
+    .leftJoin(taxDeadlines, eq(tasks.taxDeadlineId, taxDeadlines.id))
+    .where(and(...taskConditions))
+    .orderBy(asc(tasks.dueDate));
+
+  // ---- Tax deadlines due within the selected month ----
+  const deadlineConditions = [gte(taxDeadlines.dueDate, monthStart), lte(taxDeadlines.dueDate, monthEnd)];
+  if (filters.clientId) deadlineConditions.push(eq(taxDeadlines.clientId, filters.clientId));
+  if (filters.obligationId) deadlineConditions.push(eq(taxDeadlines.obligationId, filters.obligationId));
+  if (filters.managerId) deadlineConditions.push(eq(clients.managerId, filters.managerId));
+
+  const deadlineRows = await db.select({
+    id: taxDeadlines.id,
+    clientId: taxDeadlines.clientId,
+    clientName: clients.razonSocial,
+    obligationId: taxDeadlines.obligationId,
+    obligationName: taxObligations.name,
+    period: taxDeadlines.period,
+    dueDate: taxDeadlines.dueDate,
+    status: taxDeadlines.status,
+  })
+    .from(taxDeadlines)
+    .innerJoin(clients, eq(taxDeadlines.clientId, clients.id))
+    .innerJoin(taxObligations, eq(taxDeadlines.obligationId, taxObligations.id))
+    .where(and(...deadlineConditions))
+    .orderBy(asc(taxDeadlines.dueDate));
+
+  // ---- KPI counts + tasks grouped by status (for the "recent tasks" columns) ----
+  const taskStats = { pendiente: 0, en_progreso: 0, completada: 0, vencida: 0 };
+  const tasksByStatus: Record<string, any[]> = { pendiente: [], en_progreso: [], completada: [], vencida: [] };
+  for (const t of taskRows) {
+    if (t.status in taskStats) {
+      taskStats[t.status as keyof typeof taskStats]++;
+      if (tasksByStatus[t.status].length < 8) tasksByStatus[t.status].push(t);
+    }
+  }
+
+  // ---- Combined, sorted "upcoming this month" list (tasks + deadlines) ----
+  const upcomingItems = [
+    ...taskRows
+      .filter(t => t.dueDate && t.status !== "completada")
+      .map(t => ({
+        id: `t-${t.id}`,
+        type: "task" as const,
+        title: t.title,
+        subtitle: `${t.clientName || "Sin cliente"} → ${t.assignedToName || "Sin asignar"}`,
+        date: t.dueDate as Date,
+      })),
+    ...deadlineRows
+      .filter(d => d.status === "pendiente")
+      .map(d => ({
+        id: `d-${d.id}`,
+        type: "deadline" as const,
+        title: d.obligationName,
+        subtitle: `${d.clientName} — ${d.period}`,
+        date: d.dueDate,
+      })),
+  ].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+  // ---- Heatmap: how many tasks+deadlines are due each day of the month ----
+  const heatmapMap = new Map<string, number>();
+  for (const t of taskRows) {
+    if (!t.dueDate) continue;
+    const key = localDateKey(new Date(t.dueDate));
+    heatmapMap.set(key, (heatmapMap.get(key) || 0) + 1);
+  }
+  for (const d of deadlineRows) {
+    const key = localDateKey(new Date(d.dueDate));
+    heatmapMap.set(key, (heatmapMap.get(key) || 0) + 1);
+  }
+  const heatmap = Array.from(heatmapMap.entries()).map(([date, count]) => ({ date, count }));
+
+  // ---- Workload by collaborator — company-wide view, admin only ----
+  let workload: any[] = [];
+  if (!filters.managerId) {
+    const workloadMap = new Map<number, { userId: number; userName: string; totalTasks: number; pendingTasks: number; inProgressTasks: number; completedTasks: number }>();
+    for (const t of taskRows) {
+      if (!t.assignedToId) continue;
+      if (!workloadMap.has(t.assignedToId)) {
+        workloadMap.set(t.assignedToId, {
+          userId: t.assignedToId,
+          userName: t.assignedToName || "Sin asignar",
+          totalTasks: 0,
+          pendingTasks: 0,
+          inProgressTasks: 0,
+          completedTasks: 0,
+        });
+      }
+      const w = workloadMap.get(t.assignedToId)!;
+      w.totalTasks++;
+      if (t.status === "pendiente") w.pendingTasks++;
+      if (t.status === "en_progreso") w.inProgressTasks++;
+      if (t.status === "completada") w.completedTasks++;
+    }
+    workload = Array.from(workloadMap.values());
+  }
+
+  return {
+    taskStats,
+    tasksByStatus,
+    upcomingItems: upcomingItems.slice(0, 15),
+    workload,
+    heatmap,
+  };
+}
+
 export async function getTaskStats() {
   const db = await getDb();
   if (!db) return { pendiente: 0, en_progreso: 0, completada: 0, vencida: 0 };

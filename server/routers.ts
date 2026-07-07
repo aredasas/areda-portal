@@ -914,15 +914,24 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
   }),
 
   dashboard: router({
-    summary: protectedProcedure.query(async () => {
-      const [taskStats, upcomingDeadlines, workload, tasksByStatus] = await Promise.all([
-        db.getTaskStats(),
-        db.getUpcomingDeadlines(30),
-        db.getWorkloadByUser(),
-        db.getRecentTasksByStatus(5),
-      ]);
-      return { taskStats, upcomingDeadlines, workload, tasksByStatus };
-    }),
+    summary: protectedProcedure
+      .input(z.object({
+        month: z.string().optional(), // "YYYY-MM"
+        clientId: z.number().optional(),
+        assignedToId: z.number().optional(),
+        obligationId: z.number().optional(),
+      }).optional())
+      .query(async ({ input, ctx }) => {
+        const now = new Date();
+        const defaultMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+        return db.getDashboardData({
+          month: input?.month || defaultMonth,
+          clientId: input?.clientId,
+          assignedToId: input?.assignedToId,
+          obligationId: input?.obligationId,
+          managerId: ctx.user.role === "admin" ? undefined : ctx.user.id,
+        });
+      }),
   }),
 });
 
