@@ -689,6 +689,7 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
           // even with spacing between calls if other extractions run at the
           // same time, so we back off and retry before giving up.
           for (let attempt = 1; attempt <= 3; attempt++) {
+            let jsonStr = "";
             try {
               const response = await invokeLLM({
                 max_tokens: 8000,
@@ -723,7 +724,7 @@ Devuelve ÚNICAMENTE un JSON con esta forma exacta, sin explicaciones ni markdow
 
               const rawContent = response.choices?.[0]?.message?.content || "";
               const content = typeof rawContent === "string" ? rawContent : JSON.stringify(rawContent);
-              let jsonStr = content;
+              jsonStr = content;
               if (content.includes("```")) {
                 const match = content.match(/```(?:json)?\s*([\s\S]*?)```/);
                 jsonStr = match ? match[1].trim() : content;
