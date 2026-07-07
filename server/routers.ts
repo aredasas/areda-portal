@@ -658,6 +658,7 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
 
         const allEntries: any[] = [];
         const failedObligations: string[] = [];
+        const partialObligations: string[] = [];
 
         for (const obl of activeObligations) {
           const cuotasNote = obl.frequency === "anual" && obl.installments > 1 ? `, pagada en ${obl.installments} cuotas` : "";
@@ -690,7 +691,7 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
           for (let attempt = 1; attempt <= 3; attempt++) {
             try {
               const response = await invokeLLM({
-                max_tokens: 4000,
+                max_tokens: 8000,
                 messages: [
                   {
                     role: "system",
@@ -733,6 +734,18 @@ Devuelve ÚNICAMENTE un JSON con esta forma exacta, sin explicaciones ni markdow
               lastError = null;
               break; // success, no need to retry
             } catch (error) {
+              // If the response got cut off mid-way (e.g. "Unterminated string"),
+              // salvage whichever individual entry objects DID complete before
+              // the cutoff, instead of losing the whole obligation's data.
+              const salvaged = rescueEntriesFromTruncatedJson(jsonStr);
+              if (salvaged.length > 0) {
+                entries = salvaged;
+                lastError = null;
+                partialObligations.push(obl.code);
+                console.warn(`[DIAN Calendar Extraction] ${obl.code}: respuesta cortada, se rescataron ${salvaged.length} registros parciales.`);
+                break;
+              }
+
               lastError = error;
               const message = error instanceof Error ? error.message : String(error);
               const isRateLimit = message.includes("429") || message.includes("rate_limit");
@@ -765,6 +778,7 @@ Devuelve ÚNICAMENTE un JSON con esta forma exacta, sin explicaciones ni markdow
             ? "No se pudo extraer ninguna fecha del PDF. Revise el archivo o intente con el formato CSV."
             : null,
           failedObligations,
+          partialObligations,
         };
       }),
   }),
@@ -788,6 +802,27 @@ export type AppRouter = typeof appRouter;
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/** When the AI's response gets cut off mid-way (hit the token limit or a
+ * network hiccup), the JSON as a whole is invalid — but most individual
+ * entry objects before the cutoff are still complete. Extract those instead
+ * of discarding everything. Entries here are flat objects (no nesting), so a
+ * simple non-greedy `{...}` match reliably finds each complete one. */
+function rescueEntriesFromTruncatedJson(jsonStr: string): any[] {
+  const matches = jsonStr.match(/\{[^{}]*\}/g) || [];
+  const rescued: any[] = [];
+  for (const m of matches) {
+    try {
+      const obj = JSON.parse(m);
+      if (obj && typeof obj === "object" && obj.obligationCode && obj.period && obj.dueDate) {
+        rescued.push(obj);
+      }
+    } catch {
+      // Skip fragments that still don't parse on their own
+    }
+  }
+  return rescued;
 }
 
 function generatePeriods(frequency: string, year: number, installments: number = 1): string[] {

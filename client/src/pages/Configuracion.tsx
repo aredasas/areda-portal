@@ -140,6 +140,10 @@ function DianCalendarSection() {
       if (result.failedObligations && result.failedObligations.length > 0) {
         toast.warning(`No se pudo leer del PDF: ${result.failedObligations.join(", ")}. Revise esas obligaciones manualmente o cárguelas por CSV.`);
       }
+
+      if (result.partialObligations && result.partialObligations.length > 0) {
+        toast.warning(`Atención: ${result.partialObligations.join(", ")} se leyó de forma incompleta (la respuesta de la IA se cortó). Revise esos registros con cuidado en la vista previa antes de guardar.`);
+      }
     } catch (error: any) {
       toast.error(error.message || "Error al procesar el PDF");
     } finally {
