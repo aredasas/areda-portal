@@ -707,7 +707,7 @@ Formato del campo "period" para esta obligación: ${periodFormatHint}
 
 Nota: si una fecha cae en enero o febrero del año siguiente (ej. "Enero ${input.year + 1}"), regístrala igual bajo el año ${input.year}, ya que corresponde a ese período fiscal.
 
-Si NO encuentras la obligación "${obl.code}" en el documento, devuelve { "entries": [] }.
+Si NO encuentras la obligación "${obl.code}" en el documento, devuelve { "entries": [] }. NUNCA respondas con una explicación en texto — ni siquiera si no encuentras la obligación, tu respuesta completa debe ser solo el JSON.
 
 Devuelve ÚNICAMENTE un JSON con esta forma exacta, sin explicaciones ni markdown:
 { "entries": [ { "obligationCode": "${obl.code}", "period": "...", "lastDigitNit": "...", "dueDate": "YYYY-MM-DD" } ] }`
@@ -744,6 +744,19 @@ Devuelve ÚNICAMENTE un JSON con esta forma exacta, sin explicaciones ni markdow
                 lastError = null;
                 partialObligations.push(obl.code);
                 console.warn(`[DIAN Calendar Extraction] ${obl.code}: respuesta cortada, se rescataron ${salvaged.length} registros parciales.`);
+                break;
+              }
+
+              // The model sometimes ignores the "respond with JSON only"
+              // instruction and explains in plain text that it couldn't find
+              // the obligation. That's a legitimate "zero results", not a
+              // failure — don't burn retries or flag it as an error.
+              const lowerJson = jsonStr.toLowerCase();
+              const looksLikeNotFound = /no encontr|no aparece|no est(a|á) presente|no se menciona|no hay informaci/i.test(lowerJson);
+              if (looksLikeNotFound) {
+                entries = [];
+                lastError = null;
+                console.warn(`[DIAN Calendar Extraction] ${obl.code}: la IA indicó que no encontró esta obligación en el documento.`);
                 break;
               }
 
