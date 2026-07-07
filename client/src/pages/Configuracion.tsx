@@ -635,16 +635,24 @@ function TaxObligationsSection() {
 
   const [showForm, setShowForm] = useState(false);
   const [editingObligation, setEditingObligation] = useState<any>(null);
-  const [form, setForm] = useState({ code: "", name: "", description: "", frequency: "mensual", installments: "1" });
+  const [form, setForm] = useState({ code: "", name: "", description: "", frequency: "mensual", installments: "1", fixedDates: [] as string[] });
 
   const resetForm = () => {
-    setForm({ code: "", name: "", description: "", frequency: "mensual", installments: "1" });
+    setForm({ code: "", name: "", description: "", frequency: "mensual", installments: "1", fixedDates: [] });
     setEditingObligation(null);
   };
 
   const handleOpenNew = () => { resetForm(); setShowForm(true); };
 
   const handleEdit = (obligation: any) => {
+    let fixedDates: string[] = [];
+    if (obligation.fixedDueDates) {
+      try {
+        fixedDates = JSON.parse(obligation.fixedDueDates);
+      } catch {
+        fixedDates = [];
+      }
+    }
     setEditingObligation(obligation);
     setForm({
       code: obligation.code,
@@ -652,6 +660,7 @@ function TaxObligationsSection() {
       description: obligation.description || "",
       frequency: obligation.frequency,
       installments: String(obligation.installments || 1),
+      fixedDates,
     });
     setShowForm(true);
   };
@@ -662,7 +671,8 @@ function TaxObligationsSection() {
       return;
     }
     try {
-      const payload = { ...form, installments: parseInt(form.installments) || 1 };
+      const { fixedDates, ...rest } = form;
+      const payload = { ...rest, installments: parseInt(form.installments) || 1, fixedDueDates: fixedDates };
       if (editingObligation) {
         await updateObligation.mutateAsync({ id: editingObligation.id, ...payload });
         toast.success("Obligación actualizada correctamente");
@@ -676,6 +686,14 @@ function TaxObligationsSection() {
     } catch (error: any) {
       toast.error(error.message || "Error al guardar la obligación");
     }
+  };
+
+  const addFixedDate = () => setForm({ ...form, fixedDates: [...form.fixedDates, "03-31"] });
+  const removeFixedDate = (idx: number) => setForm({ ...form, fixedDates: form.fixedDates.filter((_, i) => i !== idx) });
+  const updateFixedDate = (idx: number, value: string) => {
+    // value comes from <input type="date"> as "YYYY-MM-DD" — keep only MM-DD
+    const md = value.slice(5);
+    setForm({ ...form, fixedDates: form.fixedDates.map((d, i) => (i === idx ? md : d)) });
   };
 
   const handleToggleActive = async (obligation: any) => {
@@ -732,6 +750,17 @@ function TaxObligationsSection() {
                     {frequencyLabels[obligation.frequency]}
                     {obligation.frequency === "anual" && obligation.installments > 1 && (
                       <span className="text-muted-foreground"> ({obligation.installments} cuotas)</span>
+                    )}
+                    {obligation.fixedDueDates && (
+                      <div className="text-xs text-[#EDA011] mt-0.5">
+                        Fecha fija: {(() => {
+                          try {
+                            return (JSON.parse(obligation.fixedDueDates) as string[]).join(", ");
+                          } catch {
+                            return "";
+                          }
+                        })()}
+                      </div>
                     )}
                   </TableCell>
                   <TableCell>
@@ -821,6 +850,28 @@ function TaxObligationsSection() {
                 </p>
               </div>
             )}
+            <div className="space-y-2">
+              <Label>Fecha(s) de vencimiento fija(s)</Label>
+              <p className="text-xs text-muted-foreground">
+                Use esto solo si la obligación tiene la misma fecha para todos los clientes, sin importar el NIT (ej: renovación de Cámara de Comercio, reportes a Supersalud o Supersociedades). Si el vencimiento depende del NIT, déjelo vacío y cárguelo con la herramienta del Calendario DIAN.
+              </p>
+              {form.fixedDates.map((md, idx) => (
+                <div key={idx} className="flex items-center gap-2">
+                  <Input
+                    type="date"
+                    value={`${new Date().getFullYear()}-${md}`}
+                    onChange={(e) => updateFixedDate(idx, e.target.value)}
+                    className="flex-1"
+                  />
+                  <Button variant="ghost" size="icon" className="h-9 w-9 text-red-600" onClick={() => removeFixedDate(idx)}>
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
+              ))}
+              <Button variant="outline" size="sm" className="gap-2" onClick={addFixedDate}>
+                <Plus className="h-3.5 w-3.5" /> Agregar fecha
+              </Button>
+            </div>
             <div className="space-y-2">
               <Label>Descripción</Label>
               <Textarea

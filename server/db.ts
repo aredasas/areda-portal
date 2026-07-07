@@ -291,6 +291,7 @@ export async function getClientObligations(clientId: number) {
     obligationCode: taxObligations.code,
     frequency: taxObligations.frequency,
     installments: taxObligations.installments,
+    fixedDueDates: taxObligations.fixedDueDates,
   })
     .from(clientObligations)
     .innerJoin(taxObligations, eq(clientObligations.obligationId, taxObligations.id))

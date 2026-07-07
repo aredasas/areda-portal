@@ -73,6 +73,13 @@ export const taxObligations = mysqlTable("taxObligations", {
   /** For "anual" obligations paid in installments (e.g. Renta Grandes
    * Contribuyentes = 3 cuotas, Personas Jurídicas = 2 cuotas). 1 = single payment. */
   installments: int("installments").default(1).notNull(),
+  /** JSON array of "MM-DD" dates (e.g. ["03-31"] or ["05-15","09-14"]) for
+   * obligations with a fixed annual due date that does NOT depend on the
+   * client's NIT and doesn't come from the DIAN calendar — e.g. renovación
+   * de Cámara de Comercio, reportes a Supersalud o Supersociedades. When
+   * set, deadline generation uses these dates directly for every client
+   * with this obligation, skipping the NIT-based DIAN calendar lookup. */
+  fixedDueDates: text("fixedDueDates"),
   isActive: boolean("isActive").default(true).notNull(),
 });
 

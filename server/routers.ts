@@ -500,9 +500,15 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
         description: z.string().optional(),
         frequency: z.enum(["mensual", "bimestral", "cuatrimestral", "semestral", "anual"]),
         installments: z.number().min(1).max(12).optional(),
+        fixedDueDates: z.array(z.string().regex(/^\d{2}-\d{2}$/, "Formato debe ser MM-DD")).optional(),
       }))
       .mutation(async ({ input }) => {
-        const id = await db.createTaxObligation({ ...input, description: input.description || null });
+        const { fixedDueDates, ...rest } = input;
+        const id = await db.createTaxObligation({
+          ...rest,
+          description: input.description || null,
+          fixedDueDates: fixedDueDates && fixedDueDates.length > 0 ? JSON.stringify(fixedDueDates) : null,
+        });
         return { id };
       }),
     update: adminProcedure
@@ -513,9 +519,14 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
         description: z.string().optional(),
         frequency: z.enum(["mensual", "bimestral", "cuatrimestral", "semestral", "anual"]).optional(),
         installments: z.number().min(1).max(12).optional(),
+        fixedDueDates: z.array(z.string().regex(/^\d{2}-\d{2}$/, "Formato debe ser MM-DD")).optional(),
       }))
       .mutation(async ({ input }) => {
-        const { id, ...data } = input;
+        const { id, fixedDueDates, ...rest } = input;
+        const data: any = { ...rest };
+        if (fixedDueDates !== undefined) {
+          data.fixedDueDates = fixedDueDates.length > 0 ? JSON.stringify(fixedDueDates) : null;
+        }
         await db.updateTaxObligation(id, data);
         return { success: true };
       }),
@@ -576,6 +587,31 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
         // Try to use DIAN calendar entries first
         const deadlines: any[] = [];
         for (const obl of obligations) {
+          // Obligations with fixed annual dates (e.g. Cámara de Comercio,
+          // Supersalud, Supersociedades) don't depend on the client's NIT and
+          // aren't sourced from the DIAN calendar — use them directly.
+          if (obl.fixedDueDates) {
+            let fixedDates: string[] = [];
+            try {
+              fixedDates = JSON.parse(obl.fixedDueDates);
+            } catch {
+              fixedDates = [];
+            }
+            for (const md of fixedDates) {
+              const [month, day] = md.split("-").map(Number);
+              if (!month || !day) continue;
+              deadlines.push({
+                clientId: input.clientId,
+                obligationId: obl.obligationId,
+                period: `${input.year}-${md}`,
+                dueDate: new Date(input.year, month - 1, day),
+                lastDigitNit: "ALL",
+                status: "pendiente",
+              });
+            }
+            continue;
+          }
+
           const periods = generatePeriods(obl.frequency, input.year, obl.installments || 1);
           for (const period of periods) {
             // Look up DIAN calendar (matches by single digit, two-digit range, or "ALL")

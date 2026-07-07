@@ -50,6 +50,13 @@
       "when": 1783385496217,
       "tag": "0006_add_semestral_frequency",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "5",
+      "when": 1783450263737,
+      "tag": "0007_add_fixed_due_dates",
+      "breakpoints": true
     }
   ]
 }
