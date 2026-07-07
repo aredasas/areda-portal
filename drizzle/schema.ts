@@ -69,7 +69,7 @@ export const taxObligations = mysqlTable("taxObligations", {
   code: varchar("code", { length: 20 }).notNull().unique(),
   name: varchar("name", { length: 100 }).notNull(),
   description: text("description"),
-  frequency: mysqlEnum("frequency", ["mensual", "bimestral", "cuatrimestral", "anual"]).notNull(),
+  frequency: mysqlEnum("frequency", ["mensual", "bimestral", "cuatrimestral", "semestral", "anual"]).notNull(),
   /** For "anual" obligations paid in installments (e.g. Renta Grandes
    * Contribuyentes = 3 cuotas, Personas Jurídicas = 2 cuotas). 1 = single payment. */
   installments: int("installments").default(1).notNull(),

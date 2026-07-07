@@ -43,6 +43,13 @@
       "when": 1783382914166,
       "tag": "0005_dian_calendar_flexibility",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "5",
+      "when": 1783385496217,
+      "tag": "0006_add_semestral_frequency",
+      "breakpoints": true
     }
   ]
 }

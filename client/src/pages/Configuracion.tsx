@@ -116,7 +116,7 @@ function DianCalendarSection() {
         contentType: file.type,
       });
 
-      toast.info("Leyendo el calendario con IA, esto puede tardar un momento...");
+      toast.info("Leyendo el calendario con IA, obligación por obligación. Esto puede tardar 1-2 minutos...");
 
       const result = await extractFromPdf.mutateAsync({
         fileKey: uploadResult.key,
@@ -136,6 +136,10 @@ function DianCalendarSection() {
       setParsedEntries(result.entries);
       setShowPreview(true);
       toast.success(`${result.entries.length} registros extraídos con IA. Revise la vista previa antes de guardar.`);
+
+      if (result.failedObligations && result.failedObligations.length > 0) {
+        toast.warning(`No se pudo leer del PDF: ${result.failedObligations.join(", ")}. Revise esas obligaciones manualmente o cárguelas por CSV.`);
+      }
     } catch (error: any) {
       toast.error(error.message || "Error al procesar el PDF");
     } finally {
@@ -515,6 +519,7 @@ const frequencyLabels: Record<string, string> = {
   mensual: "Mensual",
   bimestral: "Bimestral",
   cuatrimestral: "Cuatrimestral",
+  semestral: "Semestral",
   anual: "Anual",
 };
 
@@ -692,6 +697,7 @@ function TaxObligationsSection() {
                   <SelectItem value="mensual">Mensual</SelectItem>
                   <SelectItem value="bimestral">Bimestral</SelectItem>
                   <SelectItem value="cuatrimestral">Cuatrimestral</SelectItem>
+                  <SelectItem value="semestral">Semestral</SelectItem>
                   <SelectItem value="anual">Anual</SelectItem>
                 </SelectContent>
               </Select>

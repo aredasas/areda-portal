@@ -322,7 +322,7 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
         code: z.string().min(1),
         name: z.string().min(1),
         description: z.string().optional(),
-        frequency: z.enum(["mensual", "bimestral", "cuatrimestral", "anual"]),
+        frequency: z.enum(["mensual", "bimestral", "cuatrimestral", "semestral", "anual"]),
         installments: z.number().min(1).max(12).optional(),
       }))
       .mutation(async ({ input }) => {
@@ -335,7 +335,7 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
         code: z.string().min(1).optional(),
         name: z.string().min(1).optional(),
         description: z.string().optional(),
-        frequency: z.enum(["mensual", "bimestral", "cuatrimestral", "anual"]).optional(),
+        frequency: z.enum(["mensual", "bimestral", "cuatrimestral", "semestral", "anual"]).optional(),
         installments: z.number().min(1).max(12).optional(),
       }))
       .mutation(async ({ input }) => {
@@ -646,84 +646,97 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
         return { url, key };
       }),
     /** Reads the official DIAN calendar PDF with AI and extracts entries in
-     * the same shape the CSV upload expects, for review before saving. */
+     * the same shape the CSV upload expects, for review before saving.
+     * Processes ONE obligation per AI call — the full calendar has hundreds
+     * of rows (e.g. Retención = 12 months × 10 digits), too many for a
+     * single response without truncating the JSON output. */
     extractFromPdf: adminProcedure
       .input(z.object({ fileKey: z.string(), year: z.number() }))
       .mutation(async ({ input }) => {
-        try {
-          const accessUrl = await storageGetSignedUrl(input.fileKey);
-          const activeObligations = await db.getAllTaxObligations();
-          const codesList = activeObligations
-            .map(o => {
-              const cuotasNote = o.frequency === "anual" && o.installments > 1 ? `, ${o.installments} cuotas` : "";
-              return `${o.code} (${o.name} — ${o.frequency}${cuotasNote})`;
-            })
-            .join("\n- ");
+        const accessUrl = await storageGetSignedUrl(input.fileKey);
+        const activeObligations = await db.getAllTaxObligations();
 
-          const response = await invokeLLM({
-            max_tokens: 8000,
-            messages: [
-              {
-                role: "system",
-                content: `Eres un asistente experto en el calendario tributario de la DIAN (Colombia). Vas a recibir el PDF oficial del calendario tributario del año ${input.year}. Debes extraer TODAS las fechas de vencimiento que encuentres.
+        const allEntries: any[] = [];
+        const failedObligations: string[] = [];
 
-Las obligaciones tributarias registradas en el sistema son:
-- ${codesList}
+        for (const obl of activeObligations) {
+          const cuotasNote = obl.frequency === "anual" && obl.installments > 1 ? `, pagada en ${obl.installments} cuotas` : "";
 
-Para cada obligación, usa el código EXACTO de la lista de arriba (no inventes códigos nuevos). Si el calendario menciona una obligación, un tipo de contribuyente, o un impuesto que no está en la lista, ignóralo por completo.
+          const periodFormatHint = (() => {
+            switch (obl.frequency) {
+              case "mensual":
+                return `Mensual: un registro por cada mes ("${input.year}-01" a "${input.year}-12"), para cada dígito o rango de NIT que encuentre.`;
+              case "bimestral":
+                return `Bimestral: períodos "${input.year}-01-02", "${input.year}-03-04", "${input.year}-05-06", "${input.year}-07-08", "${input.year}-09-10", "${input.year}-11-12".`;
+              case "cuatrimestral":
+                return `Cuatrimestral: períodos "${input.year}-01-04", "${input.year}-05-08", "${input.year}-09-12".`;
+              case "semestral":
+                return `Semestral: períodos "${input.year}-01-06", "${input.year}-07-12".`;
+              case "anual":
+                return obl.installments > 1
+                  ? `Anual con cuotas: use "${input.year}-cuota1", "${input.year}-cuota2"${obl.installments > 2 ? `, "${input.year}-cuota3"` : ""}, en el mismo orden en que aparecen las cuotas en el calendario (la primera cuota del año es cuota1, y así sucesivamente).`
+                  : `Anual sin cuotas: un solo período, "${input.year}".`;
+              default:
+                return `Use "${input.year}" como período.`;
+            }
+          })();
 
-IMPORTANTE — el calendario DIAN agrupa las fechas de tres formas distintas según la obligación. Debes identificar cuál aplica en cada tabla del documento:
+          try {
+            const response = await invokeLLM({
+              max_tokens: 4000,
+              messages: [
+                {
+                  role: "system",
+                  content: `Eres un asistente experto en el calendario tributario de la DIAN (Colombia). Vas a recibir el PDF oficial del calendario tributario del año ${input.year}. Tu ÚNICA tarea es extraer las fechas de vencimiento de UNA sola obligación: "${obl.code}" (${obl.name}${cuotasNote}). Ignora completamente cualquier otra tabla u obligación del documento, aunque aparezcan cerca.
 
-1. Por UN SOLO dígito del NIT (0 al 9) — la mayoría de las obligaciones (IVA, Retención en la Fuente, RST, Renta Grandes Contribuyentes, Renta Personas Jurídicas). Usa "lastDigitNit": "0" hasta "9", un registro por cada dígito.
+Formato de agrupación por NIT — identifica cuál usa esta obligación específica en el documento:
+1. Un solo dígito del NIT (0 al 9): "lastDigitNit": "0" a "9", un registro por dígito.
+2. Últimos DOS dígitos del NIT en pares (ej. "01-02", "03-04"... "99-00"): "lastDigitNit": "01-02" (con guion, ambos dígitos con cero a la izquierda), un registro por cada par.
+3. Fecha única sin importar el NIT (tabla que diga "independientemente del número de identificación tributaria"): "lastDigitNit": "ALL", un solo registro.
 
-2. Por los ÚLTIMOS DOS dígitos del NIT, agrupados en pares (ej: "01-02", "03-04"... "99-00") — así funciona típicamente Renta Personas Naturales. Usa "lastDigitNit": "01-02" (con el guion, ambos dígitos con cero a la izquierda), un registro por cada par que encuentres en la tabla.
+Formato del campo "period" para esta obligación: ${periodFormatHint}
 
-3. Fecha ÚNICA sin importar el NIT (ej: RUB, informe país por país, o cualquier tabla que diga "independientemente del número de identificación tributaria"). Usa "lastDigitNit": "ALL", un solo registro.
+Nota: si una fecha cae en enero o febrero del año siguiente (ej. "Enero ${input.year + 1}"), regístrala igual bajo el año ${input.year}, ya que corresponde a ese período fiscal.
 
-Formato del campo "period" según la periodicidad y las cuotas de cada obligación:
-- Mensual: "${input.year}-01", "${input.year}-02", ... "${input.year}-12"
-- Bimestral: "${input.year}-01-02", "${input.year}-03-04", "${input.year}-05-06", "${input.year}-07-08", "${input.year}-09-10", "${input.year}-11-12"
-- Cuatrimestral: "${input.year}-01-04", "${input.year}-05-08", "${input.year}-09-12"
-- Anual sin cuotas (1 sola declaración/pago): "${input.year}"
-- Anual CON cuotas (ej: Renta que se paga en 2 o 3 pagos dentro del año): "${input.year}-cuota1", "${input.year}-cuota2", "${input.year}-cuota3" — usa cuota1 para el primer pago del año, cuota2 para el segundo, y así sucesivamente, en el mismo orden en que aparecen en el calendario (ej: "Pago 1a. cuota" = cuota1, "Declaración y pago 2a. cuota" = cuota2).
-
-Nota: si una fecha de vencimiento cae en enero o febrero del año siguiente (ej: "Enero ${input.year + 1}"), igual regístrala bajo el año ${input.year} ya que corresponde al período de ese año fiscal.
+Si NO encuentras la obligación "${obl.code}" en el documento, devuelve { "entries": [] }.
 
 Devuelve ÚNICAMENTE un JSON con esta forma exacta, sin explicaciones ni markdown:
-{
-  "entries": [
-    { "obligationCode": "IVA_BIM", "period": "${input.year}-01-02", "lastDigitNit": "1", "dueDate": "${input.year}-03-15" },
-    { "obligationCode": "RENTA_PN", "period": "${input.year}", "lastDigitNit": "01-02", "dueDate": "${input.year}-08-12" },
-    { "obligationCode": "RUB", "period": "${input.year}", "lastDigitNit": "ALL", "dueDate": "${input.year}-02-02" }
-  ]
-}
-El campo "dueDate" debe tener formato YYYY-MM-DD. Incluye un registro por cada combinación de período y grupo de NIT que encuentres en el documento para las obligaciones de la lista.`
-              },
-              {
-                role: "user",
-                content: [
-                  { type: "text" as const, text: `Extrae todas las fechas de vencimiento del calendario tributario DIAN ${input.year} de este documento:` },
-                  { type: "file_url" as const, file_url: { url: accessUrl, mime_type: "application/pdf" } },
-                ],
-              },
-            ],
-          });
+{ "entries": [ { "obligationCode": "${obl.code}", "period": "...", "lastDigitNit": "...", "dueDate": "YYYY-MM-DD" } ] }`
+                },
+                {
+                  role: "user",
+                  content: [
+                    { type: "text" as const, text: `Extrae únicamente las fechas de "${obl.name}" (${obl.code}) del calendario tributario DIAN ${input.year}:` },
+                    { type: "file_url" as const, file_url: { url: accessUrl, mime_type: "application/pdf" } },
+                  ],
+                },
+              ],
+            });
 
-          const rawContent = response.choices?.[0]?.message?.content || "";
-          const content = typeof rawContent === "string" ? rawContent : JSON.stringify(rawContent);
-          let jsonStr = content;
-          if (content.includes("```")) {
-            const match = content.match(/```(?:json)?\s*([\s\S]*?)```/);
-            jsonStr = match ? match[1].trim() : content;
+            const rawContent = response.choices?.[0]?.message?.content || "";
+            const content = typeof rawContent === "string" ? rawContent : JSON.stringify(rawContent);
+            let jsonStr = content;
+            if (content.includes("```")) {
+              const match = content.match(/```(?:json)?\s*([\s\S]*?)```/);
+              jsonStr = match ? match[1].trim() : content;
+            }
+
+            const parsed = JSON.parse(jsonStr);
+            const entries = Array.isArray(parsed.entries) ? parsed.entries : [];
+            allEntries.push(...entries);
+          } catch (error) {
+            console.error(`[DIAN Calendar Extraction] Failed for ${obl.code}:`, error);
+            failedObligations.push(obl.code);
           }
-
-          const parsed = JSON.parse(jsonStr);
-          const entries = Array.isArray(parsed.entries) ? parsed.entries : [];
-          return { entries, error: null };
-        } catch (error) {
-          console.error("[DIAN Calendar Extraction] Failed:", error);
-          return { entries: [], error: "No se pudo leer el PDF automáticamente. Intente con el formato CSV o revise el archivo." };
         }
+
+        return {
+          entries: allEntries,
+          error: allEntries.length === 0
+            ? "No se pudo extraer ninguna fecha del PDF. Revise el archivo o intente con el formato CSV."
+            : null,
+          failedObligations,
+        };
       }),
   }),
 
@@ -752,6 +765,8 @@ function generatePeriods(frequency: string, year: number, installments: number =
       return [`${year}-01-02`, `${year}-03-04`, `${year}-05-06`, `${year}-07-08`, `${year}-09-10`, `${year}-11-12`];
     case "cuatrimestral":
       return [`${year}-01-04`, `${year}-05-08`, `${year}-09-12`];
+    case "semestral":
+      return [`${year}-01-06`, `${year}-07-12`];
     case "anual":
       if (installments > 1) {
         return Array.from({ length: installments }, (_, i) => `${year}-cuota${i + 1}`);
@@ -784,6 +799,13 @@ function generateDefaultDueDate(frequency: string, period: string, year: number,
       const cuatMonth = endM + 1 > 12 ? 1 : endM + 1;
       const cuatYear = endM + 1 > 12 ? year + 1 : year;
       return new Date(cuatYear, cuatMonth - 1, 10 + digitOffset);
+    }
+    case "semestral": {
+      const parts = period.split("-");
+      const endM = parseInt(parts[1]) || 6;
+      const semMonth = endM + 1 > 12 ? 1 : endM + 1;
+      const semYear = endM + 1 > 12 ? year + 1 : year;
+      return new Date(semYear, semMonth - 1, 10 + digitOffset);
     }
     case "anual": {
       const cuotaMatch = period.match(/cuota(\d+)/);
