@@ -47,11 +47,6 @@ export default function Tareas() {
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
   const { data: tasks, isLoading, refetch } = trpc.tasks.list.useQuery();
-  const completingTask = tasks?.find((t: any) => t.id === completingTaskId);
-  const { data: driveSubfolders } = trpc.clients.getDriveSubfolders.useQuery(
-    { clientId: completingTask?.clientId as number },
-    { enabled: !!completingTask?.clientId }
-  );
   const { data: clients } = trpc.clients.list.useQuery();
   const { data: users } = trpc.collaborators.getActive.useQuery();
   const createTask = trpc.tasks.create.useMutation();
@@ -70,6 +65,12 @@ export default function Tareas() {
   const [evidenceFile, setEvidenceFile] = useState<File | null>(null);
   const [selectedSubfolder, setSelectedSubfolder] = useState<string>("");
   const [newSubfolderName, setNewSubfolderName] = useState("");
+
+  const completingTask = tasks?.find((t: any) => t.id === completingTaskId);
+  const { data: driveSubfolders } = trpc.clients.getDriveSubfolders.useQuery(
+    { clientId: completingTask?.clientId as number },
+    { enabled: !!completingTask?.clientId }
+  );
   const [showDetailDialog, setShowDetailDialog] = useState(false);
   const [detailTask, setDetailTask] = useState<any>(null);
   const [attachmentFile, setAttachmentFile] = useState<File | null>(null);
