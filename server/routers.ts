@@ -328,6 +328,14 @@ export const appRouter = router({
         }
         return client;
       }),
+    /** Subfolder names previously used inside this client's Drive folder,
+     * offered as a dropdown when uploading evidence so people reuse the
+     * exact same name instead of retyping a slightly different one. */
+    getDriveSubfolders: protectedProcedure
+      .input(z.object({ clientId: z.number() }))
+      .query(async ({ input }) => {
+        return db.getClientDriveSubfolders(input.clientId);
+      }),
     create: adminProcedure
       .input(z.object({
         razonSocial: z.string().min(1),
@@ -604,7 +612,7 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
                 clientId: input.clientId,
                 obligationId: obl.obligationId,
                 period: `${input.year}-${md}`,
-                dueDate: new Date(input.year, month - 1, day),
+                dueDate: new Date(Date.UTC(input.year, month - 1, day)),
                 lastDigitNit: "ALL",
                 status: "pendiente",
               });
@@ -633,9 +641,39 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
         return { count: deadlines.length };
       }),
     updateStatus: protectedProcedure
-      .input(z.object({ id: z.number(), status: z.enum(["pendiente", "completado", "vencido"]) }))
+      .input(z.object({ id: z.number(), status: z.enum(["pendiente", "en_progreso", "vencido"]) }))
       .mutation(async ({ input, ctx }) => {
         await db.updateDeadlineStatus(input.id, input.status, ctx.user.id);
+        return { success: true };
+      }),
+    /** Marks a deadline as completed — requires supporting evidence, same as
+     * tasks. Non-admins may only complete deadlines for clients they manage. */
+    complete: protectedProcedure
+      .input(z.object({
+        id: z.number(),
+        clientId: z.number(),
+        evidenceFileUrl: z.string(),
+        evidenceFileKey: z.string().optional(),
+        driveSubfolder: z.string().optional(),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        if (ctx.user.role !== "admin") {
+          const client = await db.getClientById(input.clientId);
+          if (!client || client.managerId !== ctx.user.id) {
+            throw new TRPCError({ code: "FORBIDDEN", message: "No tiene acceso a este cliente" });
+          }
+        }
+        await db.completeDeadline(input.id, input.evidenceFileUrl, input.evidenceFileKey || null, ctx.user.id, input.driveSubfolder);
+        if (input.driveSubfolder) {
+          await db.ensureClientDriveSubfolder(input.clientId, input.driveSubfolder);
+        }
+        return { success: true };
+      }),
+    /** Admin-only: reopens a deadline mistakenly marked as completed. */
+    reopen: adminProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ input }) => {
+        await db.reopenDeadline(input.id);
         return { success: true };
       }),
     /** Manually correct a deadline's due date when detected to be wrong
@@ -645,6 +683,20 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
       .mutation(async ({ input }) => {
         await db.updateDeadlineDueDate(input.id, new Date(input.dueDate));
         return { success: true };
+      }),
+    /** Upload a supporting document for a tax deadline (same key-suffix fix
+     * as the other upload endpoints — always return the storagePut key). */
+    uploadEvidence: protectedProcedure
+      .input(z.object({
+        fileName: z.string(),
+        fileBase64: z.string(),
+        contentType: z.string(),
+      }))
+      .mutation(async ({ input }) => {
+        const buffer = Buffer.from(input.fileBase64, "base64");
+        const rawKey = `deadline-evidence/${Date.now()}_${input.fileName}`;
+        const { url, key } = await storagePut(rawKey, buffer, input.contentType);
+        return { url, key };
       }),
   }),
 
@@ -714,14 +766,16 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
         evidenceFileUrl: z.string().optional(),
         evidenceFileKey: z.string().optional(),
         completionNotes: z.string().optional(),
+        driveSubfolder: z.string().optional(),
       }))
       .mutation(async ({ input, ctx }) => {
         if (!input.evidenceFileUrl) {
           throw new Error("Debe adjuntar evidencia para completar la tarea");
         }
+        const task = await db.getTaskById(input.id);
+        if (!task) throw new Error("Tarea no encontrada");
         if (ctx.user.role !== "admin") {
-          const task = await db.getTaskById(input.id);
-          if (!task || task.assignedToId !== ctx.user.id) {
+          if (task.assignedToId !== ctx.user.id) {
             throw new TRPCError({
               code: "FORBIDDEN",
               message: "Solo puede completar tareas asignadas a usted",
@@ -734,7 +788,11 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
           evidenceFileUrl: input.evidenceFileUrl,
           evidenceFileKey: input.evidenceFileKey || null,
           completionNotes: input.completionNotes || null,
+          driveSubfolder: input.driveSubfolder || null,
         });
+        if (input.driveSubfolder) {
+          await db.ensureClientDriveSubfolder(task.clientId, input.driveSubfolder);
+        }
         return { success: true };
       }),
     /** Admin can reopen a completed task */
@@ -746,6 +804,7 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
           completedAt: null,
           evidenceFileUrl: null,
           evidenceFileKey: null,
+          driveSubfolder: null,
           completionNotes: null,
         });
         return { success: true };
@@ -992,27 +1051,27 @@ function generateDefaultDueDate(frequency: string, period: string, year: number,
       const month = parseInt(period.split("-")[1]);
       const nextMonth = month + 1 > 12 ? 1 : month + 1;
       const nextYear = month + 1 > 12 ? year + 1 : year;
-      return new Date(nextYear, nextMonth - 1, 10 + digitOffset);
+      return new Date(Date.UTC(nextYear, nextMonth - 1, 10 + digitOffset));
     }
     case "bimestral": {
       const endMonth = parseInt(period.split("-")[1].split("-")[0]) + 1;
       const biMonth = endMonth + 1 > 12 ? 1 : endMonth + 1;
       const biYear = endMonth + 1 > 12 ? year + 1 : year;
-      return new Date(biYear, biMonth - 1, 10 + digitOffset);
+      return new Date(Date.UTC(biYear, biMonth - 1, 10 + digitOffset));
     }
     case "cuatrimestral": {
       const parts = period.split("-");
       const endM = parseInt(parts[1]) || 4;
       const cuatMonth = endM + 1 > 12 ? 1 : endM + 1;
       const cuatYear = endM + 1 > 12 ? year + 1 : year;
-      return new Date(cuatYear, cuatMonth - 1, 10 + digitOffset);
+      return new Date(Date.UTC(cuatYear, cuatMonth - 1, 10 + digitOffset));
     }
     case "semestral": {
       const parts = period.split("-");
       const endM = parseInt(parts[1]) || 6;
       const semMonth = endM + 1 > 12 ? 1 : endM + 1;
       const semYear = endM + 1 > 12 ? year + 1 : year;
-      return new Date(semYear, semMonth - 1, 10 + digitOffset);
+      return new Date(Date.UTC(semYear, semMonth - 1, 10 + digitOffset));
     }
     case "anual": {
       const cuotaMatch = period.match(/cuota(\d+)/);
@@ -1020,11 +1079,11 @@ function generateDefaultDueDate(frequency: string, period: string, year: number,
         const cuotaNum = parseInt(cuotaMatch[1]);
         // Rough fallback spacing between installments (only used if no DIAN entry exists)
         const month = 3 + (cuotaNum - 1) * 2; // cuota1 → abr, cuota2 → jun, cuota3 → ago
-        return new Date(year + 1, month, 10 + digitOffset);
+        return new Date(Date.UTC(year + 1, month, 10 + digitOffset));
       }
-      return new Date(year + 1, 3, 10 + digitOffset); // April next year
+      return new Date(Date.UTC(year + 1, 3, 10 + digitOffset)); // April next year
     }
     default:
-      return new Date(year, 11, 31);
+      return new Date(Date.UTC(year, 11, 31));
   }
 }

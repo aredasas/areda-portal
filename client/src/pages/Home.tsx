@@ -147,17 +147,19 @@ export default function Home() {
             </SelectContent>
           </Select>
 
-          <Select value={assigneeFilter} onValueChange={setAssigneeFilter}>
-            <SelectTrigger className="w-[190px] h-9">
-              <SelectValue placeholder="Encargado" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">Todos los encargados</SelectItem>
-              {collaborators?.map((c: any) => (
-                <SelectItem key={c.id} value={String(c.id)}>{c.name}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          {isAdmin && (
+            <Select value={assigneeFilter} onValueChange={setAssigneeFilter}>
+              <SelectTrigger className="w-[190px] h-9">
+                <SelectValue placeholder="Encargado" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Todos los encargados</SelectItem>
+                {collaborators?.map((c: any) => (
+                  <SelectItem key={c.id} value={String(c.id)}>{c.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
 
           <Select value={obligationFilter} onValueChange={setObligationFilter}>
             <SelectTrigger className="w-[190px] h-9">
@@ -177,6 +179,11 @@ export default function Home() {
             </Button>
           )}
         </div>
+        {assigneeFilter !== "all" && (
+          <p className="text-xs text-muted-foreground -mt-4">
+            Mostrando tareas asignadas a esta persona, y vencimientos tributarios de los clientes donde es la responsable.
+          </p>
+        )}
 
         {isLoading ? (
           <div className="flex items-center justify-center py-20">
@@ -274,7 +281,7 @@ export default function Home() {
                               <p className="text-xs text-muted-foreground truncate mt-0.5">{item.subtitle}</p>
                             </div>
                             <div className="text-right shrink-0 ml-2">
-                              <p className="text-xs text-muted-foreground">{itemDate.toLocaleDateString("es-CO", { day: "2-digit", month: "short" })}</p>
+                              <p className="text-xs text-muted-foreground">{itemDate.toLocaleDateString("es-CO", { day: "2-digit", month: "short", timeZone: "UTC" })}</p>
                               <Badge variant="outline" className={daysLeft <= 5 ? "bg-red-50 text-red-700 border-red-200" : daysLeft <= 10 ? "bg-yellow-50 text-yellow-700 border-yellow-200" : "bg-green-50 text-green-700 border-green-200"}>
                                 {daysLeft <= 0 ? "Hoy" : `${daysLeft}d`}
                               </Badge>

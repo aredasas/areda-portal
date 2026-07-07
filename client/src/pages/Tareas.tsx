@@ -47,6 +47,11 @@ export default function Tareas() {
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
   const { data: tasks, isLoading, refetch } = trpc.tasks.list.useQuery();
+  const completingTask = tasks?.find((t: any) => t.id === completingTaskId);
+  const { data: driveSubfolders } = trpc.clients.getDriveSubfolders.useQuery(
+    { clientId: completingTask?.clientId as number },
+    { enabled: !!completingTask?.clientId }
+  );
   const { data: clients } = trpc.clients.list.useQuery();
   const { data: users } = trpc.collaborators.getActive.useQuery();
   const createTask = trpc.tasks.create.useMutation();
@@ -63,6 +68,8 @@ export default function Tareas() {
   const [completingTaskId, setCompletingTaskId] = useState<number | null>(null);
   const [completionNotes, setCompletionNotes] = useState("");
   const [evidenceFile, setEvidenceFile] = useState<File | null>(null);
+  const [selectedSubfolder, setSelectedSubfolder] = useState<string>("");
+  const [newSubfolderName, setNewSubfolderName] = useState("");
   const [showDetailDialog, setShowDetailDialog] = useState(false);
   const [detailTask, setDetailTask] = useState<any>(null);
   const [attachmentFile, setAttachmentFile] = useState<File | null>(null);
@@ -182,12 +189,15 @@ export default function Tareas() {
         evidenceFileUrl: url,
         evidenceFileKey: key,
         completionNotes: completionNotes || undefined,
+        driveSubfolder: (selectedSubfolder === "__new__" ? newSubfolderName : selectedSubfolder) || undefined,
       });
       toast.success("Tarea completada con evidencia");
       setShowCompleteDialog(false);
       setCompletingTaskId(null);
       setCompletionNotes("");
       setEvidenceFile(null);
+      setSelectedSubfolder("");
+      setNewSubfolderName("");
       refetch();
     } catch (error: any) {
       toast.error(error.message || "Error al completar la tarea");
@@ -303,7 +313,7 @@ export default function Tareas() {
                           {task.dueDate ? (
                             <span className="flex items-center gap-1">
                               <Calendar className="h-3 w-3" />
-                              {new Date(task.dueDate).toLocaleDateString("es-CO")}
+                              {new Date(task.dueDate).toLocaleDateString("es-CO", { timeZone: "UTC" })}
                             </span>
                           ) : "-"}
                         </TableCell>
@@ -449,7 +459,7 @@ export default function Tareas() {
       </Dialog>
 
       {/* Complete Task Dialog (with evidence) */}
-      <Dialog open={showCompleteDialog} onOpenChange={(open) => { if (!open) { setShowCompleteDialog(false); setEvidenceFile(null); setCompletionNotes(""); } }}>
+      <Dialog open={showCompleteDialog} onOpenChange={(open) => { if (!open) { setShowCompleteDialog(false); setEvidenceFile(null); setCompletionNotes(""); setSelectedSubfolder(""); setNewSubfolderName(""); } }}>
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
@@ -460,20 +470,46 @@ export default function Tareas() {
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-2">
-            {(() => {
-              const completingTask = tasks?.find((t: any) => t.id === completingTaskId);
-              return completingTask?.clientDriveFolderUrl ? (
-                <a
-                  href={completingTask.clientDriveFolderUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-2 text-sm text-[#EDA011] hover:underline bg-[#FFF8E2] border border-[#EDA011]/30 rounded-md px-3 py-2"
+            {completingTask?.clientDriveFolderUrl && (
+              <a
+                href={completingTask.clientDriveFolderUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-2 text-sm text-[#EDA011] hover:underline bg-[#FFF8E2] border border-[#EDA011]/30 rounded-md px-3 py-2"
+              >
+                <FolderOpen className="h-4 w-4 flex-shrink-0" />
+                Abrir carpeta de Drive de {completingTask.clientName}
+              </a>
+            )}
+            {completingTask?.clientDriveFolderUrl && (
+              <div className="space-y-2">
+                <Label>¿En qué subcarpeta quedó guardado el soporte?</Label>
+                <Select
+                  value={selectedSubfolder}
+                  onValueChange={(v) => { setSelectedSubfolder(v); if (v !== "__new__") setNewSubfolderName(""); }}
                 >
-                  <FolderOpen className="h-4 w-4 flex-shrink-0" />
-                  Abrir carpeta de Drive de {completingTask.clientName}
-                </a>
-              ) : null;
-            })()}
+                  <SelectTrigger>
+                    <SelectValue placeholder="Seleccione o cree una subcarpeta" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {driveSubfolders?.map((f: any) => (
+                      <SelectItem key={f.id} value={f.name}>{f.name}</SelectItem>
+                    ))}
+                    <SelectItem value="__new__">+ Nueva subcarpeta...</SelectItem>
+                  </SelectContent>
+                </Select>
+                {selectedSubfolder === "__new__" && (
+                  <Input
+                    value={newSubfolderName}
+                    onChange={(e) => setNewSubfolderName(e.target.value)}
+                    placeholder="Ej: Enero 2026, Retención en la fuente..."
+                  />
+                )}
+                <p className="text-xs text-muted-foreground">
+                  Esto es solo para llevar registro de en qué subcarpeta quedó guardado — recuerde subirlo usted mismo a esa subcarpeta dentro de Drive.
+                </p>
+              </div>
+            )}
             <div className="space-y-2">
               <Label>Archivo de evidencia *</Label>
               <div className="border-2 border-dashed rounded-lg p-4 text-center cursor-pointer hover:border-[#EDA011] transition-colors" onClick={() => evidenceInputRef.current?.click()}>
@@ -526,7 +562,7 @@ export default function Tareas() {
                 <div><span className="text-muted-foreground">Responsable:</span> {detailTask.assignedToName || "Sin asignar"}</div>
                 <div><span className="text-muted-foreground">Estado:</span> <Badge variant="outline" className={statusColors[detailTask.status]}>{statusLabels[detailTask.status]}</Badge></div>
                 <div><span className="text-muted-foreground">Prioridad:</span> <Badge variant="outline" className={priorityColors[detailTask.priority]}>{priorityLabels[detailTask.priority]}</Badge></div>
-                {detailTask.dueDate && <div><span className="text-muted-foreground">Fecha límite:</span> {new Date(detailTask.dueDate).toLocaleDateString("es-CO")}</div>}
+                {detailTask.dueDate && <div><span className="text-muted-foreground">Fecha límite:</span> {new Date(detailTask.dueDate).toLocaleDateString("es-CO", { timeZone: "UTC" })}</div>}
                 {detailTask.completedAt && <div><span className="text-muted-foreground">Completada:</span> {new Date(detailTask.completedAt).toLocaleDateString("es-CO")}</div>}
               </div>
 

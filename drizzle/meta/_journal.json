@@ -57,6 +57,20 @@
       "when": 1783450263737,
       "tag": "0007_add_fixed_due_dates",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "5",
+      "when": 1783466940957,
+      "tag": "0008_deadline_status_evidence",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "5",
+      "when": 1783467606214,
+      "tag": "0009_client_drive_subfolders",
+      "breakpoints": true
     }
   ]
 }

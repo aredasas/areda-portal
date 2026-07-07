@@ -109,9 +109,16 @@ export const taxDeadlines = mysqlTable("taxDeadlines", {
   period: varchar("period", { length: 20 }).notNull(),
   dueDate: timestamp("dueDate").notNull(),
   lastDigitNit: varchar("lastDigitNit", { length: 10 }),
-  status: mysqlEnum("status", ["pendiente", "completado", "vencido"]).default("pendiente").notNull(),
+  status: mysqlEnum("status", ["pendiente", "en_progreso", "completado", "vencido"]).default("pendiente").notNull(),
   completedAt: timestamp("completedAt"),
   completedById: int("completedById"),
+  /** Supporting document the collaborator uploads when completing this deadline */
+  evidenceFileUrl: text("evidenceFileUrl"),
+  evidenceFileKey: text("evidenceFileKey"),
+  /** Name of the subfolder (inside the client's single Drive folder link)
+   * where the evidence was saved — free text, since the app doesn't browse
+   * the real Drive folder structure. See clientDriveSubfolders below. */
+  driveSubfolder: varchar("driveSubfolder", { length: 150 }),
   notes: text("notes"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
@@ -142,6 +149,10 @@ export const tasks = mysqlTable("tasks", {
   /** Evidence file URL required to complete the task */
   evidenceFileUrl: text("evidenceFileUrl"),
   evidenceFileKey: varchar("evidenceFileKey", { length: 255 }),
+  /** Name of the subfolder (inside the client's single Drive folder link)
+   * where the evidence was saved — free text, since the app doesn't browse
+   * the real Drive folder structure. See clientDriveSubfolders below. */
+  driveSubfolder: varchar("driveSubfolder", { length: 150 }),
   /** Notes when completing the task */
   completionNotes: text("completionNotes"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
@@ -150,6 +161,22 @@ export const tasks = mysqlTable("tasks", {
 
 export type Task = typeof tasks.$inferSelect;
 export type InsertTask = typeof tasks.$inferInsert;
+
+/**
+ * Remembers the subfolder names collaborators have used per client, so the
+ * next person completing a task/deadline for that client can pick from a
+ * dropdown instead of retyping (and risking a slightly different spelling
+ * that would look like a different folder).
+ */
+export const clientDriveSubfolders = mysqlTable("clientDriveSubfolders", {
+  id: int("id").autoincrement().primaryKey(),
+  clientId: int("clientId").notNull(),
+  name: varchar("name", { length: 150 }).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type ClientDriveSubfolder = typeof clientDriveSubfolders.$inferSelect;
+export type InsertClientDriveSubfolder = typeof clientDriveSubfolders.$inferInsert;
 
 /**
  * Task attachments - Files attached to tasks (Excel, Word, PDF, etc.)

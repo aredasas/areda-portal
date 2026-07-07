@@ -1,6 +1,6 @@
 import { eq, and, desc, asc, like, sql, inArray, gte, lte, or } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
-import { InsertUser, users, clients, InsertClient, taxObligations, InsertTaxObligation, clientObligations, InsertClientObligation, taxDeadlines, InsertTaxDeadline, tasks, InsertTask, taskAttachments, InsertTaskAttachment, appSettings, InsertAppSetting, dianCalendar, InsertDianCalendar } from "../drizzle/schema";
+import { InsertUser, users, clients, InsertClient, taxObligations, InsertTaxObligation, clientObligations, InsertClientObligation, taxDeadlines, InsertTaxDeadline, tasks, InsertTask, taskAttachments, InsertTaskAttachment, appSettings, InsertAppSetting, dianCalendar, InsertDianCalendar, clientDriveSubfolders } from "../drizzle/schema";
 import { ENV } from './_core/env';
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -331,11 +331,15 @@ export async function getClientDeadlines(clientId: number) {
     lastDigitNit: taxDeadlines.lastDigitNit,
     status: taxDeadlines.status,
     completedAt: taxDeadlines.completedAt,
+    evidenceFileUrl: taxDeadlines.evidenceFileUrl,
+    evidenceFileKey: taxDeadlines.evidenceFileKey,
+    clientDriveFolderUrl: clients.driveFolderUrl,
     notes: taxDeadlines.notes,
     createdAt: taxDeadlines.createdAt,
   })
     .from(taxDeadlines)
     .innerJoin(taxObligations, eq(taxDeadlines.obligationId, taxObligations.id))
+    .innerJoin(clients, eq(taxDeadlines.clientId, clients.id))
     .where(eq(taxDeadlines.clientId, clientId))
     .orderBy(asc(taxDeadlines.dueDate));
 }
@@ -347,7 +351,7 @@ export async function getUpcomingDeadlines(daysAhead: number = 30, managerId?: n
   const future = new Date();
   future.setDate(future.getDate() + daysAhead);
   const baseConditions = and(
-    eq(taxDeadlines.status, "pendiente"),
+    inArray(taxDeadlines.status, ["pendiente", "en_progreso"]),
     gte(taxDeadlines.dueDate, now),
     lte(taxDeadlines.dueDate, future),
   );
@@ -372,8 +376,8 @@ export async function getUpcomingDeadlines(daysAhead: number = 30, managerId?: n
 export async function getDeadlinesForMonth(year: number, month: number) {
   const db = await getDb();
   if (!db) return [];
-  const startDate = new Date(year, month - 1, 1);
-  const endDate = new Date(year, month, 0, 23, 59, 59);
+  const startDate = new Date(Date.UTC(year, month - 1, 1));
+  const endDate = new Date(Date.UTC(year, month, 0, 23, 59, 59));
   return db.select({
     id: taxDeadlines.id,
     clientId: taxDeadlines.clientId,
@@ -395,15 +399,64 @@ export async function getDeadlinesForMonth(year: number, month: number) {
     .orderBy(asc(taxDeadlines.dueDate));
 }
 
-export async function updateDeadlineStatus(id: number, status: "pendiente" | "completado" | "vencido", completedById?: number) {
+export async function updateDeadlineStatus(id: number, status: "pendiente" | "en_progreso" | "vencido", completedById?: number) {
   const db = await getDb();
   if (!db) return;
-  const data: Partial<InsertTaxDeadline> = { status };
-  if (status === "completado") {
-    data.completedAt = new Date();
-    if (completedById) data.completedById = completedById;
+  await db.update(taxDeadlines).set({ status }).where(eq(taxDeadlines.id, id));
+}
+
+/** Marks a deadline as completed with required supporting evidence. */
+export async function completeDeadline(id: number, evidenceFileUrl: string, evidenceFileKey: string | null, completedById: number, driveSubfolder?: string | null) {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(taxDeadlines).set({
+    status: "completado",
+    completedAt: new Date(),
+    completedById,
+    evidenceFileUrl,
+    evidenceFileKey,
+    driveSubfolder: driveSubfolder || null,
+  }).where(eq(taxDeadlines.id, id));
+}
+
+/** Known subfolder names (inside the client's single Drive folder link) that
+ * collaborators have used before for this client — offered as a dropdown so
+ * people pick a consistent existing name instead of retyping it slightly
+ * differently each time. */
+export async function getClientDriveSubfolders(clientId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(clientDriveSubfolders)
+    .where(eq(clientDriveSubfolders.clientId, clientId))
+    .orderBy(asc(clientDriveSubfolders.name));
+}
+
+/** Remembers a subfolder name for this client, if it isn't already known. */
+export async function ensureClientDriveSubfolder(clientId: number, name: string) {
+  const db = await getDb();
+  if (!db) return;
+  const trimmed = name.trim();
+  if (!trimmed) return;
+  const existing = await db.select().from(clientDriveSubfolders)
+    .where(and(eq(clientDriveSubfolders.clientId, clientId), eq(clientDriveSubfolders.name, trimmed)))
+    .limit(1);
+  if (existing.length === 0) {
+    await db.insert(clientDriveSubfolders).values({ clientId, name: trimmed });
   }
-  await db.update(taxDeadlines).set(data).where(eq(taxDeadlines.id, id));
+}
+
+/** Admin-only: reopens a deadline that was mistakenly marked completed. */
+export async function reopenDeadline(id: number) {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(taxDeadlines).set({
+    status: "pendiente",
+    completedAt: null,
+    completedById: null,
+    evidenceFileUrl: null,
+    evidenceFileKey: null,
+    driveSubfolder: null,
+  }).where(eq(taxDeadlines.id, id));
 }
 
 /** Manually correct a single deadline's due date, e.g. when the auto-generated
@@ -502,9 +555,9 @@ export async function updateTask(id: number, data: Partial<InsertTask>) {
 // Local date key ("YYYY-MM-DD") — avoids UTC-shift bugs from toISOString()
 // when the server and the accounting firm are in different timezones.
 function localDateKey(d: Date): string {
-  const yr = d.getFullYear();
-  const mo = String(d.getMonth() + 1).padStart(2, "0");
-  const da = String(d.getDate()).padStart(2, "0");
+  const yr = d.getUTCFullYear();
+  const mo = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const da = String(d.getUTCDate()).padStart(2, "0");
   return `${yr}-${mo}-${da}`;
 }
 
@@ -530,8 +583,8 @@ export async function getDashboardData(filters: DashboardFilters) {
   const [yearStr, monthStr] = filters.month.split("-");
   const year = parseInt(yearStr);
   const monthIdx = parseInt(monthStr) - 1; // 0-based
-  const monthStart = new Date(year, monthIdx, 1, 0, 0, 0);
-  const monthEnd = new Date(year, monthIdx + 1, 0, 23, 59, 59);
+  const monthStart = new Date(Date.UTC(year, monthIdx, 1, 0, 0, 0));
+  const monthEnd = new Date(Date.UTC(year, monthIdx + 1, 0, 23, 59, 59));
 
   // ---- Tasks due within the selected month ----
   const taskConditions = [gte(tasks.dueDate, monthStart), lte(tasks.dueDate, monthEnd)];
@@ -563,6 +616,11 @@ export async function getDashboardData(filters: DashboardFilters) {
   if (filters.clientId) deadlineConditions.push(eq(taxDeadlines.clientId, filters.clientId));
   if (filters.obligationId) deadlineConditions.push(eq(taxDeadlines.obligationId, filters.obligationId));
   if (filters.managerId) deadlineConditions.push(eq(clients.managerId, filters.managerId));
+  // Deadlines don't have their own assignee — the client's manager is
+  // responsible for all of that client's tax obligations, so the "Encargado"
+  // filter scopes deadlines by managerId, while it scopes tasks by their own
+  // individual assignedToId (set below in taskConditions).
+  if (filters.assignedToId) deadlineConditions.push(eq(clients.managerId, filters.assignedToId));
 
   const deadlineRows = await db.select({
     id: taxDeadlines.id,
@@ -602,7 +660,7 @@ export async function getDashboardData(filters: DashboardFilters) {
         date: t.dueDate as Date,
       })),
     ...deadlineRows
-      .filter(d => d.status === "pendiente")
+      .filter(d => d.status === "pendiente" || d.status === "en_progreso")
       .map(d => ({
         id: `d-${d.id}`,
         type: "deadline" as const,
@@ -626,9 +684,26 @@ export async function getDashboardData(filters: DashboardFilters) {
   const heatmap = Array.from(heatmapMap.entries()).map(([date, count]) => ({ date, count }));
 
   // ---- Workload by collaborator — company-wide view, admin only ----
+  // Start from EVERY active collaborator (not just ones who already have a
+  // task this month), so someone with zero tasks still shows up with 0/0
+  // instead of silently disappearing from the list.
   let workload: any[] = [];
   if (!filters.managerId) {
+    const activeUsers = await db.select({ id: users.id, name: users.name })
+      .from(users)
+      .where(eq(users.isActive, true));
+
     const workloadMap = new Map<number, { userId: number; userName: string; totalTasks: number; pendingTasks: number; inProgressTasks: number; completedTasks: number }>();
+    for (const u of activeUsers) {
+      workloadMap.set(u.id, {
+        userId: u.id,
+        userName: u.name,
+        totalTasks: 0,
+        pendingTasks: 0,
+        inProgressTasks: 0,
+        completedTasks: 0,
+      });
+    }
     for (const t of taskRows) {
       if (!t.assignedToId) continue;
       if (!workloadMap.has(t.assignedToId)) {

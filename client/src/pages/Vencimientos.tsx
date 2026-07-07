@@ -12,24 +12,27 @@ import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { trpc } from "@/lib/trpc";
-import { Calendar, Loader2, RefreshCw, Settings2, CheckCircle2, ChevronLeft, ChevronRight, List, CalendarDays, Pencil } from "lucide-react";
-import { useState, useMemo } from "react";
+import { Calendar, Loader2, RefreshCw, Settings2, CheckCircle2, ChevronLeft, ChevronRight, List, CalendarDays, Pencil, Upload, FileText, FolderOpen, RotateCcw } from "lucide-react";
+import { useState, useMemo, useRef } from "react";
 import { toast } from "sonner";
 
 const statusLabels: Record<string, string> = {
   pendiente: "Pendiente",
+  en_progreso: "En Progreso",
   completado: "Completado",
   vencido: "Vencido",
 };
 
 const statusColors: Record<string, string> = {
   pendiente: "bg-yellow-100 text-yellow-800 border-yellow-200",
+  en_progreso: "bg-blue-100 text-blue-800 border-blue-200",
   completado: "bg-green-100 text-green-800 border-green-200",
   vencido: "bg-red-100 text-red-800 border-red-200",
 };
 
 const statusDotColors: Record<string, string> = {
   pendiente: "bg-yellow-500",
+  en_progreso: "bg-blue-500",
   completado: "bg-green-500",
   vencido: "bg-red-500",
 };
@@ -74,11 +77,65 @@ export default function Vencimientos() {
   const setObligations = trpc.obligations.setClientObligations.useMutation();
   const generateDeadlines = trpc.deadlines.generate.useMutation();
   const updateStatus = trpc.deadlines.updateStatus.useMutation();
+  const completeDeadline = trpc.deadlines.complete.useMutation();
+  const reopenDeadline = trpc.deadlines.reopen.useMutation();
+  const uploadDeadlineEvidence = trpc.deadlines.uploadEvidence.useMutation();
   const updateDueDate = trpc.deadlines.updateDueDate.useMutation();
 
   const [showEditDateDialog, setShowEditDateDialog] = useState(false);
   const [editingDeadline, setEditingDeadline] = useState<any>(null);
   const [newDueDate, setNewDueDate] = useState("");
+
+  const [showCompleteDeadlineDialog, setShowCompleteDeadlineDialog] = useState(false);
+  const [completingDeadline, setCompletingDeadline] = useState<any>(null);
+  const [deadlineEvidenceFile, setDeadlineEvidenceFile] = useState<File | null>(null);
+  const [selectedDeadlineSubfolder, setSelectedDeadlineSubfolder] = useState<string>("");
+  const [newDeadlineSubfolderName, setNewDeadlineSubfolderName] = useState("");
+  const { data: deadlineDriveSubfolders } = trpc.clients.getDriveSubfolders.useQuery(
+    { clientId: completingDeadline?.clientId as number },
+    { enabled: !!completingDeadline?.clientId }
+  );
+  const deadlineEvidenceInputRef = useRef<HTMLInputElement>(null);
+
+  const handleOpenCompleteDeadline = (deadline: any) => {
+    setCompletingDeadline(deadline);
+    setDeadlineEvidenceFile(null);
+    setShowCompleteDeadlineDialog(true);
+  };
+
+  const handleConfirmCompleteDeadline = async () => {
+    if (!completingDeadline || !deadlineEvidenceFile) return;
+    try {
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve((reader.result as string).split(",")[1]);
+        reader.onerror = reject;
+        reader.readAsDataURL(deadlineEvidenceFile);
+      });
+      const uploadResult = await uploadDeadlineEvidence.mutateAsync({
+        fileName: deadlineEvidenceFile.name,
+        fileBase64: base64,
+        contentType: deadlineEvidenceFile.type,
+      });
+      await completeDeadline.mutateAsync({
+        id: completingDeadline.id,
+        clientId: completingDeadline.clientId,
+        evidenceFileUrl: uploadResult.url,
+        evidenceFileKey: uploadResult.key,
+        driveSubfolder: (selectedDeadlineSubfolder === "__new__" ? newDeadlineSubfolderName : selectedDeadlineSubfolder) || undefined,
+      });
+      toast.success("Vencimiento completado con evidencia");
+      setShowCompleteDeadlineDialog(false);
+      setCompletingDeadline(null);
+      setDeadlineEvidenceFile(null);
+      setSelectedDeadlineSubfolder("");
+      setNewDeadlineSubfolderName("");
+      refetchClientDeadlines();
+      refetchUpcoming();
+    } catch (error: any) {
+      toast.error(error.message || "Error al completar el vencimiento");
+    }
+  };
 
   const handleOpenEditDate = (deadline: any) => {
     setEditingDeadline(deadline);
@@ -229,7 +286,7 @@ export default function Vencimientos() {
     }
   };
 
-  const handleStatusChange = async (id: number, status: "pendiente" | "completado" | "vencido") => {
+  const handleStatusChange = async (id: number, status: "pendiente" | "en_progreso" | "vencido") => {
     try {
       await updateStatus.mutateAsync({ id, status });
       toast.success("Estado actualizado");
@@ -237,6 +294,17 @@ export default function Vencimientos() {
       refetchUpcoming();
     } catch {
       toast.error("Error al actualizar estado");
+    }
+  };
+
+  const handleReopenDeadline = async (id: number) => {
+    try {
+      await reopenDeadline.mutateAsync({ id });
+      toast.success("Vencimiento reabierto");
+      refetchClientDeadlines();
+      refetchUpcoming();
+    } catch {
+      toast.error("Error al reabrir el vencimiento");
     }
   };
 
@@ -482,7 +550,7 @@ export default function Vencimientos() {
                             <TableCell className="text-sm">{d.clientName}</TableCell>
                             <TableCell className="text-sm">{d.period}</TableCell>
                             <TableCell className="text-sm">
-                              {dueDate.toLocaleDateString("es-CO")}
+                              {dueDate.toLocaleDateString("es-CO", { timeZone: "UTC" })}
                             </TableCell>
                             <TableCell>
                               <Badge
@@ -704,24 +772,50 @@ export default function Vencimientos() {
                           <TableCell className="font-medium">{d.obligationName}</TableCell>
                           <TableCell className="text-sm">{d.period}</TableCell>
                           <TableCell className="text-sm">
-                            {new Date(d.dueDate).toLocaleDateString("es-CO")}
+                            {new Date(d.dueDate).toLocaleDateString("es-CO", { timeZone: "UTC" })}
                           </TableCell>
                           <TableCell>
-                            <Badge variant="outline" className={statusColors[d.status]}>
-                              {statusLabels[d.status]}
-                            </Badge>
+                            {d.status === "completado" ? (
+                              <Badge variant="outline" className={statusColors[d.status]}>
+                                {statusLabels[d.status]}
+                              </Badge>
+                            ) : (
+                              <Select value={d.status} onValueChange={(v) => handleStatusChange(d.id, v as any)}>
+                                <SelectTrigger className="h-7 w-[130px]">
+                                  <Badge variant="outline" className={statusColors[d.status]}>
+                                    {statusLabels[d.status]}
+                                  </Badge>
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="pendiente">Pendiente</SelectItem>
+                                  <SelectItem value="en_progreso">En Progreso</SelectItem>
+                                  <SelectItem value="vencido">Vencido</SelectItem>
+                                </SelectContent>
+                              </Select>
+                            )}
                           </TableCell>
                           <TableCell className="text-right">
                             <div className="flex gap-1 justify-end">
-                              {d.status === "pendiente" && (
+                              {d.status !== "completado" && (
                                 <Button
                                   variant="outline"
                                   size="sm"
                                   className="gap-1"
-                                  onClick={() => handleStatusChange(d.id, "completado")}
+                                  onClick={() => handleOpenCompleteDeadline(d)}
                                 >
-                                  <CheckCircle2 className="h-3 w-3" />
+                                  <Upload className="h-3 w-3" />
                                   Completar
+                                </Button>
+                              )}
+                              {d.status === "completado" && isAdmin && (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="text-orange-600"
+                                  onClick={() => handleReopenDeadline(d.id)}
+                                  title="Reabrir vencimiento"
+                                >
+                                  <RotateCcw className="w-3.5 h-3.5 mr-1" /> Reabrir
                                 </Button>
                               )}
                               {isAdmin && (
@@ -803,6 +897,92 @@ export default function Vencimientos() {
               <Button onClick={handleSaveObligations} disabled={setObligations.isPending}>
                 {setObligations.isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
                 Guardar Obligaciones
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Complete deadline with evidence dialog */}
+        <Dialog open={showCompleteDeadlineDialog} onOpenChange={(open) => { setShowCompleteDeadlineDialog(open); if (!open) { setCompletingDeadline(null); setDeadlineEvidenceFile(null); setSelectedDeadlineSubfolder(""); setNewDeadlineSubfolderName(""); } }}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>Completar Vencimiento</DialogTitle>
+            </DialogHeader>
+            {completingDeadline && (
+              <div className="space-y-4 py-2">
+                <div className="text-sm text-muted-foreground">
+                  <p><span className="font-medium text-foreground">{completingDeadline.obligationName}</span></p>
+                  <p>Período {completingDeadline.period}</p>
+                </div>
+                {completingDeadline.clientDriveFolderUrl && (
+                  <a
+                    href={completingDeadline.clientDriveFolderUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-2 text-sm text-[#EDA011] hover:underline bg-[#FFF8E2] border border-[#EDA011]/30 rounded-md px-3 py-2"
+                  >
+                    <FolderOpen className="h-4 w-4 flex-shrink-0" />
+                    Abrir carpeta de Drive del cliente
+                  </a>
+                )}
+                {completingDeadline.clientDriveFolderUrl && (
+                  <div className="space-y-2">
+                    <Label>¿En qué subcarpeta quedó guardado el soporte?</Label>
+                    <Select
+                      value={selectedDeadlineSubfolder}
+                      onValueChange={(v) => { setSelectedDeadlineSubfolder(v); if (v !== "__new__") setNewDeadlineSubfolderName(""); }}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Seleccione o cree una subcarpeta" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {deadlineDriveSubfolders?.map((f: any) => (
+                          <SelectItem key={f.id} value={f.name}>{f.name}</SelectItem>
+                        ))}
+                        <SelectItem value="__new__">+ Nueva subcarpeta...</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    {selectedDeadlineSubfolder === "__new__" && (
+                      <Input
+                        value={newDeadlineSubfolderName}
+                        onChange={(e) => setNewDeadlineSubfolderName(e.target.value)}
+                        placeholder="Ej: Enero 2026, Retención en la fuente..."
+                      />
+                    )}
+                    <p className="text-xs text-muted-foreground">
+                      Esto es solo para llevar registro de en qué subcarpeta quedó guardado — recuerde subirlo usted mismo a esa subcarpeta dentro de Drive.
+                    </p>
+                  </div>
+                )}
+                <div className="space-y-2">
+                  <Label>Archivo de evidencia *</Label>
+                  <div className="border-2 border-dashed rounded-lg p-4 text-center cursor-pointer hover:border-[#EDA011] transition-colors" onClick={() => deadlineEvidenceInputRef.current?.click()}>
+                    <input ref={deadlineEvidenceInputRef} type="file" className="hidden" accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.gif" onChange={(e) => setDeadlineEvidenceFile(e.target.files?.[0] || null)} />
+                    {deadlineEvidenceFile ? (
+                      <div className="flex items-center justify-center gap-2">
+                        <FileText className="h-5 w-5 text-[#EDA011]" />
+                        <span className="text-sm font-medium">{deadlineEvidenceFile.name}</span>
+                      </div>
+                    ) : (
+                      <div>
+                        <Upload className="h-8 w-8 mx-auto text-muted-foreground mb-2" />
+                        <p className="text-sm text-muted-foreground">Haga clic para seleccionar archivo</p>
+                        <p className="text-xs text-muted-foreground mt-1">PDF, Word, Excel, Imágenes</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setShowCompleteDeadlineDialog(false)}>Cancelar</Button>
+              <Button
+                onClick={handleConfirmCompleteDeadline}
+                disabled={!deadlineEvidenceFile || completeDeadline.isPending || uploadDeadlineEvidence.isPending}
+                className="bg-green-600 hover:bg-green-700 text-white"
+              >
+                {(completeDeadline.isPending || uploadDeadlineEvidence.isPending) && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
+                Completar
               </Button>
             </DialogFooter>
           </DialogContent>

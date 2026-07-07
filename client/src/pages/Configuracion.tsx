@@ -513,7 +513,7 @@ function DianCalendarSection() {
                       </TableCell>
                       <TableCell>{entry.period}</TableCell>
                       <TableCell className="text-center">{entry.lastDigitNit}</TableCell>
-                      <TableCell>{new Date(entry.dueDate).toLocaleDateString("es-CO")}</TableCell>
+                      <TableCell>{new Date(entry.dueDate).toLocaleDateString("es-CO", { timeZone: "UTC" })}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
