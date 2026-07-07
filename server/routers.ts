@@ -765,7 +765,7 @@ Devuelve ÚNICAMENTE un JSON con esta forma exacta, sin explicaciones ni markdow
               const isRateLimit = message.includes("429") || message.includes("rate_limit");
               if (isRateLimit && attempt < 3) {
                 console.warn(`[DIAN Calendar Extraction] Rate limited on ${obl.code}, esperando antes de reintentar (intento ${attempt})...`);
-                await sleep(20000 * attempt); // 20s, then 40s
+                await sleep(25000 * attempt); // 25s, then 50s
                 continue;
               }
               break; // non-rate-limit error, or out of attempts: give up on this obligation
@@ -782,7 +782,7 @@ Devuelve ÚNICAMENTE un JSON con esta forma exacta, sin explicaciones ni markdow
           // Proactive spacing between obligations to stay under the 5 req/min
           // organization rate limit (skip after the very last one).
           if (obl !== activeObligations[activeObligations.length - 1]) {
-            await sleep(13000);
+            await sleep(16000);
           }
         }
 
