@@ -752,7 +752,7 @@ Devuelve ÚNICAMENTE un JSON con esta forma exacta, sin explicaciones ni markdow
               // the obligation. That's a legitimate "zero results", not a
               // failure — don't burn retries or flag it as an error.
               const lowerJson = jsonStr.toLowerCase();
-              const looksLikeNotFound = /no encontr|no aparece|no est(a|á) presente|no se menciona|no hay informaci/i.test(lowerJson);
+              const looksLikeNotFound = /no\s+(encontr|encuentr|aparece|est(a|á)\s+presente|se menciona|hay informaci)/i.test(lowerJson);
               if (looksLikeNotFound) {
                 entries = [];
                 lastError = null;
