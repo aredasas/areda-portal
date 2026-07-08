@@ -1,5 +1,9 @@
 import { COOKIE_NAME } from "@shared/const";
 import crypto from "crypto";
+
+// Attendance/hours data ("Asistencia") is restricted to this one specific
+// admin by explicit business request — not all admins should see it.
+const ASISTENCIA_AUTHORIZED_CEDULA = "5820262";
 import { TRPCError } from "@trpc/server";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
@@ -599,8 +603,13 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
       .mutation(async ({ input }) => {
         const client = await db.getClientById(input.clientId);
         if (!client) throw new Error("Cliente no encontrado");
-        const obligations = await db.getClientObligations(input.clientId);
-        if (obligations.length === 0) throw new Error("El cliente no tiene obligaciones asignadas");
+        const allObligations = await db.getClientObligations(input.clientId);
+        // Skip obligations that were deactivated in the catalog since being
+        // assigned to this client — otherwise regenerating the calendar
+        // would recreate deadlines we specifically cleaned up on deactivation.
+        const inactiveSkipped = allObligations.filter((o: any) => !o.obligationIsActive).map((o: any) => o.obligationName);
+        const obligations = allObligations.filter((o: any) => o.obligationIsActive);
+        if (obligations.length === 0) throw new Error("El cliente no tiene obligaciones activas asignadas");
 
         const lastDigit = client.nit ? client.nit.slice(-1) : "0";
 
@@ -648,9 +657,27 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
           }
         }
 
+        // Deletes only the never-started ones (see deleteClientDeadlines);
+        // anything already completed/in-progress-with-evidence survives.
         await db.deleteClientDeadlines(input.clientId);
-        if (deadlines.length > 0) await db.createTaxDeadlines(deadlines);
-        return { count: deadlines.length };
+
+        // Don't re-insert a deadline for an obligation+period that already
+        // has a surviving (evidenced) entry — that would create a duplicate
+        // sitting right next to the real, completed one.
+        const preserved = await db.getClientDeadlines(input.clientId);
+        const preservedKeys = new Set(preserved.map((d: any) => `${d.obligationId}|${d.period}`));
+        const toInsert = deadlines.filter(d => !preservedKeys.has(`${d.obligationId}|${d.period}`));
+
+        if (toInsert.length > 0) await db.createTaxDeadlines(toInsert);
+
+        let message = `${toInsert.length} vencimiento(s) generados`;
+        if (inactiveSkipped.length > 0) {
+          message += `. Obligaciones inactivas no incluidas: ${inactiveSkipped.join(", ")}`;
+        }
+        if (preserved.length > toInsert.length) {
+          message += `. ${preserved.length} vencimiento(s) con evidencia existente se conservaron sin cambios.`;
+        }
+        return { count: toInsert.length, message };
       }),
     updateStatus: protectedProcedure
       .input(z.object({ id: z.number(), status: z.enum(["pendiente", "en_progreso", "vencido"]) }))
@@ -1086,6 +1113,96 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
           assignedToId: input?.assignedToId,
           obligationId: input?.obligationId,
         });
+      }),
+  }),
+  /** Self-reported clock in/out — replaces the in-person biometric register.
+   * The collaborator marks their own start of day, lunch out/in, and end of
+   * day; nothing is inferred or tracked automatically. */
+  /** Basic AI assistant for collaborators — answers questions about a
+   * specific client using the evidence files already uploaded for that
+   * client's completed tasks and deadlines as real context, instead of
+   * guessing. */
+  assistant: router({
+    chat: protectedProcedure
+      .input(z.object({
+        clientId: z.number(),
+        message: z.string().min(1),
+        history: z.array(z.object({
+          role: z.enum(["user", "assistant"]),
+          content: z.string(),
+        })).optional(),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        const client = await db.getClientById(input.clientId);
+        if (!client) throw new Error("Cliente no encontrado");
+        if (ctx.user.role !== "admin" && client.managerId !== ctx.user.id) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "No tiene acceso a este cliente" });
+        }
+
+        const evidence = await db.getClientEvidenceContext(input.clientId, 8);
+        const evidenceBlocks = evidence
+          .filter(e => e.contentType === "application/pdf" || (e.contentType || "").startsWith("image/"))
+          .map(e => ({
+            type: "file_url" as const,
+            file_url: { url: e.fileUrl, mime_type: e.contentType || "application/pdf" },
+          }));
+
+        const evidenceList = evidence.map(e => `- ${e.title} (${e.detail}${e.date ? `, ${new Date(e.date).toLocaleDateString("es-CO")}` : ""})`).join("\n");
+
+        const systemPrompt = `Eres un asistente contable para el equipo de Areda SAS, una firma de contaduría en Colombia. Estás ayudando a un colaborador con preguntas sobre el cliente "${client.razonSocial}" (NIT ${client.nit}).
+
+Documentos disponibles como contexto (soportes ya subidos de tareas y vencimientos completados de este cliente):
+${evidenceList || "No hay documentos de soporte cargados aún para este cliente."}
+
+Responde basándote en estos documentos cuando sea posible. Si la pregunta requiere información que no está en los documentos disponibles, dilo claramente en vez de inventar datos. Sé conciso y directo, como corresponde a un contexto de trabajo contable.`;
+
+        const historyMessages = (input.history || []).map(h => ({ role: h.role, content: h.content }));
+
+        const response = await invokeLLM({
+          max_tokens: 2000,
+          messages: [
+            { role: "system", content: systemPrompt },
+            ...historyMessages,
+            {
+              role: "user",
+              content: [
+                { type: "text" as const, text: input.message },
+                ...evidenceBlocks,
+              ],
+            },
+          ],
+        });
+
+        const rawContent = response.choices?.[0]?.message?.content || "";
+        const answer = typeof rawContent === "string" ? rawContent : JSON.stringify(rawContent);
+        return { answer };
+      }),
+  }),
+  timeTracking: router({
+    mark: protectedProcedure
+      .input(z.object({ type: z.enum(["inicio", "salida_almuerzo", "regreso_almuerzo", "fin"]) }))
+      .mutation(async ({ input, ctx }) => {
+        await db.createTimeEntry(ctx.user.id, input.type);
+        return { success: true };
+      }),
+    /** The client computes "today" using its own local clock and sends the
+     * exact range — avoids the server having to guess the collaborator's
+     * timezone for what "today" means. */
+    getToday: protectedProcedure
+      .input(z.object({ startOfDay: z.string(), endOfDay: z.string() }))
+      .query(async ({ input, ctx }) => {
+        return db.getUserTimeEntries(ctx.user.id, new Date(input.startOfDay), new Date(input.endOfDay));
+      }),
+    /** Restricted to a single specific admin (Arlex) by explicit request —
+     * attendance/hours data about the team is sensitive enough that even
+     * other admins shouldn't see it by default. */
+    getLog: adminProcedure
+      .input(z.object({ startOfDay: z.string(), endOfDay: z.string(), userId: z.number().optional() }))
+      .query(async ({ input, ctx }) => {
+        if (ctx.user.cedula !== ASISTENCIA_AUTHORIZED_CEDULA) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Esta sección está restringida" });
+        }
+        return db.getTimeTrackingLog(new Date(input.startOfDay), new Date(input.endOfDay), input.userId);
       }),
   }),
 });

@@ -133,6 +133,12 @@ export default function Colaboradores() {
   };
 
   const handleToggleActive = async (user: any) => {
+    if (user.isActive) {
+      const confirmed = window.confirm(
+        `¿Desactivar a ${user.name}? Sus tareas pendientes o en progreso seguirán asignadas a él/ella — revise y reasígnelas en Tareas si es necesario antes de continuar.`
+      );
+      if (!confirmed) return;
+    }
     try {
       if (user.isActive) {
         await deactivateCollaborator.mutateAsync({ id: user.id });

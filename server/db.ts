@@ -1,7 +1,7 @@
 import { eq, and, desc, asc, like, sql, inArray, gte, lte, or, ne } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { alias } from "drizzle-orm/mysql-core";
-import { InsertUser, users, clients, InsertClient, taxObligations, InsertTaxObligation, clientObligations, InsertClientObligation, taxDeadlines, InsertTaxDeadline, tasks, InsertTask, taskAttachments, InsertTaskAttachment, deadlineAttachments, InsertDeadlineAttachment, appSettings, InsertAppSetting, dianCalendar, InsertDianCalendar, clientDriveSubfolders } from "../drizzle/schema";
+import { InsertUser, users, clients, InsertClient, taxObligations, InsertTaxObligation, clientObligations, InsertClientObligation, taxDeadlines, InsertTaxDeadline, tasks, InsertTask, taskAttachments, InsertTaskAttachment, deadlineAttachments, InsertDeadlineAttachment, appSettings, InsertAppSetting, dianCalendar, InsertDianCalendar, clientDriveSubfolders, timeEntries, InsertTimeEntry } from "../drizzle/schema";
 import { ENV } from './_core/env';
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -98,7 +98,22 @@ export async function getAllUsers() {
 export async function getActiveUsers() {
   const db = await getDb();
   if (!db) return [];
-  return db.select().from(users).where(eq(users.isActive, true)).orderBy(asc(users.name));
+  // Never send passwordHash or the internal openId to any frontend, admin
+  // included — there's no legitimate reason for either to leave the server.
+  return db.select({
+    id: users.id,
+    username: users.username,
+    name: users.name,
+    email: users.email,
+    cedula: users.cedula,
+    role: users.role,
+    isActive: users.isActive,
+    phone: users.phone,
+    position: users.position,
+    createdAt: users.createdAt,
+    updatedAt: users.updatedAt,
+    lastSignedIn: users.lastSignedIn,
+  }).from(users).where(eq(users.isActive, true)).orderBy(asc(users.name));
 }
 
 export async function getUserById(id: number) {
@@ -176,11 +191,25 @@ export async function claimInvitedUser(id: number, data: { openId: string; name:
 export async function getUsersByFilters(filters: { role?: string; isActive?: boolean }) {
   const db = await getDb();
   if (!db) return [];
+  const safeColumns = {
+    id: users.id,
+    username: users.username,
+    name: users.name,
+    email: users.email,
+    cedula: users.cedula,
+    role: users.role,
+    isActive: users.isActive,
+    phone: users.phone,
+    position: users.position,
+    createdAt: users.createdAt,
+    updatedAt: users.updatedAt,
+    lastSignedIn: users.lastSignedIn,
+  };
   const conditions = [];
   if (filters.role) conditions.push(eq(users.role, filters.role as any));
   if (filters.isActive !== undefined) conditions.push(eq(users.isActive, filters.isActive));
-  if (conditions.length === 0) return db.select().from(users).orderBy(asc(users.name));
-  return db.select().from(users).where(and(...conditions)).orderBy(asc(users.name));
+  if (conditions.length === 0) return db.select(safeColumns).from(users).orderBy(asc(users.name));
+  return db.select(safeColumns).from(users).where(and(...conditions)).orderBy(asc(users.name));
 }
 
 // ==================== CLIENTS ====================
@@ -319,6 +348,7 @@ export async function getClientObligations(clientId: number) {
     frequency: taxObligations.frequency,
     installments: taxObligations.installments,
     fixedDueDates: taxObligations.fixedDueDates,
+    obligationIsActive: taxObligations.isActive,
   })
     .from(clientObligations)
     .innerJoin(taxObligations, eq(clientObligations.obligationId, taxObligations.id))
@@ -483,6 +513,145 @@ export async function ensureClientDriveSubfolder(clientId: number, name: string)
   }
 }
 
+// ==================== TIME TRACKING (self-reported clock in/out) ====================
+
+const TIME_ENTRY_TYPES = ["inicio", "salida_almuerzo", "regreso_almuerzo", "fin"] as const;
+export type TimeEntryType = typeof TIME_ENTRY_TYPES[number];
+
+export async function createTimeEntry(userId: number, type: TimeEntryType) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.insert(timeEntries).values({ userId, type });
+}
+
+/** Entries for one user within a date range — the caller (frontend) computes
+ * the range using its own local clock, so "today" always means the
+ * collaborator's own calendar day, not the server's. */
+export async function getUserTimeEntries(userId: number, start: Date, end: Date) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(timeEntries)
+    .where(and(eq(timeEntries.userId, userId), gte(timeEntries.timestamp, start), lte(timeEntries.timestamp, end)))
+    .orderBy(asc(timeEntries.timestamp));
+}
+
+/** Admin log: every collaborator's marks within a range, plus which tasks
+ * and deadlines they completed in that same window — so an admin can see
+ * both the clock-in/out record and what was actually worked on. */
+export async function getTimeTrackingLog(start: Date, end: Date, userId?: number) {
+  const db = await getDb();
+  if (!db) return { entries: [] as any[], completedTasks: [] as any[], completedDeadlines: [] as any[] };
+
+  const entryConditions = [gte(timeEntries.timestamp, start), lte(timeEntries.timestamp, end)];
+  if (userId) entryConditions.push(eq(timeEntries.userId, userId));
+
+  const entries = await db.select({
+    id: timeEntries.id,
+    userId: timeEntries.userId,
+    userName: users.name,
+    type: timeEntries.type,
+    timestamp: timeEntries.timestamp,
+  })
+    .from(timeEntries)
+    .leftJoin(users, eq(timeEntries.userId, users.id))
+    .where(and(...entryConditions))
+    .orderBy(asc(timeEntries.timestamp));
+
+  const taskConditions = [gte(tasks.completedAt, start), lte(tasks.completedAt, end)];
+  if (userId) taskConditions.push(eq(tasks.completedById, userId));
+  const completedTasks = await db.select({
+    id: tasks.id,
+    title: tasks.title,
+    clientName: clients.razonSocial,
+    completedById: tasks.completedById,
+    completedByName: users.name,
+    completedAt: tasks.completedAt,
+  })
+    .from(tasks)
+    .leftJoin(clients, eq(tasks.clientId, clients.id))
+    .leftJoin(users, eq(tasks.completedById, users.id))
+    .where(and(...taskConditions))
+    .orderBy(asc(tasks.completedAt));
+
+  const deadlineConditions = [gte(taxDeadlines.completedAt, start), lte(taxDeadlines.completedAt, end)];
+  if (userId) deadlineConditions.push(eq(taxDeadlines.completedById, userId));
+  const completedDeadlines = await db.select({
+    id: taxDeadlines.id,
+    obligationName: taxObligations.name,
+    clientName: clients.razonSocial,
+    completedById: taxDeadlines.completedById,
+    completedByName: users.name,
+    completedAt: taxDeadlines.completedAt,
+  })
+    .from(taxDeadlines)
+    .innerJoin(clients, eq(taxDeadlines.clientId, clients.id))
+    .innerJoin(taxObligations, eq(taxDeadlines.obligationId, taxObligations.id))
+    .leftJoin(users, eq(taxDeadlines.completedById, users.id))
+    .where(and(...deadlineConditions))
+    .orderBy(asc(taxDeadlines.completedAt));
+
+  return { entries, completedTasks, completedDeadlines };
+}
+
+// ==================== AI ASSISTANT CONTEXT ====================
+
+/** Gathers the most recent evidence files for a client (from completed
+ * tasks and completed deadlines alike) so the AI assistant can answer
+ * questions like "what did we report last period" using real documents,
+ * instead of guessing. */
+export async function getClientEvidenceContext(clientId: number, limit: number = 8) {
+  const db = await getDb();
+  if (!db) return [] as { title: string; detail: string; date: Date | null; fileUrl: string; contentType: string | null }[];
+
+  const taskEvidence = await db.select({
+    fileName: taskAttachments.fileName,
+    fileUrl: taskAttachments.fileUrl,
+    contentType: taskAttachments.contentType,
+    createdAt: taskAttachments.createdAt,
+    taskTitle: tasks.title,
+  })
+    .from(taskAttachments)
+    .innerJoin(tasks, eq(taskAttachments.taskId, tasks.id))
+    .where(and(eq(tasks.clientId, clientId), eq(taskAttachments.isEvidence, true)))
+    .orderBy(desc(taskAttachments.createdAt))
+    .limit(limit);
+
+  const deadlineEvidence = await db.select({
+    fileName: deadlineAttachments.fileName,
+    fileUrl: deadlineAttachments.fileUrl,
+    contentType: deadlineAttachments.contentType,
+    createdAt: deadlineAttachments.createdAt,
+    obligationName: taxObligations.name,
+    period: taxDeadlines.period,
+  })
+    .from(deadlineAttachments)
+    .innerJoin(taxDeadlines, eq(deadlineAttachments.deadlineId, taxDeadlines.id))
+    .innerJoin(taxObligations, eq(taxDeadlines.obligationId, taxObligations.id))
+    .where(eq(taxDeadlines.clientId, clientId))
+    .orderBy(desc(deadlineAttachments.createdAt))
+    .limit(limit);
+
+  const combined = [
+    ...taskEvidence.map(t => ({
+      title: t.fileName,
+      detail: `Soporte de la tarea "${t.taskTitle}"`,
+      date: t.createdAt,
+      fileUrl: t.fileUrl,
+      contentType: t.contentType,
+    })),
+    ...deadlineEvidence.map(d => ({
+      title: d.fileName,
+      detail: `Soporte de "${d.obligationName}" — período ${d.period}`,
+      date: d.createdAt,
+      fileUrl: d.fileUrl,
+      contentType: d.contentType,
+    })),
+  ];
+
+  combined.sort((a, b) => (b.date?.getTime() || 0) - (a.date?.getTime() || 0));
+  return combined.slice(0, limit);
+}
+
 /** Admin-only: reopens a deadline that was mistakenly marked completed. */
 export async function reopenDeadline(id: number) {
   const db = await getDb();
@@ -506,10 +675,16 @@ export async function updateDeadlineDueDate(id: number, dueDate: Date) {
   await db.update(taxDeadlines).set({ dueDate }).where(eq(taxDeadlines.id, id));
 }
 
+/** Clears out a client's deadlines before regenerating the calendar — but
+ * only the ones that were never started (no evidence attached). Completed
+ * or in-progress-with-evidence deadlines are real work product and must
+ * never be silently wiped out by a recalculation. */
 export async function deleteClientDeadlines(clientId: number) {
   const db = await getDb();
   if (!db) return;
-  await db.delete(taxDeadlines).where(eq(taxDeadlines.clientId, clientId));
+  await db.delete(taxDeadlines).where(
+    and(eq(taxDeadlines.clientId, clientId), sql`${taxDeadlines.evidenceFileUrl} IS NULL`)
+  );
 }
 
 // ==================== TASKS ====================

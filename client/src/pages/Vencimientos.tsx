@@ -276,11 +276,11 @@ export default function Vencimientos() {
     }
     try {
       const result = await generateDeadlines.mutateAsync({ clientId: parseInt(selectedClient), year: calendarYear });
-      toast.success(`Se generaron ${result.count} vencimientos`);
+      toast.success(result.message || `Se generaron ${result.count} vencimientos`);
       refetchClientDeadlines();
       refetchUpcoming();
-    } catch {
-      toast.error("Error al generar vencimientos");
+    } catch (error: any) {
+      toast.error(error.message || "Error al generar vencimientos");
     }
   };
 

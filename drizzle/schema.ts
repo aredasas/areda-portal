@@ -191,6 +191,22 @@ export type ClientDriveSubfolder = typeof clientDriveSubfolders.$inferSelect;
 export type InsertClientDriveSubfolder = typeof clientDriveSubfolders.$inferInsert;
 
 /**
+ * Time entries - Self-reported clock-in/out marks (replaces the in-person
+ * biometric register). Each collaborator marks their own start of day, lunch
+ * break out/in, and end of day. Fully transparent — the collaborator marks
+ * it themselves, nothing is inferred or tracked automatically.
+ */
+export const timeEntries = mysqlTable("timeEntries", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").notNull(),
+  type: mysqlEnum("type", ["inicio", "salida_almuerzo", "regreso_almuerzo", "fin"]).notNull(),
+  timestamp: timestamp("timestamp").defaultNow().notNull(),
+});
+
+export type TimeEntry = typeof timeEntries.$inferSelect;
+export type InsertTimeEntry = typeof timeEntries.$inferInsert;
+
+/**
  * Task attachments - Files attached to tasks (Excel, Word, PDF, etc.)
  */
 export const taskAttachments = mysqlTable("taskAttachments", {
