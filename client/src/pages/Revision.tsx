@@ -1,8 +1,12 @@
 import { useState } from "react";
+import { toast } from "sonner";
 import { useAuth } from "@/_core/hooks/useAuth";
 import DashboardLayout from "@/components/DashboardLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { trpc } from "@/lib/trpc";
@@ -14,6 +18,7 @@ import {
   ClipboardList,
   Calendar as CalendarIcon,
   AlertCircle,
+  ThumbsUp,
 } from "lucide-react";
 
 function pad2(n: number) {
@@ -41,7 +46,7 @@ export default function Revision() {
   const { data: collaborators } = trpc.collaborators.list.useQuery({ isActive: true });
   const { data: obligations } = trpc.obligations.list.useQuery();
 
-  const { data: items, isLoading } = trpc.review.list.useQuery({
+  const { data: items, isLoading, refetch } = trpc.review.list.useQuery({
     month: allTime ? undefined : monthFilter,
     clientId: clientFilter !== "all" ? parseInt(clientFilter) : undefined,
     assignedToId: assigneeFilter !== "all" ? parseInt(assigneeFilter) : undefined,
@@ -58,6 +63,27 @@ export default function Revision() {
   );
 
   const attachments = selectedItem?.itemType === "task" ? taskDetail?.attachments : deadlineAttachments;
+
+  const [reviewNotesInput, setReviewNotesInput] = useState("");
+  const approveTask = trpc.tasks.approve.useMutation();
+  const approveDeadline = trpc.deadlines.approve.useMutation();
+
+  const handleApprove = async () => {
+    if (!selectedItem) return;
+    try {
+      if (selectedItem.itemType === "task") {
+        await approveTask.mutateAsync({ id: selectedItem.id, reviewNotes: reviewNotesInput || undefined });
+      } else {
+        await approveDeadline.mutateAsync({ id: selectedItem.id, reviewNotes: reviewNotesInput || undefined });
+      }
+      toast.success("Aprobado correctamente");
+      setSelectedItem(null);
+      setReviewNotesInput("");
+      refetch();
+    } catch (error: any) {
+      toast.error(error.message || "Error al aprobar");
+    }
+  };
 
   if (!isAdmin) {
     return (
@@ -163,7 +189,7 @@ export default function Revision() {
                   <div
                     key={`${item.itemType}-${item.id}`}
                     className="flex items-center justify-between p-3 rounded-lg bg-muted/50 hover:bg-muted transition-colors cursor-pointer"
-                    onClick={() => setSelectedItem(item)}
+                    onClick={() => { setSelectedItem(item); setReviewNotesInput(""); }}
                   >
                     <div className="flex items-center gap-3 min-w-0">
                       <Badge variant="outline" className={item.itemType === "deadline" ? "bg-purple-50 text-purple-700 border-purple-200 shrink-0" : "bg-blue-50 text-blue-700 border-blue-200 shrink-0"}>
@@ -184,6 +210,15 @@ export default function Revision() {
                       {item.completedByName && (
                         <p className="text-xs text-muted-foreground">por {item.completedByName}</p>
                       )}
+                      {item.reviewedAt ? (
+                        <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200 mt-1">
+                          <ThumbsUp className="h-3 w-3 mr-1" /> Aprobado
+                        </Badge>
+                      ) : (
+                        <Badge variant="outline" className="bg-gray-100 text-gray-600 border-gray-300 mt-1">
+                          Sin revisar
+                        </Badge>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -199,7 +234,7 @@ export default function Revision() {
       </div>
 
       {/* Detail dialog */}
-      <Dialog open={!!selectedItem} onOpenChange={(open) => { if (!open) setSelectedItem(null); }}>
+      <Dialog open={!!selectedItem} onOpenChange={(open) => { if (!open) { setSelectedItem(null); setReviewNotesInput(""); } }}>
         <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
           {selectedItem && (
             <>
@@ -262,6 +297,44 @@ export default function Revision() {
                     </div>
                   ) : (
                     <p className="text-xs text-muted-foreground">Cargando o sin archivos adjuntos...</p>
+                  )}
+                </div>
+
+                <div className="border-t pt-3">
+                  {selectedItem.reviewedAt ? (
+                    <div className="bg-green-50 border border-green-200 rounded-md p-3">
+                      <p className="text-sm font-medium text-green-800 flex items-center gap-2">
+                        <ThumbsUp className="h-4 w-4" /> Aprobado
+                      </p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {new Date(selectedItem.reviewedAt).toLocaleString("es-CO", { dateStyle: "medium", timeStyle: "short" })}
+                        {selectedItem.reviewedByName && ` por ${selectedItem.reviewedByName}`}
+                      </p>
+                      {selectedItem.reviewNotes && (
+                        <p className="text-sm mt-2">
+                          <span className="text-muted-foreground">Observaciones: </span>
+                          {selectedItem.reviewNotes}
+                        </p>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <Label>Aprobar (observaciones opcionales para el colaborador)</Label>
+                      <Textarea
+                        value={reviewNotesInput}
+                        onChange={(e) => setReviewNotesInput(e.target.value)}
+                        placeholder="Ej: Todo en orden. / Verificar el valor del renglón 32 para el próximo período."
+                        rows={2}
+                      />
+                      <Button
+                        onClick={handleApprove}
+                        disabled={approveTask.isPending || approveDeadline.isPending}
+                        className="gap-2 bg-green-600 hover:bg-green-700 text-white w-full"
+                      >
+                        {(approveTask.isPending || approveDeadline.isPending) ? <Loader2 className="h-4 w-4 animate-spin" /> : <ThumbsUp className="h-4 w-4" />}
+                        Aprobar
+                      </Button>
+                    </div>
                   )}
                 </div>
               </div>

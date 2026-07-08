@@ -632,6 +632,27 @@ export default function Tareas() {
                 </Card>
               )}
 
+              {/* Review/approval section — visible to the collaborator once an admin reviews it */}
+              {detailTask.reviewedAt && (
+                <Card className="bg-blue-50 border-blue-200">
+                  <CardContent className="p-3">
+                    <p className="text-sm font-medium text-blue-800 flex items-center gap-2">
+                      <CheckCircle2 className="h-4 w-4" /> Aprobado por el revisor
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {new Date(detailTask.reviewedAt).toLocaleString("es-CO", { dateStyle: "medium", timeStyle: "short" })}
+                      {detailTask.reviewedByName && ` por ${detailTask.reviewedByName}`}
+                    </p>
+                    {detailTask.reviewNotes && (
+                      <p className="text-sm mt-2">
+                        <span className="text-muted-foreground">Instrucciones/observaciones: </span>
+                        {detailTask.reviewNotes}
+                      </p>
+                    )}
+                  </CardContent>
+                </Card>
+              )}
+
               {/* Attachments section */}
               <div>
                 <h4 className="font-medium text-sm mb-2 flex items-center gap-2">

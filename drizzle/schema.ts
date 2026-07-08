@@ -119,6 +119,11 @@ export const taxDeadlines = mysqlTable("taxDeadlines", {
    * where the evidence was saved — free text, since the app doesn't browse
    * the real Drive folder structure. See clientDriveSubfolders below. */
   driveSubfolder: varchar("driveSubfolder", { length: 150 }),
+  /** Set once an admin reviews and approves a completed deadline. Presence
+   * of reviewedAt is what marks it as approved — no separate status needed. */
+  reviewNotes: text("reviewNotes"),
+  reviewedById: int("reviewedById"),
+  reviewedAt: timestamp("reviewedAt"),
   notes: text("notes"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
@@ -157,6 +162,11 @@ export const tasks = mysqlTable("tasks", {
   driveSubfolder: varchar("driveSubfolder", { length: 150 }),
   /** Notes when completing the task */
   completionNotes: text("completionNotes"),
+  /** Set once an admin reviews and approves a completed task. Presence of
+   * reviewedAt is what marks it as approved — no separate status needed. */
+  reviewNotes: text("reviewNotes"),
+  reviewedById: int("reviewedById"),
+  reviewedAt: timestamp("reviewedAt"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });

@@ -347,6 +347,7 @@ export async function createTaxDeadlines(deadlines: InsertTaxDeadline[]) {
 export async function getClientDeadlines(clientId: number) {
   const db = await getDb();
   if (!db) return [];
+  const reviewedByUser = alias(users, "reviewedByUser");
   return db.select({
     id: taxDeadlines.id,
     clientId: taxDeadlines.clientId,
@@ -363,6 +364,9 @@ export async function getClientDeadlines(clientId: number) {
     evidenceFileUrl: taxDeadlines.evidenceFileUrl,
     evidenceFileKey: taxDeadlines.evidenceFileKey,
     driveSubfolder: taxDeadlines.driveSubfolder,
+    reviewNotes: taxDeadlines.reviewNotes,
+    reviewedAt: taxDeadlines.reviewedAt,
+    reviewedByName: reviewedByUser.name,
     clientDriveFolderUrl: clients.driveFolderUrl,
     notes: taxDeadlines.notes,
     createdAt: taxDeadlines.createdAt,
@@ -371,6 +375,7 @@ export async function getClientDeadlines(clientId: number) {
     .innerJoin(taxObligations, eq(taxDeadlines.obligationId, taxObligations.id))
     .innerJoin(clients, eq(taxDeadlines.clientId, clients.id))
     .leftJoin(users, eq(taxDeadlines.completedById, users.id))
+    .leftJoin(reviewedByUser, eq(taxDeadlines.reviewedById, reviewedByUser.id))
     .where(eq(taxDeadlines.clientId, clientId))
     .orderBy(asc(taxDeadlines.dueDate));
 }
@@ -516,10 +521,11 @@ export async function createTask(data: InsertTask) {
   return result[0].insertId;
 }
 
-export async function getAllTasks(managerId?: number) {
+export async function getAllTasks(assignedToId?: number) {
   const db = await getDb();
   if (!db) return [];
   const completedByUser = alias(users, "completedByUser");
+  const reviewedByUser = alias(users, "reviewedByUser");
   const query = db.select({
     id: tasks.id,
     title: tasks.title,
@@ -542,15 +548,23 @@ export async function getAllTasks(managerId?: number) {
     evidenceFileKey: tasks.evidenceFileKey,
     driveSubfolder: tasks.driveSubfolder,
     completionNotes: tasks.completionNotes,
+    reviewNotes: tasks.reviewNotes,
+    reviewedAt: tasks.reviewedAt,
+    reviewedByName: reviewedByUser.name,
     createdAt: tasks.createdAt,
   })
     .from(tasks)
     .leftJoin(clients, eq(tasks.clientId, clients.id))
     .leftJoin(users, eq(tasks.assignedToId, users.id))
-    .leftJoin(completedByUser, eq(tasks.completedById, completedByUser.id));
+    .leftJoin(completedByUser, eq(tasks.completedById, completedByUser.id))
+    .leftJoin(reviewedByUser, eq(tasks.reviewedById, reviewedByUser.id));
 
-  if (managerId) {
-    return query.where(eq(clients.managerId, managerId)).orderBy(desc(tasks.createdAt));
+  // Non-admins only see tasks assigned directly to them — not every task for
+  // clients they happen to manage (that broader scope is for deadlines,
+  // where the manager is responsible for ALL of a client's obligations;
+  // tasks have their own individual assignee).
+  if (assignedToId) {
+    return query.where(eq(tasks.assignedToId, assignedToId)).orderBy(desc(tasks.createdAt));
   }
   return query.orderBy(desc(tasks.createdAt));
 }
@@ -589,6 +603,28 @@ export async function updateTask(id: number, data: Partial<InsertTask>) {
   const db = await getDb();
   if (!db) return;
   await db.update(tasks).set(data).where(eq(tasks.id, id));
+}
+
+/** Admin reviews and approves a completed task, optionally leaving
+ * observations/instructions for the collaborator to see. */
+export async function approveTask(id: number, reviewedById: number, reviewNotes?: string | null) {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(tasks).set({
+    reviewedById,
+    reviewedAt: new Date(),
+    reviewNotes: reviewNotes || null,
+  }).where(eq(tasks.id, id));
+}
+
+export async function approveDeadline(id: number, reviewedById: number, reviewNotes?: string | null) {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(taxDeadlines).set({
+    reviewedById,
+    reviewedAt: new Date(),
+    reviewNotes: reviewNotes || null,
+  }).where(eq(taxDeadlines.id, id));
 }
 
 /** Admin cancels a task that's no longer needed. If nothing was ever
@@ -654,6 +690,7 @@ export async function getCompletedItemsForReview(filters: ReviewFilters) {
   }
 
   const completedByUser = alias(users, "completedByUser");
+  const reviewedByUser = alias(users, "reviewedByUser");
 
   // ---- Completed tasks ----
   const taskConditions = [eq(tasks.status, "completada")];
@@ -674,11 +711,15 @@ export async function getCompletedItemsForReview(filters: ReviewFilters) {
     completionNotes: tasks.completionNotes,
     driveSubfolder: tasks.driveSubfolder,
     clientDriveFolderUrl: clients.driveFolderUrl,
+    reviewNotes: tasks.reviewNotes,
+    reviewedAt: tasks.reviewedAt,
+    reviewedByName: reviewedByUser.name,
   })
     .from(tasks)
     .leftJoin(clients, eq(tasks.clientId, clients.id))
     .leftJoin(users, eq(tasks.assignedToId, users.id))
     .leftJoin(completedByUser, eq(tasks.completedById, completedByUser.id))
+    .leftJoin(reviewedByUser, eq(tasks.reviewedById, reviewedByUser.id))
     .leftJoin(taxDeadlines, eq(tasks.taxDeadlineId, taxDeadlines.id))
     .where(and(...taskConditions))
     .orderBy(desc(tasks.completedAt));
@@ -701,11 +742,15 @@ export async function getCompletedItemsForReview(filters: ReviewFilters) {
     completedByName: users.name,
     driveSubfolder: taxDeadlines.driveSubfolder,
     clientDriveFolderUrl: clients.driveFolderUrl,
+    reviewNotesRaw: taxDeadlines.reviewNotes,
+    reviewedAtRaw: taxDeadlines.reviewedAt,
+    reviewedByNameRaw: reviewedByUser.name,
   })
     .from(taxDeadlines)
     .innerJoin(clients, eq(taxDeadlines.clientId, clients.id))
     .innerJoin(taxObligations, eq(taxDeadlines.obligationId, taxObligations.id))
     .leftJoin(users, eq(taxDeadlines.completedById, users.id))
+    .leftJoin(reviewedByUser, eq(taxDeadlines.reviewedById, reviewedByUser.id))
     .where(and(...deadlineConditions))
     .orderBy(desc(taxDeadlines.completedAt));
 
@@ -722,6 +767,9 @@ export async function getCompletedItemsForReview(filters: ReviewFilters) {
       completionNotes: t.completionNotes,
       driveSubfolder: t.driveSubfolder,
       clientDriveFolderUrl: t.clientDriveFolderUrl,
+      reviewNotes: t.reviewNotes,
+      reviewedAt: t.reviewedAt,
+      reviewedByName: t.reviewedByName,
     })),
     ...completedDeadlines.map(d => ({
       itemType: "deadline" as const,
@@ -735,6 +783,9 @@ export async function getCompletedItemsForReview(filters: ReviewFilters) {
       completionNotes: null as string | null,
       driveSubfolder: d.driveSubfolder,
       clientDriveFolderUrl: d.clientDriveFolderUrl,
+      reviewNotes: d.reviewNotesRaw,
+      reviewedAt: d.reviewedAtRaw,
+      reviewedByName: d.reviewedByNameRaw,
     })),
   ];
 
@@ -754,7 +805,7 @@ export async function getDashboardData(filters: DashboardFilters) {
     tasksByStatus: { pendiente: [], en_progreso: [], completada: [], vencida: [] },
     upcomingItems: [] as any[],
     workload: [] as any[],
-    heatmap: [] as { date: string; count: number }[],
+    heatmap: [] as { date: string; count: number; items: { clientName: string; title: string }[] }[],
   };
   if (!db) return empty;
 
@@ -768,7 +819,9 @@ export async function getDashboardData(filters: DashboardFilters) {
   const taskConditions = [gte(tasks.dueDate, monthStart), lte(tasks.dueDate, monthEnd), ne(tasks.status, "cancelada")];
   if (filters.clientId) taskConditions.push(eq(tasks.clientId, filters.clientId));
   if (filters.assignedToId) taskConditions.push(eq(tasks.assignedToId, filters.assignedToId));
-  if (filters.managerId) taskConditions.push(eq(clients.managerId, filters.managerId));
+  // Non-admin role-scoping for tasks uses their own assignedToId (their
+  // tasks are their own, unlike deadlines which follow the client's manager).
+  if (filters.managerId) taskConditions.push(eq(tasks.assignedToId, filters.managerId));
   if (filters.obligationId) taskConditions.push(eq(taxDeadlines.obligationId, filters.obligationId));
 
   const taskRows = await db.select({
@@ -848,18 +901,23 @@ export async function getDashboardData(filters: DashboardFilters) {
       })),
   ].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
-  // ---- Heatmap: how many tasks+deadlines are due each day of the month ----
-  const heatmapMap = new Map<string, number>();
+  // ---- Heatmap: how many tasks+deadlines are due each day of the month,
+  // plus a short summary of which clients/items for the tooltip ----
+  const heatmapMap = new Map<string, { count: number; items: { clientName: string; title: string }[] }>();
+  const addToHeatmap = (key: string, clientName: string, title: string) => {
+    if (!heatmapMap.has(key)) heatmapMap.set(key, { count: 0, items: [] });
+    const entry = heatmapMap.get(key)!;
+    entry.count++;
+    if (entry.items.length < 12) entry.items.push({ clientName, title });
+  };
   for (const t of taskRows) {
     if (!t.dueDate) continue;
-    const key = localDateKey(new Date(t.dueDate));
-    heatmapMap.set(key, (heatmapMap.get(key) || 0) + 1);
+    addToHeatmap(localDateKey(new Date(t.dueDate)), t.clientName || "Sin cliente", t.title);
   }
   for (const d of deadlineRows) {
-    const key = localDateKey(new Date(d.dueDate));
-    heatmapMap.set(key, (heatmapMap.get(key) || 0) + 1);
+    addToHeatmap(localDateKey(new Date(d.dueDate)), d.clientName, d.obligationName);
   }
-  const heatmap = Array.from(heatmapMap.entries()).map(([date, count]) => ({ date, count }));
+  const heatmap = Array.from(heatmapMap.entries()).map(([date, { count, items }]) => ({ date, count, items }));
 
   // ---- Workload by collaborator — company-wide view, admin only ----
   // Start from EVERY active collaborator (not just ones who already have a

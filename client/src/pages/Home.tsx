@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { trpc } from "@/lib/trpc";
 import { useMemo, useState } from "react";
 import {
@@ -96,14 +97,14 @@ export default function Home() {
 
   const calendarDays = useMemo(() => getCalendarDays(monthDate.year, monthDate.month), [monthDate]);
   const heatmapByDay = useMemo(() => {
-    const map = new Map<number, number>();
-    dashboard?.heatmap?.forEach((h: { date: string; count: number }) => {
+    const map = new Map<number, { count: number; items: { clientName: string; title: string }[] }>();
+    dashboard?.heatmap?.forEach((h: { date: string; count: number; items?: { clientName: string; title: string }[] }) => {
       const day = parseInt(h.date.split("-")[2]);
-      map.set(day, h.count);
+      map.set(day, { count: h.count, items: h.items || [] });
     });
     return map;
   }, [dashboard?.heatmap]);
-  const maxHeat = useMemo(() => Math.max(1, ...Array.from(heatmapByDay.values())), [heatmapByDay]);
+  const maxHeat = useMemo(() => Math.max(1, ...Array.from(heatmapByDay.values()).map(v => v.count)), [heatmapByDay]);
 
   return (
     <DashboardLayout>
@@ -229,17 +230,17 @@ export default function Home() {
                   <div className="grid grid-cols-7 gap-1">
                     {calendarDays.map((day, idx) => {
                       if (day === null) return <div key={idx} />;
-                      const count = heatmapByDay.get(day) || 0;
+                      const dayData = heatmapByDay.get(day);
+                      const count = dayData?.count || 0;
+                      const items = dayData?.items || [];
                       const intensity = count === 0 ? 0 : 0.18 + (count / maxHeat) * 0.82;
                       const isToday =
                         monthDate.year === now.getFullYear() &&
                         monthDate.month === now.getMonth() &&
                         day === now.getDate();
-                      return (
+                      const cell = (
                         <div
-                          key={idx}
-                          title={count > 0 ? `${count} vencimiento${count > 1 ? "s" : ""}` : "Sin vencimientos"}
-                          className={`aspect-square rounded-md flex flex-col items-center justify-center text-xs ${isToday ? "ring-2 ring-[#42302E]" : ""}`}
+                          className={`aspect-square rounded-md flex flex-col items-center justify-center text-xs ${isToday ? "ring-2 ring-[#42302E]" : ""} ${count > 0 ? "cursor-pointer" : ""}`}
                           style={{
                             backgroundColor: count > 0 ? `rgba(237, 160, 17, ${intensity})` : "rgba(0,0,0,0.03)",
                             color: intensity > 0.55 ? "#fff" : "#42302E",
@@ -248,6 +249,29 @@ export default function Home() {
                           <span className="font-medium">{day}</span>
                           {count > 0 && <span className="text-[10px] leading-none">{count}</span>}
                         </div>
+                      );
+                      if (count === 0) return <div key={idx}>{cell}</div>;
+                      return (
+                        <Tooltip key={idx}>
+                          <TooltipTrigger asChild>{cell}</TooltipTrigger>
+                          <TooltipContent className="max-w-[260px]">
+                            <p className="font-medium text-xs mb-1">
+                              {day} de {monthNames[monthDate.month]} — {count} en total
+                            </p>
+                            <ul className="text-xs space-y-0.5">
+                              {items.map((it, i) => (
+                                <li key={i} className="truncate">
+                                  <span className="font-medium">{it.clientName}</span>: {it.title}
+                                </li>
+                              ))}
+                              {count > items.length && (
+                                <li className="text-muted-foreground">
+                                  y {count - items.length} más...
+                                </li>
+                              )}
+                            </ul>
+                          </TooltipContent>
+                        </Tooltip>
                       );
                     })}
                   </div>

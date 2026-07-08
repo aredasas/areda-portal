@@ -165,20 +165,19 @@ export default function Vencimientos() {
   const [viewMode, setViewMode] = useState<"list" | "calendar">("calendar");
   const [calendarView, setCalendarView] = useState<"month" | "week">("month");
   const [weekStart, setWeekStart] = useState(() => {
-    const d = new Date();
-    const dayOfWeek = (d.getDay() + 6) % 7; // Monday=0
-    d.setDate(d.getDate() - dayOfWeek);
-    d.setHours(0, 0, 0, 0);
-    return d;
+    const now = new Date();
+    // Use UTC day-of-week so this lines up with how deadline dates are
+    // stored/compared everywhere else (UTC), instead of the browser's local
+    // timezone — that mismatch was shifting the week view by a day.
+    const dayOfWeek = (now.getUTCDay() + 6) % 7; // Monday=0
+    return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - dayOfWeek));
   });
 
 
   const weekDays = useMemo(() => {
     const days: Date[] = [];
     for (let i = 0; i < 7; i++) {
-      const d = new Date(weekStart);
-      d.setDate(d.getDate() + i);
-      days.push(d);
+      days.push(new Date(Date.UTC(weekStart.getUTCFullYear(), weekStart.getUTCMonth(), weekStart.getUTCDate() + i)));
     }
     return days;
   }, [weekStart]);
@@ -188,7 +187,7 @@ export default function Vencimientos() {
     if (!upcomingDeadlines) return map;
     for (const d of upcomingDeadlines) {
       const date = new Date(d.dueDate);
-      const key = date.toISOString().split("T")[0];
+      const key = `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
       if (!map[key]) map[key] = [];
       map[key].push(d);
     }
@@ -196,15 +195,11 @@ export default function Vencimientos() {
   }, [upcomingDeadlines]);
 
   const handlePrevWeek = () => {
-    const d = new Date(weekStart);
-    d.setDate(d.getDate() - 7);
-    setWeekStart(d);
+    setWeekStart(prev => new Date(Date.UTC(prev.getUTCFullYear(), prev.getUTCMonth(), prev.getUTCDate() - 7)));
   };
 
   const handleNextWeek = () => {
-    const d = new Date(weekStart);
-    d.setDate(d.getDate() + 7);
-    setWeekStart(d);
+    setWeekStart(prev => new Date(Date.UTC(prev.getUTCFullYear(), prev.getUTCMonth(), prev.getUTCDate() + 7)));
   };
 
   // Calendar state
@@ -222,8 +217,8 @@ export default function Vencimientos() {
     if (!upcomingDeadlines) return map;
     for (const d of upcomingDeadlines) {
       const date = new Date(d.dueDate);
-      if (date.getMonth() === calendarMonth && date.getFullYear() === calendarYear) {
-        const day = date.getDate();
+      if (date.getUTCMonth() === calendarMonth && date.getUTCFullYear() === calendarYear) {
+        const day = date.getUTCDate();
         if (!map[day]) map[day] = [];
         map[day].push(d);
       }
@@ -454,9 +449,9 @@ export default function Vencimientos() {
               ) : (
                 <div className="grid grid-cols-7 gap-2">
                   {weekDays.map((day) => {
-                    const key = day.toISOString().split("T")[0];
+                    const key = `${day.getUTCFullYear()}-${String(day.getUTCMonth() + 1).padStart(2, "0")}-${String(day.getUTCDate()).padStart(2, "0")}`;
                     const dayDeadlines = deadlinesByWeekDay[key] || [];
-                    const isToday = day.toDateString() === today.toDateString();
+                    const isToday = key === `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
                     return (
                       <div
                         key={key}
@@ -466,12 +461,12 @@ export default function Vencimientos() {
                       >
                         <div className="text-center mb-2">
                           <p className="text-xs text-muted-foreground">
-                            {DAYS_ES[(day.getDay() + 6) % 7]}
+                            {DAYS_ES[(day.getUTCDay() + 6) % 7]}
                           </p>
                           <p className={`text-sm font-semibold ${
                             isToday ? "text-primary" : "text-foreground"
                           }`}>
-                            {day.getDate()}
+                            {day.getUTCDate()}
                           </p>
                         </div>
                         <div className="space-y-1">
@@ -690,8 +685,8 @@ export default function Vencimientos() {
                   const clientDeadlinesByDay: Record<number, any[]> = {};
                   for (const d of clientDeadlines) {
                     const date = new Date(d.dueDate);
-                    if (date.getMonth() === clientCalMonth && date.getFullYear() === clientCalYear) {
-                      const day = date.getDate();
+                    if (date.getUTCMonth() === clientCalMonth && date.getUTCFullYear() === clientCalYear) {
+                      const day = date.getUTCDate();
                       if (!clientDeadlinesByDay[day]) clientDeadlinesByDay[day] = [];
                       clientDeadlinesByDay[day].push(d);
                     }
@@ -770,7 +765,7 @@ export default function Vencimientos() {
                     {clientDeadlines
                       .filter((d) => {
                         const date = new Date(d.dueDate);
-                        return date.getMonth() === clientCalMonth && date.getFullYear() === clientCalYear;
+                        return date.getUTCMonth() === clientCalMonth && date.getUTCFullYear() === clientCalYear;
                       })
                       .map((d) => (
                         <TableRow key={d.id}>
@@ -825,6 +820,15 @@ export default function Vencimientos() {
                                   </a>
                                 </Button>
                               )}
+                              {d.status === "completado" && d.reviewedAt && (
+                                <Badge
+                                  variant="outline"
+                                  className="bg-blue-50 text-blue-700 border-blue-200"
+                                  title={`Aprobado el ${new Date(d.reviewedAt).toLocaleString("es-CO", { dateStyle: "medium", timeStyle: "short" })}${d.reviewedByName ? ` por ${d.reviewedByName}` : ""}${d.reviewNotes ? ` — ${d.reviewNotes}` : ""}`}
+                                >
+                                  <CheckCircle2 className="w-3 h-3 mr-1" /> Aprobado
+                                </Badge>
+                              )}
                               {d.status === "completado" && isAdmin && (
                                 <Button
                                   variant="ghost"
@@ -855,7 +859,7 @@ export default function Vencimientos() {
                 </Table>
                 {clientDeadlines.filter((d) => {
                   const date = new Date(d.dueDate);
-                  return date.getMonth() === clientCalMonth && date.getFullYear() === clientCalYear;
+                  return date.getUTCMonth() === clientCalMonth && date.getUTCFullYear() === clientCalYear;
                 }).length === 0 && (
                   <p className="text-xs text-muted-foreground text-center mt-2">
                     No hay vencimientos para {MONTHS_ES[clientCalMonth]} {clientCalYear}. Pruebe con otro mes.

@@ -710,6 +710,14 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
       .query(async ({ input }) => {
         return db.getDeadlineAttachments(input.deadlineId);
       }),
+    /** Admin reviews a completed deadline: approves it and can leave
+     * observations/instructions the collaborator will see. */
+    approve: adminProcedure
+      .input(z.object({ id: z.number(), reviewNotes: z.string().optional() }))
+      .mutation(async ({ input, ctx }) => {
+        await db.approveDeadline(input.id, ctx.user.id, input.reviewNotes);
+        return { success: true };
+      }),
     /** Manually correct a deadline's due date when detected to be wrong
      * (e.g. an error in the DIAN calendar import or the fallback estimate) */
     updateDueDate: adminProcedure
@@ -911,6 +919,14 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
       .input(z.object({ taskId: z.number() }))
       .query(async ({ input }) => {
         return db.getTaskAttachments(input.taskId);
+      }),
+    /** Admin reviews a completed task: approves it and can leave
+     * observations/instructions the collaborator will see. */
+    approve: adminProcedure
+      .input(z.object({ id: z.number(), reviewNotes: z.string().optional() }))
+      .mutation(async ({ input, ctx }) => {
+        await db.approveTask(input.id, ctx.user.id, input.reviewNotes);
+        return { success: true };
       }),
   }),
 
