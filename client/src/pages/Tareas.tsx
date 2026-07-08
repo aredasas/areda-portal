@@ -564,7 +564,12 @@ export default function Tareas() {
                 <div><span className="text-muted-foreground">Estado:</span> <Badge variant="outline" className={statusColors[detailTask.status]}>{statusLabels[detailTask.status]}</Badge></div>
                 <div><span className="text-muted-foreground">Prioridad:</span> <Badge variant="outline" className={priorityColors[detailTask.priority]}>{priorityLabels[detailTask.priority]}</Badge></div>
                 {detailTask.dueDate && <div><span className="text-muted-foreground">Fecha límite:</span> {new Date(detailTask.dueDate).toLocaleDateString("es-CO", { timeZone: "UTC" })}</div>}
-                {detailTask.completedAt && <div><span className="text-muted-foreground">Completada:</span> {new Date(detailTask.completedAt).toLocaleDateString("es-CO")}</div>}
+                {detailTask.completedAt && (
+                  <div>
+                    <span className="text-muted-foreground">Completada:</span> {new Date(detailTask.completedAt).toLocaleString("es-CO", { dateStyle: "medium", timeStyle: "short" })}
+                    {detailTask.completedByName && <span className="text-muted-foreground"> — por {detailTask.completedByName}</span>}
+                  </div>
+                )}
               </div>
 
               {/* Evidence section */}
@@ -577,7 +582,16 @@ export default function Tareas() {
                     <a href={detailTask.evidenceFileUrl} target="_blank" rel="noopener noreferrer" className="text-sm text-[#EDA011] underline mt-1 block">
                       Ver archivo de evidencia
                     </a>
+                    {detailTask.driveSubfolder && (
+                      <p className="text-xs text-muted-foreground mt-1">Subcarpeta de Drive: {detailTask.driveSubfolder}</p>
+                    )}
                     {detailTask.completionNotes && <p className="text-xs text-muted-foreground mt-1">Notas: {detailTask.completionNotes}</p>}
+                    {detailTask.completedAt && (
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Completada el {new Date(detailTask.completedAt).toLocaleString("es-CO", { dateStyle: "medium", timeStyle: "short" })}
+                        {detailTask.completedByName && ` por ${detailTask.completedByName}`}
+                      </p>
+                    )}
                   </CardContent>
                 </Card>
               )}
@@ -591,11 +605,17 @@ export default function Tareas() {
                   <div className="space-y-1">
                     {taskAttachments.map((att: any) => (
                       <div key={att.id} className="flex items-center justify-between p-2 bg-muted/50 rounded text-sm">
-                        <span className="flex items-center gap-2">
-                          <FileText className="h-3.5 w-3.5 text-muted-foreground" />
-                          {att.fileName}
-                        </span>
-                        <a href={att.fileUrl} target="_blank" rel="noopener noreferrer" className="text-[#EDA011] text-xs underline">Descargar</a>
+                        <div className="flex items-center gap-2 min-w-0">
+                          <FileText className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                          <div className="min-w-0">
+                            <p className="truncate">{att.fileName}</p>
+                            <p className="text-[10px] text-muted-foreground">
+                              {new Date(att.createdAt).toLocaleString("es-CO", { dateStyle: "medium", timeStyle: "short" })}
+                              {att.uploadedByName && ` — ${att.uploadedByName}`}
+                            </p>
+                          </div>
+                        </div>
+                        <a href={att.fileUrl} target="_blank" rel="noopener noreferrer" className="text-[#EDA011] text-xs underline shrink-0 ml-2">Descargar</a>
                       </div>
                     ))}
                   </div>
@@ -603,8 +623,9 @@ export default function Tareas() {
                   <p className="text-xs text-muted-foreground">Sin archivos adjuntos</p>
                 )}
 
-                {/* Upload new attachment */}
-                {detailTask.status !== "completada" && (
+                {/* Upload new attachment — admin only; collaborators only attach
+                    evidence when completing the task, via the Complete dialog */}
+                {isAdmin && detailTask.status !== "completada" && (
                   <div className="mt-3 flex gap-2 items-center">
                     <input ref={attachInputRef} type="file" className="hidden" accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.gif,.csv,.txt" onChange={(e) => setAttachmentFile(e.target.files?.[0] || null)} />
                     <Button variant="outline" size="sm" onClick={() => attachInputRef.current?.click()} className="gap-1">

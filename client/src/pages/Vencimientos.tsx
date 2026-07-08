@@ -606,25 +606,27 @@ export default function Vencimientos() {
           <CardHeader className="pb-3">
             <div className="flex items-center justify-between flex-wrap gap-2">
               <CardTitle className="text-lg">Gestión por Cliente</CardTitle>
-              <div className="flex gap-2">
-                <Button variant="outline" size="sm" onClick={handleOpenObligations} disabled={!selectedClient} className="gap-1">
-                  <Settings2 className="h-4 w-4" />
-                  Obligaciones
-                </Button>
-                <Button
-                  size="sm"
-                  onClick={handleGenerateDeadlines}
-                  disabled={!selectedClient || generateDeadlines.isPending}
-                  className="gap-1"
-                >
-                  {generateDeadlines.isPending ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <RefreshCw className="h-4 w-4" />
-                  )}
-                  Generar Calendario
-                </Button>
-              </div>
+              {isAdmin && (
+                <div className="flex gap-2">
+                  <Button variant="outline" size="sm" onClick={handleOpenObligations} disabled={!selectedClient} className="gap-1">
+                    <Settings2 className="h-4 w-4" />
+                    Obligaciones
+                  </Button>
+                  <Button
+                    size="sm"
+                    onClick={handleGenerateDeadlines}
+                    disabled={!selectedClient || generateDeadlines.isPending}
+                    className="gap-1"
+                  >
+                    {generateDeadlines.isPending ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <RefreshCw className="h-4 w-4" />
+                    )}
+                    Generar Calendario
+                  </Button>
+                </div>
+              )}
             </div>
           </CardHeader>
           <CardContent>
@@ -805,6 +807,19 @@ export default function Vencimientos() {
                                 >
                                   <Upload className="h-3 w-3" />
                                   Completar
+                                </Button>
+                              )}
+                              {d.status === "completado" && d.evidenceFileUrl && (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="text-green-700"
+                                  asChild
+                                  title={`Completado el ${new Date(d.completedAt).toLocaleString("es-CO", { dateStyle: "medium", timeStyle: "short" })}${d.completedByName ? ` por ${d.completedByName}` : ""}${d.driveSubfolder ? ` — Subcarpeta: ${d.driveSubfolder}` : ""}`}
+                                >
+                                  <a href={d.evidenceFileUrl} target="_blank" rel="noopener noreferrer">
+                                    <FileText className="w-3.5 h-3.5 mr-1" /> Ver evidencia
+                                  </a>
                                 </Button>
                               )}
                               {d.status === "completado" && isAdmin && (

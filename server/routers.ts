@@ -785,6 +785,7 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
         await db.updateTask(input.id, {
           status: "completada",
           completedAt: new Date(),
+          completedById: ctx.user.id,
           evidenceFileUrl: input.evidenceFileUrl,
           evidenceFileKey: input.evidenceFileKey || null,
           completionNotes: input.completionNotes || null,
@@ -802,6 +803,7 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
         await db.updateTask(input.id, {
           status: "pendiente",
           completedAt: null,
+          completedById: null,
           evidenceFileUrl: null,
           evidenceFileKey: null,
           driveSubfolder: null,
@@ -810,7 +812,7 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
         return { success: true };
       }),
     /** Upload attachment to a task */
-    uploadAttachment: protectedProcedure
+    uploadAttachment: adminProcedure
       .input(z.object({
         taskId: z.number(),
         fileName: z.string(),

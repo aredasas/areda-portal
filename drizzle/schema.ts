@@ -146,6 +146,8 @@ export const tasks = mysqlTable("tasks", {
   /** Reference to the tax deadline that generated this task (if auto-generated) */
   taxDeadlineId: int("taxDeadlineId"),
   completedAt: timestamp("completedAt"),
+  /** Who completed the task — needed to show a proper audit trail to admins */
+  completedById: int("completedById"),
   /** Evidence file URL required to complete the task */
   evidenceFileUrl: text("evidenceFileUrl"),
   evidenceFileKey: varchar("evidenceFileKey", { length: 255 }),
