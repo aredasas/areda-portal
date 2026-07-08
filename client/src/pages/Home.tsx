@@ -197,8 +197,9 @@ export default function Home() {
               {Object.entries(statusConfig).map(([key, config]) => {
                 const Icon = config.icon;
                 const count = dashboard?.taskStats?.[key as keyof typeof dashboard.taskStats] || 0;
-                return (
-                  <Card key={key} className={`border-l-4 ${config.borderColor}`}>
+                const itemsForStatus = dashboard?.tasksByStatus?.[key as keyof typeof dashboard.tasksByStatus] || [];
+                const card = (
+                  <Card key={key} className={`border-l-4 ${config.borderColor} ${count > 0 ? "cursor-pointer" : ""}`}>
                     <CardContent className="p-4">
                       <div className="flex items-center justify-between">
                         <div>
@@ -209,6 +210,25 @@ export default function Home() {
                       </div>
                     </CardContent>
                   </Card>
+                );
+                if (count === 0) return card;
+                return (
+                  <Tooltip key={key}>
+                    <TooltipTrigger asChild>{card}</TooltipTrigger>
+                    <TooltipContent className="max-w-[280px]">
+                      <p className="font-medium text-xs mb-1">{config.label} — {count} en total</p>
+                      <ul className="text-xs space-y-0.5">
+                        {itemsForStatus.map((t: any) => (
+                          <li key={t.id} className="truncate">
+                            <span className="font-medium">{t.clientName || "Sin cliente"}</span>: {t.title}
+                          </li>
+                        ))}
+                        {count > itemsForStatus.length && (
+                          <li className="text-muted-foreground">y {count - itemsForStatus.length} más...</li>
+                        )}
+                      </ul>
+                    </TooltipContent>
+                  </Tooltip>
                 );
               })}
             </div>
