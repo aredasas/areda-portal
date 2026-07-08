@@ -1,4 +1,4 @@
-import { eq, and, desc, asc, like, sql, inArray, gte, lte, or } from "drizzle-orm";
+import { eq, and, desc, asc, like, sql, inArray, gte, lte, or, ne } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { alias } from "drizzle-orm/mysql-core";
 import { InsertUser, users, clients, InsertClient, taxObligations, InsertTaxObligation, clientObligations, InsertClientObligation, taxDeadlines, InsertTaxDeadline, tasks, InsertTask, taskAttachments, InsertTaskAttachment, appSettings, InsertAppSetting, dianCalendar, InsertDianCalendar, clientDriveSubfolders } from "../drizzle/schema";
@@ -279,6 +279,32 @@ export async function setTaxObligationActive(id: number, isActive: boolean) {
   const db = await getDb();
   if (!db) return;
   await db.update(taxObligations).set({ isActive }).where(eq(taxObligations.id, id));
+  if (!isActive) {
+    // Remove deadlines for this obligation that were never started (no
+    // supporting evidence attached yet) — keep anything that already has a
+    // response/file so nothing with real work on it silently disappears.
+    await db.delete(taxDeadlines).where(
+      and(eq(taxDeadlines.obligationId, id), sql`${taxDeadlines.evidenceFileUrl} IS NULL`)
+    );
+  }
+}
+
+/** One-off cleanup for obligations that were deactivated before this
+ * automatic cleanup existed — removes any still-pending, never-started
+ * deadlines (no evidence attached) left over from currently inactive
+ * obligations. Safe to run any time; never touches deadlines with evidence. */
+export async function cleanupInactiveObligationDeadlines() {
+  const db = await getDb();
+  if (!db) return 0;
+  const inactiveObligations = await db.select({ id: taxObligations.id })
+    .from(taxObligations)
+    .where(eq(taxObligations.isActive, false));
+  if (inactiveObligations.length === 0) return 0;
+  const ids = inactiveObligations.map(o => o.id);
+  const result = await db.delete(taxDeadlines).where(
+    and(inArray(taxDeadlines.obligationId, ids), sql`${taxDeadlines.evidenceFileUrl} IS NULL`)
+  );
+  return (result as any)[0]?.affectedRows ?? 0;
 }
 
 export async function getClientObligations(clientId: number) {
@@ -562,6 +588,25 @@ export async function updateTask(id: number, data: Partial<InsertTask>) {
   await db.update(tasks).set(data).where(eq(tasks.id, id));
 }
 
+/** Admin cancels a task that's no longer needed. If nothing was ever
+ * attached to it, it's just removed outright — there's no work to preserve.
+ * If evidence/a response was already attached, it's kept for the record but
+ * marked "cancelada" so it stops counting as active work on the dashboard. */
+export async function cancelTask(id: number): Promise<"deleted" | "cancelled"> {
+  const db = await getDb();
+  if (!db) return "deleted";
+  const task = await getTaskById(id);
+  if (!task) return "deleted";
+
+  if (!task.evidenceFileUrl) {
+    await db.delete(tasks).where(eq(tasks.id, id));
+    return "deleted";
+  }
+
+  await db.update(tasks).set({ status: "cancelada" }).where(eq(tasks.id, id));
+  return "cancelled";
+}
+
 // Local date key ("YYYY-MM-DD") — avoids UTC-shift bugs from toISOString()
 // when the server and the accounting firm are in different timezones.
 function localDateKey(d: Date): string {
@@ -597,7 +642,7 @@ export async function getDashboardData(filters: DashboardFilters) {
   const monthEnd = new Date(Date.UTC(year, monthIdx + 1, 0, 23, 59, 59));
 
   // ---- Tasks due within the selected month ----
-  const taskConditions = [gte(tasks.dueDate, monthStart), lte(tasks.dueDate, monthEnd)];
+  const taskConditions = [gte(tasks.dueDate, monthStart), lte(tasks.dueDate, monthEnd), ne(tasks.status, "cancelada")];
   if (filters.clientId) taskConditions.push(eq(tasks.clientId, filters.clientId));
   if (filters.assignedToId) taskConditions.push(eq(tasks.assignedToId, filters.assignedToId));
   if (filters.managerId) taskConditions.push(eq(clients.managerId, filters.managerId));

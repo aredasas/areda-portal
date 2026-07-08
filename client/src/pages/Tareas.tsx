@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { trpc } from "@/lib/trpc";
-import { ClipboardList, Plus, Loader2, Calendar, Upload, CheckCircle2, RotateCcw, Paperclip, FileText, Eye, FolderOpen } from "lucide-react";
+import { ClipboardList, Plus, Loader2, Calendar, Upload, CheckCircle2, RotateCcw, Paperclip, FileText, Eye, FolderOpen, XCircle } from "lucide-react";
 import { useState, useRef } from "react";
 import { toast } from "sonner";
 
@@ -20,6 +20,7 @@ const statusLabels: Record<string, string> = {
   en_progreso: "En Progreso",
   completada: "Completada",
   vencida: "Vencida",
+  cancelada: "Cancelada",
 };
 
 const statusColors: Record<string, string> = {
@@ -27,6 +28,7 @@ const statusColors: Record<string, string> = {
   en_progreso: "bg-blue-100 text-blue-800 border-blue-200",
   completada: "bg-green-100 text-green-800 border-green-200",
   vencida: "bg-red-100 text-red-800 border-red-200",
+  cancelada: "bg-gray-200 text-gray-600 border-gray-300",
 };
 
 const priorityLabels: Record<string, string> = {
@@ -53,6 +55,7 @@ export default function Tareas() {
   const updateTask = trpc.tasks.update.useMutation();
   const completeTask = trpc.tasks.complete.useMutation();
   const reopenTask = trpc.tasks.reopen.useMutation();
+  const cancelTaskMutation = trpc.tasks.cancel.useMutation();
   const uploadAttachment = trpc.tasks.uploadAttachment.useMutation();
   const uploadEvidence = trpc.tasks.uploadEvidence.useMutation();
 
@@ -215,6 +218,21 @@ export default function Tareas() {
     }
   };
 
+  const handleCancelTask = async (task: any) => {
+    const hasEvidence = !!task.evidenceFileUrl;
+    const confirmMsg = hasEvidence
+      ? "Esta tarea ya tiene soporte adjunto, así que se conservará marcada como 'Cancelada' para el registro. ¿Continuar?"
+      : "Esta tarea no tiene soporte adjunto, así que se eliminará por completo. ¿Continuar?";
+    if (!window.confirm(confirmMsg)) return;
+    try {
+      const { result } = await cancelTaskMutation.mutateAsync({ id: task.id });
+      toast.success(result === "deleted" ? "Tarea eliminada (no tenía soporte adjunto)" : "Tarea marcada como cancelada");
+      refetch();
+    } catch (error: any) {
+      toast.error(error.message || "Error al cancelar la tarea");
+    }
+  };
+
   const handleViewDetail = (task: any) => {
     setDetailTask(task);
     setShowDetailDialog(true);
@@ -275,6 +293,7 @@ export default function Tareas() {
           <TabsTrigger value="en_progreso">En Progreso</TabsTrigger>
           <TabsTrigger value="completada">Completadas</TabsTrigger>
           <TabsTrigger value="vencida">Vencidas</TabsTrigger>
+          <TabsTrigger value="cancelada">Canceladas</TabsTrigger>
         </TabsList>
 
         <TabsContent value={activeTab} className="mt-4">
@@ -353,10 +372,10 @@ export default function Tareas() {
                             <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleViewDetail(task)} title="Ver detalle">
                               <Eye className="w-4 h-4" />
                             </Button>
-                            {isAdmin && task.status !== "completada" && (
+                            {isAdmin && task.status !== "completada" && task.status !== "cancelada" && (
                               <Button variant="ghost" size="sm" onClick={() => handleEdit(task)}>Editar</Button>
                             )}
-                            {!isAdmin && task.status !== "completada" && task.assignedToId === user?.id && (
+                            {!isAdmin && task.status !== "completada" && task.status !== "cancelada" && task.assignedToId === user?.id && (
                               <Button
                                 variant="ghost"
                                 size="sm"
@@ -369,6 +388,11 @@ export default function Tareas() {
                             {task.status === "completada" && isAdmin && (
                               <Button variant="ghost" size="sm" className="text-orange-600" onClick={() => handleReopen(task.id)} title="Reabrir tarea">
                                 <RotateCcw className="w-3.5 h-3.5 mr-1" /> Reabrir
+                              </Button>
+                            )}
+                            {isAdmin && task.status !== "completada" && task.status !== "cancelada" && (
+                              <Button variant="ghost" size="sm" className="text-red-600" onClick={() => handleCancelTask(task)} title="Cancelar tarea">
+                                <XCircle className="w-3.5 h-3.5 mr-1" /> Cancelar
                               </Button>
                             )}
                           </div>

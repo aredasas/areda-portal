@@ -78,6 +78,13 @@
       "when": 1783468872825,
       "tag": "0010_task_completed_by",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "5",
+      "when": 1783471000877,
+      "tag": "0011_task_cancelled_status",
+      "breakpoints": true
     }
   ]
 }

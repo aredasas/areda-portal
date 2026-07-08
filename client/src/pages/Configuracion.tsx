@@ -632,6 +632,21 @@ function TaxObligationsSection() {
   const createObligation = trpc.obligations.create.useMutation();
   const updateObligation = trpc.obligations.update.useMutation();
   const setActive = trpc.obligations.setActive.useMutation();
+  const cleanupInactive = trpc.obligations.cleanupInactiveDeadlines.useMutation();
+
+  const handleCleanupInactive = async () => {
+    try {
+      const result = await cleanupInactive.mutateAsync();
+      if (result.count === 0) {
+        toast.info("No se encontraron vencimientos huérfanos de obligaciones inactivas.");
+      } else {
+        toast.success(`${result.count} vencimiento(s) sin iniciar de obligaciones inactivas fueron eliminados. Los que ya tenían soporte adjunto se conservaron.`);
+      }
+      refetch();
+    } catch (error: any) {
+      toast.error(error.message || "Error al limpiar vencimientos");
+    }
+  };
 
   const [showForm, setShowForm] = useState(false);
   const [editingObligation, setEditingObligation] = useState<any>(null);
@@ -725,9 +740,15 @@ function TaxObligationsSection() {
             Estas son las obligaciones que se pueden asignar a cada cliente para generar sus vencimientos
           </p>
         </div>
-        <Button onClick={handleOpenNew} className="gap-2 bg-[#EDA011] hover:bg-[#d48f0f] text-white">
-          <Plus className="h-4 w-4" /> Nueva Obligación
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={handleCleanupInactive} disabled={cleanupInactive.isPending} className="gap-2">
+            {cleanupInactive.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+            Limpiar vencimientos de obligaciones inactivas
+          </Button>
+          <Button onClick={handleOpenNew} className="gap-2 bg-[#EDA011] hover:bg-[#d48f0f] text-white">
+            <Plus className="h-4 w-4" /> Nueva Obligación
+          </Button>
+        </div>
       </CardHeader>
       <CardContent>
         {obligations && obligations.length > 0 ? (

@@ -544,6 +544,14 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
         await db.setTaxObligationActive(input.id, input.isActive);
         return { success: true };
       }),
+    /** One-off fix for obligations deactivated before the automatic cleanup
+     * existed — removes leftover pending/never-started deadlines from
+     * currently inactive obligations. Never touches ones with evidence. */
+    cleanupInactiveDeadlines: adminProcedure
+      .mutation(async () => {
+        const count = await db.cleanupInactiveObligationDeadlines();
+        return { count };
+      }),
     getClientObligations: protectedProcedure
       .input(z.object({ clientId: z.number() }))
       .query(async ({ input }) => {
@@ -810,6 +818,15 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
           completionNotes: null,
         });
         return { success: true };
+      }),
+    /** Admin-only: cancels a task no longer needed. Deletes it outright if
+     * nothing was ever attached; otherwise keeps it (marked "cancelada") so
+     * existing work isn't lost, just removed from active dashboard views. */
+    cancel: adminProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ input }) => {
+        const result = await db.cancelTask(input.id);
+        return { result };
       }),
     /** Upload attachment to a task */
     uploadAttachment: adminProcedure
