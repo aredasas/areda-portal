@@ -192,11 +192,33 @@ export const taskAttachments = mysqlTable("taskAttachments", {
   contentType: varchar("contentType", { length: 100 }),
   fileSize: int("fileSize"),
   uploadedById: int("uploadedById").notNull(),
+  /** True when this was uploaded as evidence while completing the task
+   * (so it can be safely cleared on reopen, without touching general
+   * reference attachments an admin added separately). */
+  isEvidence: boolean("isEvidence").default(false).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 
 export type TaskAttachment = typeof taskAttachments.$inferSelect;
 export type InsertTaskAttachment = typeof taskAttachments.$inferInsert;
+
+/** Same idea as taskAttachments, but for tax deadlines — lets a collaborator
+ * attach several supporting files when completing a deadline, instead of
+ * just one. */
+export const deadlineAttachments = mysqlTable("deadlineAttachments", {
+  id: int("id").autoincrement().primaryKey(),
+  deadlineId: int("deadlineId").notNull(),
+  fileName: varchar("fileName", { length: 255 }).notNull(),
+  fileUrl: text("fileUrl").notNull(),
+  fileKey: varchar("fileKey", { length: 255 }).notNull(),
+  contentType: varchar("contentType", { length: 100 }),
+  fileSize: int("fileSize"),
+  uploadedById: int("uploadedById").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type DeadlineAttachment = typeof deadlineAttachments.$inferSelect;
+export type InsertDeadlineAttachment = typeof deadlineAttachments.$inferInsert;
 
 /**
  * App settings - Configurable settings (Drive folder URL, DIAN calendar, etc.)

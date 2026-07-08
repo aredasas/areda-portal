@@ -1,0 +1,274 @@
+import { useState } from "react";
+import { useAuth } from "@/_core/hooks/useAuth";
+import DashboardLayout from "@/components/DashboardLayout";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { trpc } from "@/lib/trpc";
+import {
+  CheckSquare,
+  Loader2,
+  FileText,
+  FolderOpen,
+  ClipboardList,
+  Calendar as CalendarIcon,
+  AlertCircle,
+} from "lucide-react";
+
+function pad2(n: number) {
+  return String(n).padStart(2, "0");
+}
+
+const monthNames = [
+  "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
+  "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre",
+];
+
+export default function Revision() {
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
+
+  const now = new Date();
+  const [monthFilter, setMonthFilter] = useState<string>(`${now.getFullYear()}-${pad2(now.getMonth() + 1)}`);
+  const [allTime, setAllTime] = useState(false);
+  const [clientFilter, setClientFilter] = useState("all");
+  const [assigneeFilter, setAssigneeFilter] = useState("all");
+  const [obligationFilter, setObligationFilter] = useState("all");
+  const [selectedItem, setSelectedItem] = useState<any>(null);
+
+  const { data: clients } = trpc.clients.list.useQuery();
+  const { data: collaborators } = trpc.collaborators.list.useQuery({ isActive: true });
+  const { data: obligations } = trpc.obligations.list.useQuery();
+
+  const { data: items, isLoading } = trpc.review.list.useQuery({
+    month: allTime ? undefined : monthFilter,
+    clientId: clientFilter !== "all" ? parseInt(clientFilter) : undefined,
+    assignedToId: assigneeFilter !== "all" ? parseInt(assigneeFilter) : undefined,
+    obligationId: obligationFilter !== "all" ? parseInt(obligationFilter) : undefined,
+  });
+
+  const { data: taskDetail } = trpc.tasks.getById.useQuery(
+    { id: selectedItem?.id },
+    { enabled: !!selectedItem && selectedItem.itemType === "task" }
+  );
+  const { data: deadlineAttachments } = trpc.deadlines.getAttachments.useQuery(
+    { deadlineId: selectedItem?.id },
+    { enabled: !!selectedItem && selectedItem.itemType === "deadline" }
+  );
+
+  const attachments = selectedItem?.itemType === "task" ? taskDetail?.attachments : deadlineAttachments;
+
+  if (!isAdmin) {
+    return (
+      <DashboardLayout>
+        <div className="flex items-center justify-center py-20">
+          <div className="text-center">
+            <AlertCircle className="h-12 w-12 mx-auto mb-4 text-muted-foreground/40" />
+            <h2 className="text-lg font-medium mb-2">Acceso Restringido</h2>
+            <p className="text-muted-foreground">Solo los administradores pueden acceder a esta sección.</p>
+          </div>
+        </div>
+      </DashboardLayout>
+    );
+  }
+
+  return (
+    <DashboardLayout>
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-2xl font-bold text-[#42302E] flex items-center gap-2">
+            <CheckSquare className="h-6 w-6" />
+            Revisión de Completados
+          </h1>
+          <p className="text-muted-foreground mt-1">
+            Tareas y vencimientos tributarios ya marcados como completados, con sus soportes adjuntos
+          </p>
+        </div>
+
+        {/* Filters */}
+        <div className="flex flex-wrap items-center gap-2">
+          <Select
+            value={allTime ? "all_time" : monthFilter}
+            onValueChange={(v) => {
+              if (v === "all_time") { setAllTime(true); return; }
+              setAllTime(false);
+              setMonthFilter(v);
+            }}
+          >
+            <SelectTrigger className="w-[180px] h-9">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all_time">Todo el histórico</SelectItem>
+              {Array.from({ length: 12 }).map((_, i) => {
+                const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+                const value = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`;
+                return <SelectItem key={value} value={value}>{monthNames[d.getMonth()]} {d.getFullYear()}</SelectItem>;
+              })}
+            </SelectContent>
+          </Select>
+
+          <Select value={clientFilter} onValueChange={setClientFilter}>
+            <SelectTrigger className="w-[190px] h-9">
+              <SelectValue placeholder="Cliente" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Todos los clientes</SelectItem>
+              {clients?.map((c: any) => (
+                <SelectItem key={c.id} value={String(c.id)}>{c.razonSocial}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          <Select value={assigneeFilter} onValueChange={setAssigneeFilter}>
+            <SelectTrigger className="w-[190px] h-9">
+              <SelectValue placeholder="Encargado" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Todos los encargados</SelectItem>
+              {collaborators?.map((c: any) => (
+                <SelectItem key={c.id} value={String(c.id)}>{c.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          <Select value={obligationFilter} onValueChange={setObligationFilter}>
+            <SelectTrigger className="w-[190px] h-9">
+              <SelectValue placeholder="Obligación" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Todas las obligaciones</SelectItem>
+              {obligations?.map((o: any) => (
+                <SelectItem key={o.id} value={String(o.id)}>{o.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-lg">
+              {items?.length || 0} elemento(s) completado(s)
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {isLoading ? (
+              <div className="flex items-center justify-center py-12">
+                <Loader2 className="h-6 w-6 animate-spin text-[#EDA011]" />
+              </div>
+            ) : items && items.length > 0 ? (
+              <div className="space-y-2">
+                {items.map((item: any) => (
+                  <div
+                    key={`${item.itemType}-${item.id}`}
+                    className="flex items-center justify-between p-3 rounded-lg bg-muted/50 hover:bg-muted transition-colors cursor-pointer"
+                    onClick={() => setSelectedItem(item)}
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <Badge variant="outline" className={item.itemType === "deadline" ? "bg-purple-50 text-purple-700 border-purple-200 shrink-0" : "bg-blue-50 text-blue-700 border-blue-200 shrink-0"}>
+                        {item.itemType === "deadline" ? <CalendarIcon className="h-3 w-3 mr-1" /> : <ClipboardList className="h-3 w-3 mr-1" />}
+                        {item.itemType === "deadline" ? "Tributario" : "Tarea"}
+                      </Badge>
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium truncate">{item.title}</p>
+                        <p className="text-xs text-muted-foreground truncate">
+                          {item.clientName || "Sin cliente"} — {item.subtitle}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="text-right shrink-0 ml-2">
+                      <p className="text-xs text-muted-foreground">
+                        {item.completedAt && new Date(item.completedAt).toLocaleString("es-CO", { dateStyle: "medium", timeStyle: "short" })}
+                      </p>
+                      {item.completedByName && (
+                        <p className="text-xs text-muted-foreground">por {item.completedByName}</p>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="text-center py-12 text-muted-foreground">
+                <CheckSquare className="h-12 w-12 mx-auto mb-3 opacity-40" />
+                <p className="text-sm">No hay elementos completados con estos filtros</p>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Detail dialog */}
+      <Dialog open={!!selectedItem} onOpenChange={(open) => { if (!open) setSelectedItem(null); }}>
+        <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+          {selectedItem && (
+            <>
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2">
+                  <Badge variant="outline" className={selectedItem.itemType === "deadline" ? "bg-purple-50 text-purple-700 border-purple-200" : "bg-blue-50 text-blue-700 border-blue-200"}>
+                    {selectedItem.itemType === "deadline" ? "Tributario" : "Tarea"}
+                  </Badge>
+                  {selectedItem.title}
+                </DialogTitle>
+              </DialogHeader>
+              <div className="space-y-3 text-sm">
+                <div><span className="text-muted-foreground">Cliente:</span> {selectedItem.clientName || "Sin cliente"}</div>
+                <div><span className="text-muted-foreground">Detalle:</span> {selectedItem.subtitle}</div>
+                {selectedItem.completedAt && (
+                  <div>
+                    <span className="text-muted-foreground">Completado:</span>{" "}
+                    {new Date(selectedItem.completedAt).toLocaleString("es-CO", { dateStyle: "medium", timeStyle: "short" })}
+                    {selectedItem.completedByName && ` por ${selectedItem.completedByName}`}
+                  </div>
+                )}
+                {selectedItem.completionNotes && (
+                  <div><span className="text-muted-foreground">Notas:</span> {selectedItem.completionNotes}</div>
+                )}
+                {selectedItem.driveSubfolder && (
+                  <div><span className="text-muted-foreground">Subcarpeta de Drive:</span> {selectedItem.driveSubfolder}</div>
+                )}
+                {selectedItem.clientDriveFolderUrl && (
+                  <a
+                    href={selectedItem.clientDriveFolderUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-2 text-[#EDA011] hover:underline bg-[#FFF8E2] border border-[#EDA011]/30 rounded-md px-3 py-2"
+                  >
+                    <FolderOpen className="h-4 w-4 flex-shrink-0" />
+                    Abrir carpeta de Drive del cliente
+                  </a>
+                )}
+
+                <div>
+                  <h4 className="font-medium mb-2 flex items-center gap-2">
+                    <FileText className="h-4 w-4" /> Archivos de soporte
+                  </h4>
+                  {attachments && attachments.length > 0 ? (
+                    <div className="space-y-1">
+                      {attachments.map((att: any) => (
+                        <div key={att.id} className="flex items-center justify-between p-2 bg-muted/50 rounded">
+                          <div className="min-w-0">
+                            <p className="truncate">{att.fileName}</p>
+                            <p className="text-[10px] text-muted-foreground">
+                              {new Date(att.createdAt).toLocaleString("es-CO", { dateStyle: "medium", timeStyle: "short" })}
+                              {att.uploadedByName && ` — ${att.uploadedByName}`}
+                            </p>
+                          </div>
+                          <a href={att.fileUrl} target="_blank" rel="noopener noreferrer" className="text-[#EDA011] text-xs underline shrink-0 ml-2">
+                            Ver
+                          </a>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">Cargando o sin archivos adjuntos...</p>
+                  )}
+                </div>
+              </div>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
+    </DashboardLayout>
+  );
+}

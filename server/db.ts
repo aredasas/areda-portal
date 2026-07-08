@@ -1,7 +1,7 @@
 import { eq, and, desc, asc, like, sql, inArray, gte, lte, or, ne } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { alias } from "drizzle-orm/mysql-core";
-import { InsertUser, users, clients, InsertClient, taxObligations, InsertTaxObligation, clientObligations, InsertClientObligation, taxDeadlines, InsertTaxDeadline, tasks, InsertTask, taskAttachments, InsertTaskAttachment, appSettings, InsertAppSetting, dianCalendar, InsertDianCalendar, clientDriveSubfolders } from "../drizzle/schema";
+import { InsertUser, users, clients, InsertClient, taxObligations, InsertTaxObligation, clientObligations, InsertClientObligation, taxDeadlines, InsertTaxDeadline, tasks, InsertTask, taskAttachments, InsertTaskAttachment, deadlineAttachments, InsertDeadlineAttachment, appSettings, InsertAppSetting, dianCalendar, InsertDianCalendar, clientDriveSubfolders } from "../drizzle/schema";
 import { ENV } from './_core/env';
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -404,11 +404,16 @@ export async function getUpcomingDeadlines(daysAhead: number = 30, managerId?: n
     .orderBy(asc(taxDeadlines.dueDate));
 }
 
-export async function getDeadlinesForMonth(year: number, month: number) {
+export async function getDeadlinesForMonth(year: number, month: number, managerId?: number) {
   const db = await getDb();
   if (!db) return [];
   const startDate = new Date(Date.UTC(year, month - 1, 1));
   const endDate = new Date(Date.UTC(year, month, 0, 23, 59, 59));
+  const conditions = [
+    gte(taxDeadlines.dueDate, startDate),
+    lte(taxDeadlines.dueDate, endDate),
+  ];
+  if (managerId) conditions.push(eq(clients.managerId, managerId));
   return db.select({
     id: taxDeadlines.id,
     clientId: taxDeadlines.clientId,
@@ -423,10 +428,7 @@ export async function getDeadlinesForMonth(year: number, month: number) {
     .from(taxDeadlines)
     .innerJoin(taxObligations, eq(taxDeadlines.obligationId, taxObligations.id))
     .innerJoin(clients, eq(taxDeadlines.clientId, clients.id))
-    .where(and(
-      gte(taxDeadlines.dueDate, startDate),
-      lte(taxDeadlines.dueDate, endDate),
-    ))
+    .where(and(...conditions))
     .orderBy(asc(taxDeadlines.dueDate));
 }
 
@@ -480,6 +482,7 @@ export async function ensureClientDriveSubfolder(clientId: number, name: string)
 export async function reopenDeadline(id: number) {
   const db = await getDb();
   if (!db) return;
+  await db.delete(deadlineAttachments).where(eq(deadlineAttachments.deadlineId, id));
   await db.update(taxDeadlines).set({
     status: "pendiente",
     completedAt: null,
@@ -623,6 +626,126 @@ export type DashboardFilters = {
   obligationId?: number;
   managerId?: number; // role-scoping for non-admins: only their managed clients
 };
+
+export type ReviewFilters = {
+  month?: string; // "YYYY-MM", omit for all-time
+  clientId?: number;
+  assignedToId?: number;
+  obligationId?: number;
+  managerId?: number; // role-scoping for non-admins
+};
+
+/** Completed tasks + completed deadlines across ALL clients, for the admin
+ * "Revisión" screen — lets an admin browse everything that's been marked
+ * done and drill into each one's evidence/attachments. */
+export async function getCompletedItemsForReview(filters: ReviewFilters) {
+  const db = await getDb();
+  if (!db) return [] as any[];
+
+  let monthRange: { start: Date; end: Date } | null = null;
+  if (filters.month) {
+    const [yearStr, monthStr] = filters.month.split("-");
+    const year = parseInt(yearStr);
+    const monthIdx = parseInt(monthStr) - 1;
+    monthRange = {
+      start: new Date(Date.UTC(year, monthIdx, 1, 0, 0, 0)),
+      end: new Date(Date.UTC(year, monthIdx + 1, 0, 23, 59, 59)),
+    };
+  }
+
+  const completedByUser = alias(users, "completedByUser");
+
+  // ---- Completed tasks ----
+  const taskConditions = [eq(tasks.status, "completada")];
+  if (monthRange) taskConditions.push(gte(tasks.completedAt, monthRange.start), lte(tasks.completedAt, monthRange.end));
+  if (filters.clientId) taskConditions.push(eq(tasks.clientId, filters.clientId));
+  if (filters.assignedToId) taskConditions.push(eq(tasks.assignedToId, filters.assignedToId));
+  if (filters.managerId) taskConditions.push(eq(clients.managerId, filters.managerId));
+  if (filters.obligationId) taskConditions.push(eq(taxDeadlines.obligationId, filters.obligationId));
+
+  const completedTasks = await db.select({
+    id: tasks.id,
+    title: tasks.title,
+    clientId: tasks.clientId,
+    clientName: clients.razonSocial,
+    assignedToName: users.name,
+    completedAt: tasks.completedAt,
+    completedByName: completedByUser.name,
+    completionNotes: tasks.completionNotes,
+    driveSubfolder: tasks.driveSubfolder,
+    clientDriveFolderUrl: clients.driveFolderUrl,
+  })
+    .from(tasks)
+    .leftJoin(clients, eq(tasks.clientId, clients.id))
+    .leftJoin(users, eq(tasks.assignedToId, users.id))
+    .leftJoin(completedByUser, eq(tasks.completedById, completedByUser.id))
+    .leftJoin(taxDeadlines, eq(tasks.taxDeadlineId, taxDeadlines.id))
+    .where(and(...taskConditions))
+    .orderBy(desc(tasks.completedAt));
+
+  // ---- Completed deadlines ----
+  const deadlineConditions = [eq(taxDeadlines.status, "completado")];
+  if (monthRange) deadlineConditions.push(gte(taxDeadlines.completedAt, monthRange.start), lte(taxDeadlines.completedAt, monthRange.end));
+  if (filters.clientId) deadlineConditions.push(eq(taxDeadlines.clientId, filters.clientId));
+  if (filters.obligationId) deadlineConditions.push(eq(taxDeadlines.obligationId, filters.obligationId));
+  if (filters.managerId) deadlineConditions.push(eq(clients.managerId, filters.managerId));
+  if (filters.assignedToId) deadlineConditions.push(eq(clients.managerId, filters.assignedToId));
+
+  const completedDeadlines = await db.select({
+    id: taxDeadlines.id,
+    clientId: taxDeadlines.clientId,
+    clientName: clients.razonSocial,
+    obligationName: taxObligations.name,
+    period: taxDeadlines.period,
+    completedAt: taxDeadlines.completedAt,
+    completedByName: users.name,
+    driveSubfolder: taxDeadlines.driveSubfolder,
+    clientDriveFolderUrl: clients.driveFolderUrl,
+  })
+    .from(taxDeadlines)
+    .innerJoin(clients, eq(taxDeadlines.clientId, clients.id))
+    .innerJoin(taxObligations, eq(taxDeadlines.obligationId, taxObligations.id))
+    .leftJoin(users, eq(taxDeadlines.completedById, users.id))
+    .where(and(...deadlineConditions))
+    .orderBy(desc(taxDeadlines.completedAt));
+
+  const combined = [
+    ...completedTasks.map(t => ({
+      itemType: "task" as const,
+      id: t.id,
+      title: t.title,
+      clientId: t.clientId,
+      clientName: t.clientName,
+      subtitle: t.assignedToName ? `Asignada a ${t.assignedToName}` : "Sin asignar",
+      completedAt: t.completedAt,
+      completedByName: t.completedByName,
+      completionNotes: t.completionNotes,
+      driveSubfolder: t.driveSubfolder,
+      clientDriveFolderUrl: t.clientDriveFolderUrl,
+    })),
+    ...completedDeadlines.map(d => ({
+      itemType: "deadline" as const,
+      id: d.id,
+      title: d.obligationName,
+      clientId: d.clientId,
+      clientName: d.clientName,
+      subtitle: `Período ${d.period}`,
+      completedAt: d.completedAt,
+      completedByName: d.completedByName,
+      completionNotes: null as string | null,
+      driveSubfolder: d.driveSubfolder,
+      clientDriveFolderUrl: d.clientDriveFolderUrl,
+    })),
+  ];
+
+  combined.sort((a, b) => {
+    const aTime = a.completedAt ? new Date(a.completedAt).getTime() : 0;
+    const bTime = b.completedAt ? new Date(b.completedAt).getTime() : 0;
+    return bTime - aTime;
+  });
+
+  return combined;
+}
 
 export async function getDashboardData(filters: DashboardFilters) {
   const db = await getDb();
@@ -859,6 +982,40 @@ export async function createTaskAttachment(data: InsertTaskAttachment) {
   if (!db) throw new Error("Database not available");
   const result = await db.insert(taskAttachments).values(data);
   return result[0].insertId;
+}
+
+export async function createDeadlineAttachment(data: InsertDeadlineAttachment) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const result = await db.insert(deadlineAttachments).values(data);
+  return result[0].insertId;
+}
+
+export async function getDeadlineAttachments(deadlineId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select({
+    id: deadlineAttachments.id,
+    deadlineId: deadlineAttachments.deadlineId,
+    fileName: deadlineAttachments.fileName,
+    fileUrl: deadlineAttachments.fileUrl,
+    fileKey: deadlineAttachments.fileKey,
+    contentType: deadlineAttachments.contentType,
+    fileSize: deadlineAttachments.fileSize,
+    uploadedById: deadlineAttachments.uploadedById,
+    uploadedByName: users.name,
+    createdAt: deadlineAttachments.createdAt,
+  })
+    .from(deadlineAttachments)
+    .leftJoin(users, eq(deadlineAttachments.uploadedById, users.id))
+    .where(eq(deadlineAttachments.deadlineId, deadlineId))
+    .orderBy(desc(deadlineAttachments.createdAt));
+}
+
+export async function clearTaskAttachments(taskId: number) {
+  const db = await getDb();
+  if (!db) return;
+  await db.delete(taskAttachments).where(and(eq(taskAttachments.taskId, taskId), eq(taskAttachments.isEvidence, true)));
 }
 
 export async function getTaskAttachments(taskId: number) {

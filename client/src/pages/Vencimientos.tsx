@@ -12,7 +12,7 @@ import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { trpc } from "@/lib/trpc";
-import { Calendar, Loader2, RefreshCw, Settings2, CheckCircle2, ChevronLeft, ChevronRight, List, CalendarDays, Pencil, Upload, FileText, FolderOpen, RotateCcw } from "lucide-react";
+import { Calendar, Loader2, RefreshCw, Settings2, CheckCircle2, ChevronLeft, ChevronRight, List, CalendarDays, Pencil, Upload, FileText, FolderOpen, RotateCcw, X } from "lucide-react";
 import { useState, useMemo, useRef } from "react";
 import { toast } from "sonner";
 
@@ -88,7 +88,7 @@ export default function Vencimientos() {
 
   const [showCompleteDeadlineDialog, setShowCompleteDeadlineDialog] = useState(false);
   const [completingDeadline, setCompletingDeadline] = useState<any>(null);
-  const [deadlineEvidenceFile, setDeadlineEvidenceFile] = useState<File | null>(null);
+  const [deadlineEvidenceFiles, setDeadlineEvidenceFiles] = useState<File[]>([]);
   const [selectedDeadlineSubfolder, setSelectedDeadlineSubfolder] = useState<string>("");
   const [newDeadlineSubfolderName, setNewDeadlineSubfolderName] = useState("");
   const { data: deadlineDriveSubfolders } = trpc.clients.getDriveSubfolders.useQuery(
@@ -99,35 +99,38 @@ export default function Vencimientos() {
 
   const handleOpenCompleteDeadline = (deadline: any) => {
     setCompletingDeadline(deadline);
-    setDeadlineEvidenceFile(null);
+    setDeadlineEvidenceFiles([]);
     setShowCompleteDeadlineDialog(true);
   };
 
   const handleConfirmCompleteDeadline = async () => {
-    if (!completingDeadline || !deadlineEvidenceFile) return;
+    if (!completingDeadline || deadlineEvidenceFiles.length === 0) return;
     try {
-      const base64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve((reader.result as string).split(",")[1]);
-        reader.onerror = reject;
-        reader.readAsDataURL(deadlineEvidenceFile);
-      });
-      const uploadResult = await uploadDeadlineEvidence.mutateAsync({
-        fileName: deadlineEvidenceFile.name,
-        fileBase64: base64,
-        contentType: deadlineEvidenceFile.type,
-      });
+      const uploadedFiles = [];
+      for (const file of deadlineEvidenceFiles) {
+        const base64 = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve((reader.result as string).split(",")[1]);
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        });
+        const uploadResult = await uploadDeadlineEvidence.mutateAsync({
+          fileName: file.name,
+          fileBase64: base64,
+          contentType: file.type,
+        });
+        uploadedFiles.push({ url: uploadResult.url, key: uploadResult.key, fileName: file.name, contentType: file.type, fileSize: file.size });
+      }
       await completeDeadline.mutateAsync({
         id: completingDeadline.id,
         clientId: completingDeadline.clientId,
-        evidenceFileUrl: uploadResult.url,
-        evidenceFileKey: uploadResult.key,
+        evidenceFiles: uploadedFiles,
         driveSubfolder: (selectedDeadlineSubfolder === "__new__" ? newDeadlineSubfolderName : selectedDeadlineSubfolder) || undefined,
       });
-      toast.success("Vencimiento completado con evidencia");
+      toast.success(`Vencimiento completado con ${uploadedFiles.length} archivo(s) de evidencia`);
       setShowCompleteDeadlineDialog(false);
       setCompletingDeadline(null);
-      setDeadlineEvidenceFile(null);
+      setDeadlineEvidenceFiles([]);
       setSelectedDeadlineSubfolder("");
       setNewDeadlineSubfolderName("");
       refetchClientDeadlines();
@@ -918,7 +921,7 @@ export default function Vencimientos() {
         </Dialog>
 
         {/* Complete deadline with evidence dialog */}
-        <Dialog open={showCompleteDeadlineDialog} onOpenChange={(open) => { setShowCompleteDeadlineDialog(open); if (!open) { setCompletingDeadline(null); setDeadlineEvidenceFile(null); setSelectedDeadlineSubfolder(""); setNewDeadlineSubfolderName(""); } }}>
+        <Dialog open={showCompleteDeadlineDialog} onOpenChange={(open) => { setShowCompleteDeadlineDialog(open); if (!open) { setCompletingDeadline(null); setDeadlineEvidenceFiles([]); setSelectedDeadlineSubfolder(""); setNewDeadlineSubfolderName(""); } }}>
           <DialogContent className="max-w-md">
             <DialogHeader>
               <DialogTitle>Completar Vencimiento</DialogTitle>
@@ -970,22 +973,35 @@ export default function Vencimientos() {
                   </div>
                 )}
                 <div className="space-y-2">
-                  <Label>Archivo de evidencia *</Label>
+                  <Label>Archivo(s) de evidencia *</Label>
                   <div className="border-2 border-dashed rounded-lg p-4 text-center cursor-pointer hover:border-[#EDA011] transition-colors" onClick={() => deadlineEvidenceInputRef.current?.click()}>
-                    <input ref={deadlineEvidenceInputRef} type="file" className="hidden" accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.gif" onChange={(e) => setDeadlineEvidenceFile(e.target.files?.[0] || null)} />
-                    {deadlineEvidenceFile ? (
-                      <div className="flex items-center justify-center gap-2">
-                        <FileText className="h-5 w-5 text-[#EDA011]" />
-                        <span className="text-sm font-medium">{deadlineEvidenceFile.name}</span>
-                      </div>
-                    ) : (
-                      <div>
-                        <Upload className="h-8 w-8 mx-auto text-muted-foreground mb-2" />
-                        <p className="text-sm text-muted-foreground">Haga clic para seleccionar archivo</p>
-                        <p className="text-xs text-muted-foreground mt-1">PDF, Word, Excel, Imágenes</p>
-                      </div>
-                    )}
+                    <input
+                      ref={deadlineEvidenceInputRef}
+                      type="file"
+                      multiple
+                      className="hidden"
+                      accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.gif"
+                      onChange={(e) => setDeadlineEvidenceFiles(prev => [...prev, ...Array.from(e.target.files || [])])}
+                    />
+                    <Upload className="h-8 w-8 mx-auto text-muted-foreground mb-2" />
+                    <p className="text-sm text-muted-foreground">Haga clic para seleccionar uno o varios archivos</p>
+                    <p className="text-xs text-muted-foreground mt-1">PDF, Word, Excel, Imágenes</p>
                   </div>
+                  {deadlineEvidenceFiles.length > 0 && (
+                    <div className="space-y-1">
+                      {deadlineEvidenceFiles.map((f, idx) => (
+                        <div key={idx} className="flex items-center justify-between bg-muted/50 rounded px-2 py-1">
+                          <span className="flex items-center gap-2 text-sm min-w-0">
+                            <FileText className="h-4 w-4 text-[#EDA011] shrink-0" />
+                            <span className="truncate">{f.name}</span>
+                          </span>
+                          <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" onClick={() => setDeadlineEvidenceFiles(prev => prev.filter((_, i) => i !== idx))}>
+                            <X className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -993,7 +1009,7 @@ export default function Vencimientos() {
               <Button variant="outline" onClick={() => setShowCompleteDeadlineDialog(false)}>Cancelar</Button>
               <Button
                 onClick={handleConfirmCompleteDeadline}
-                disabled={!deadlineEvidenceFile || completeDeadline.isPending || uploadDeadlineEvidence.isPending}
+                disabled={deadlineEvidenceFiles.length === 0 || completeDeadline.isPending || uploadDeadlineEvidence.isPending}
                 className="bg-green-600 hover:bg-green-700 text-white"
               >
                 {(completeDeadline.isPending || uploadDeadlineEvidence.isPending) && <Loader2 className="h-4 w-4 animate-spin mr-2" />}

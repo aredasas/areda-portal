@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { trpc } from "@/lib/trpc";
-import { ClipboardList, Plus, Loader2, Calendar, Upload, CheckCircle2, RotateCcw, Paperclip, FileText, Eye, FolderOpen, XCircle } from "lucide-react";
+import { ClipboardList, Plus, Loader2, Calendar, Upload, CheckCircle2, RotateCcw, Paperclip, FileText, Eye, FolderOpen, XCircle, X } from "lucide-react";
 import { useState, useRef } from "react";
 import { toast } from "sonner";
 
@@ -65,7 +65,7 @@ export default function Tareas() {
   const [showCompleteDialog, setShowCompleteDialog] = useState(false);
   const [completingTaskId, setCompletingTaskId] = useState<number | null>(null);
   const [completionNotes, setCompletionNotes] = useState("");
-  const [evidenceFile, setEvidenceFile] = useState<File | null>(null);
+  const [evidenceFiles, setEvidenceFiles] = useState<File[]>([]);
   const [selectedSubfolder, setSelectedSubfolder] = useState<string>("");
   const [newSubfolderName, setNewSubfolderName] = useState("");
 
@@ -166,40 +166,39 @@ export default function Tareas() {
 
   const handleCompleteConfirm = async () => {
     if (!completingTaskId) return;
-    if (!evidenceFile) {
-      toast.error("Debe adjuntar un archivo de evidencia para completar la tarea");
+    if (evidenceFiles.length === 0) {
+      toast.error("Debe adjuntar al menos un archivo de evidencia para completar la tarea");
       return;
     }
     try {
-      // Upload evidence file
-      const reader = new FileReader();
-      const fileBase64 = await new Promise<string>((resolve, reject) => {
-        reader.onload = () => {
-          const result = reader.result as string;
-          resolve(result.split(",")[1]);
-        };
-        reader.onerror = reject;
-        reader.readAsDataURL(evidenceFile);
-      });
-
-      const { url, key } = await uploadEvidence.mutateAsync({
-        fileName: evidenceFile.name,
-        fileBase64,
-        contentType: evidenceFile.type,
-      });
+      // Upload each evidence file
+      const uploadedFiles = [];
+      for (const file of evidenceFiles) {
+        const reader = new FileReader();
+        const fileBase64 = await new Promise<string>((resolve, reject) => {
+          reader.onload = () => resolve((reader.result as string).split(",")[1]);
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        });
+        const { url, key } = await uploadEvidence.mutateAsync({
+          fileName: file.name,
+          fileBase64,
+          contentType: file.type,
+        });
+        uploadedFiles.push({ url, key, fileName: file.name, contentType: file.type, fileSize: file.size });
+      }
 
       await completeTask.mutateAsync({
         id: completingTaskId,
-        evidenceFileUrl: url,
-        evidenceFileKey: key,
+        evidenceFiles: uploadedFiles,
         completionNotes: completionNotes || undefined,
         driveSubfolder: (selectedSubfolder === "__new__" ? newSubfolderName : selectedSubfolder) || undefined,
       });
-      toast.success("Tarea completada con evidencia");
+      toast.success(`Tarea completada con ${uploadedFiles.length} archivo(s) de evidencia`);
       setShowCompleteDialog(false);
       setCompletingTaskId(null);
       setCompletionNotes("");
-      setEvidenceFile(null);
+      setEvidenceFiles([]);
       setSelectedSubfolder("");
       setNewSubfolderName("");
       refetch();
@@ -484,7 +483,7 @@ export default function Tareas() {
       </Dialog>
 
       {/* Complete Task Dialog (with evidence) */}
-      <Dialog open={showCompleteDialog} onOpenChange={(open) => { if (!open) { setShowCompleteDialog(false); setEvidenceFile(null); setCompletionNotes(""); setSelectedSubfolder(""); setNewSubfolderName(""); } }}>
+      <Dialog open={showCompleteDialog} onOpenChange={(open) => { if (!open) { setShowCompleteDialog(false); setEvidenceFiles([]); setCompletionNotes(""); setSelectedSubfolder(""); setNewSubfolderName(""); } }}>
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
@@ -536,22 +535,35 @@ export default function Tareas() {
               </div>
             )}
             <div className="space-y-2">
-              <Label>Archivo de evidencia *</Label>
+              <Label>Archivo(s) de evidencia *</Label>
               <div className="border-2 border-dashed rounded-lg p-4 text-center cursor-pointer hover:border-[#EDA011] transition-colors" onClick={() => evidenceInputRef.current?.click()}>
-                <input ref={evidenceInputRef} type="file" className="hidden" accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.gif" onChange={(e) => setEvidenceFile(e.target.files?.[0] || null)} />
-                {evidenceFile ? (
-                  <div className="flex items-center justify-center gap-2">
-                    <FileText className="h-5 w-5 text-[#EDA011]" />
-                    <span className="text-sm font-medium">{evidenceFile.name}</span>
-                  </div>
-                ) : (
-                  <div>
-                    <Upload className="h-8 w-8 mx-auto text-muted-foreground mb-2" />
-                    <p className="text-sm text-muted-foreground">Haga clic para seleccionar archivo</p>
-                    <p className="text-xs text-muted-foreground mt-1">PDF, Word, Excel, Imágenes</p>
-                  </div>
-                )}
+                <input
+                  ref={evidenceInputRef}
+                  type="file"
+                  multiple
+                  className="hidden"
+                  accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.gif"
+                  onChange={(e) => setEvidenceFiles(prev => [...prev, ...Array.from(e.target.files || [])])}
+                />
+                <Upload className="h-8 w-8 mx-auto text-muted-foreground mb-2" />
+                <p className="text-sm text-muted-foreground">Haga clic para seleccionar uno o varios archivos</p>
+                <p className="text-xs text-muted-foreground mt-1">PDF, Word, Excel, Imágenes</p>
               </div>
+              {evidenceFiles.length > 0 && (
+                <div className="space-y-1">
+                  {evidenceFiles.map((f, idx) => (
+                    <div key={idx} className="flex items-center justify-between bg-muted/50 rounded px-2 py-1">
+                      <span className="flex items-center gap-2 text-sm min-w-0">
+                        <FileText className="h-4 w-4 text-[#EDA011] shrink-0" />
+                        <span className="truncate">{f.name}</span>
+                      </span>
+                      <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" onClick={() => setEvidenceFiles(prev => prev.filter((_, i) => i !== idx))}>
+                        <X className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
             <div className="space-y-2">
               <Label>Notas de completación (opcional)</Label>
@@ -559,8 +571,8 @@ export default function Tareas() {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => { setShowCompleteDialog(false); setEvidenceFile(null); setCompletionNotes(""); }}>Cancelar</Button>
-            <Button onClick={handleCompleteConfirm} disabled={!evidenceFile || completeTask.isPending || uploadEvidence.isPending} className="bg-green-600 hover:bg-green-700 text-white">
+            <Button variant="outline" onClick={() => { setShowCompleteDialog(false); setEvidenceFiles([]); setCompletionNotes(""); }}>Cancelar</Button>
+            <Button onClick={handleCompleteConfirm} disabled={evidenceFiles.length === 0 || completeTask.isPending || uploadEvidence.isPending} className="bg-green-600 hover:bg-green-700 text-white">
               {(completeTask.isPending || uploadEvidence.isPending) && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
               Confirmar Completación
             </Button>

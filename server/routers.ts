@@ -587,8 +587,12 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
       }),
     getForMonth: protectedProcedure
       .input(z.object({ year: z.number(), month: z.number() }))
-      .query(async ({ input }) => {
-        return db.getDeadlinesForMonth(input.year, input.month);
+      .query(async ({ input, ctx }) => {
+        return db.getDeadlinesForMonth(
+          input.year,
+          input.month,
+          ctx.user.role === "admin" ? undefined : ctx.user.id
+        );
       }),
     generate: protectedProcedure
       .input(z.object({ clientId: z.number(), year: z.number() }))
@@ -660,8 +664,13 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
       .input(z.object({
         id: z.number(),
         clientId: z.number(),
-        evidenceFileUrl: z.string(),
-        evidenceFileKey: z.string().optional(),
+        evidenceFiles: z.array(z.object({
+          url: z.string(),
+          key: z.string().optional(),
+          fileName: z.string(),
+          contentType: z.string().optional(),
+          fileSize: z.number().optional(),
+        })).min(1, "Debe adjuntar al menos un archivo de evidencia"),
         driveSubfolder: z.string().optional(),
       }))
       .mutation(async ({ input, ctx }) => {
@@ -671,7 +680,19 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
             throw new TRPCError({ code: "FORBIDDEN", message: "No tiene acceso a este cliente" });
           }
         }
-        await db.completeDeadline(input.id, input.evidenceFileUrl, input.evidenceFileKey || null, ctx.user.id, input.driveSubfolder);
+        const [firstFile] = input.evidenceFiles;
+        await db.completeDeadline(input.id, firstFile.url, firstFile.key || null, ctx.user.id, input.driveSubfolder);
+        for (const file of input.evidenceFiles) {
+          await db.createDeadlineAttachment({
+            deadlineId: input.id,
+            fileName: file.fileName,
+            fileUrl: file.url,
+            fileKey: file.key || file.url,
+            contentType: file.contentType || null,
+            fileSize: file.fileSize || null,
+            uploadedById: ctx.user.id,
+          });
+        }
         if (input.driveSubfolder) {
           await db.ensureClientDriveSubfolder(input.clientId, input.driveSubfolder);
         }
@@ -683,6 +704,11 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
       .mutation(async ({ input }) => {
         await db.reopenDeadline(input.id);
         return { success: true };
+      }),
+    getAttachments: protectedProcedure
+      .input(z.object({ deadlineId: z.number() }))
+      .query(async ({ input }) => {
+        return db.getDeadlineAttachments(input.deadlineId);
       }),
     /** Manually correct a deadline's due date when detected to be wrong
      * (e.g. an error in the DIAN calendar import or the fallback estimate) */
@@ -771,15 +797,17 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
     complete: protectedProcedure
       .input(z.object({
         id: z.number(),
-        evidenceFileUrl: z.string().optional(),
-        evidenceFileKey: z.string().optional(),
+        evidenceFiles: z.array(z.object({
+          url: z.string(),
+          key: z.string().optional(),
+          fileName: z.string(),
+          contentType: z.string().optional(),
+          fileSize: z.number().optional(),
+        })).min(1, "Debe adjuntar al menos un archivo de evidencia"),
         completionNotes: z.string().optional(),
         driveSubfolder: z.string().optional(),
       }))
       .mutation(async ({ input, ctx }) => {
-        if (!input.evidenceFileUrl) {
-          throw new Error("Debe adjuntar evidencia para completar la tarea");
-        }
         const task = await db.getTaskById(input.id);
         if (!task) throw new Error("Tarea no encontrada");
         if (ctx.user.role !== "admin") {
@@ -790,15 +818,28 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
             });
           }
         }
+        const [firstFile] = input.evidenceFiles;
         await db.updateTask(input.id, {
           status: "completada",
           completedAt: new Date(),
           completedById: ctx.user.id,
-          evidenceFileUrl: input.evidenceFileUrl,
-          evidenceFileKey: input.evidenceFileKey || null,
+          evidenceFileUrl: firstFile.url,
+          evidenceFileKey: firstFile.key || null,
           completionNotes: input.completionNotes || null,
           driveSubfolder: input.driveSubfolder || null,
         });
+        for (const file of input.evidenceFiles) {
+          await db.createTaskAttachment({
+            taskId: input.id,
+            fileName: file.fileName,
+            fileUrl: file.url,
+            fileKey: file.key || file.url,
+            contentType: file.contentType || null,
+            fileSize: file.fileSize || null,
+            uploadedById: ctx.user.id,
+            isEvidence: true,
+          });
+        }
         if (input.driveSubfolder) {
           await db.ensureClientDriveSubfolder(task.clientId, input.driveSubfolder);
         }
@@ -808,6 +849,7 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
     reopen: adminProcedure
       .input(z.object({ id: z.number() }))
       .mutation(async ({ input }) => {
+        await db.clearTaskAttachments(input.id);
         await db.updateTask(input.id, {
           status: "pendiente",
           completedAt: null,
@@ -1008,6 +1050,25 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
           assignedToId: input?.assignedToId,
           obligationId: input?.obligationId,
           managerId: ctx.user.role === "admin" ? undefined : ctx.user.id,
+        });
+      }),
+  }),
+  /** Admin-only screen to review everything marked as done — completed
+   * tasks and completed tax deadlines together, with their evidence. */
+  review: router({
+    list: adminProcedure
+      .input(z.object({
+        month: z.string().optional(), // "YYYY-MM", omit for all-time
+        clientId: z.number().optional(),
+        assignedToId: z.number().optional(),
+        obligationId: z.number().optional(),
+      }).optional())
+      .query(async ({ input }) => {
+        return db.getCompletedItemsForReview({
+          month: input?.month,
+          clientId: input?.clientId,
+          assignedToId: input?.assignedToId,
+          obligationId: input?.obligationId,
         });
       }),
   }),

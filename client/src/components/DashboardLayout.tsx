@@ -33,6 +33,7 @@ import {
   Shield,
   FolderOpen,
   Settings,
+  CheckSquare,
 } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
@@ -47,6 +48,7 @@ const menuItems = [
   { icon: ClipboardList, label: "Tareas", path: "/tareas" },
   { icon: Calendar, label: "Vencimientos", path: "/vencimientos" },
   { icon: FolderOpen, label: "Documentos", path: "/documentos" },
+  { icon: CheckSquare, label: "Revisión", path: "/revision", adminOnly: true },
   { icon: Users, label: "Colaboradores", path: "/colaboradores", adminOnly: true },
   { icon: Settings, label: "Configuración", path: "/configuracion", adminOnly: true },
 ];
