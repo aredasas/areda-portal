@@ -14,7 +14,8 @@ const ASISTENCIA_AUTHORIZED_CEDULA = "5820262";
 async function pushEvidenceToDrive(
   clientId: number,
   subfolderName: string | undefined,
-  files: { url: string; key?: string; fileName: string; contentType?: string }[]
+  files: { url: string; key?: string; fileName: string; contentType?: string }[],
+  subfolderId?: string
 ) {
   if (!isDriveConfigured()) {
     console.warn("[Google Drive] Saltado: las variables de entorno no están configuradas.");
@@ -31,8 +32,10 @@ async function pushEvidenceToDrive(
     return;
   }
 
-  console.log(`[Google Drive] Subiendo ${files.length} archivo(s) para el cliente ${clientId}, carpeta raíz ${rootFolderId}, subcarpeta "${subfolderName || "(ninguna)"}"`);
-  const targetFolderId = await resolveUploadFolder(rootFolderId, subfolderName);
+  console.log(`[Google Drive] Subiendo ${files.length} archivo(s) para el cliente ${clientId}, carpeta raíz ${rootFolderId}, subcarpeta "${subfolderName || subfolderId || "(ninguna)"}"`);
+  // If the person picked an existing (possibly nested) folder from the real
+  // Drive listing, we already have its exact id — no need to search/create.
+  const targetFolderId = subfolderId || await resolveUploadFolder(rootFolderId, subfolderName);
   console.log(`[Google Drive] Carpeta destino resuelta: ${targetFolderId}`);
 
   for (const file of files) {
@@ -61,7 +64,7 @@ import { z } from "zod";
 import * as db from "./db";
 import { storagePut, storageGetSignedUrl } from "./storage";
 import { invokeLLM } from "./_core/llm";
-import { isDriveConfigured, extractFolderIdFromUrl, testFolderAccess, listSubfolders as listDriveSubfolders, uploadFileToDrive, resolveUploadFolder } from "./googleDrive";
+import { isDriveConfigured, extractFolderIdFromUrl, testFolderAccess, listSubfoldersRecursive, uploadFileToDrive, resolveUploadFolder } from "./googleDrive";
 import { sdk } from "./_core/sdk";
 import { ONE_YEAR_MS } from "@shared/const";
 import bcrypt from "bcryptjs";
@@ -749,6 +752,7 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
           fileSize: z.number().optional(),
         })).min(1, "Debe adjuntar al menos un archivo de evidencia"),
         driveSubfolder: z.string().optional(),
+        driveSubfolderId: z.string().optional(),
       }))
       .mutation(async ({ input, ctx }) => {
         if (ctx.user.role !== "admin") {
@@ -770,10 +774,10 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
             uploadedById: ctx.user.id,
           });
         }
-        if (input.driveSubfolder) {
+        if (input.driveSubfolder && !input.driveSubfolderId) {
           await db.ensureClientDriveSubfolder(input.clientId, input.driveSubfolder);
         }
-        pushEvidenceToDrive(input.clientId, input.driveSubfolder, input.evidenceFiles).catch(err =>
+        pushEvidenceToDrive(input.clientId, input.driveSubfolder, input.evidenceFiles, input.driveSubfolderId).catch(err =>
           console.error("[Google Drive] Error subiendo evidencia del vencimiento:", err)
         );
         return { success: true };
@@ -894,6 +898,7 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
         })).min(1, "Debe adjuntar al menos un archivo de evidencia"),
         completionNotes: z.string().optional(),
         driveSubfolder: z.string().optional(),
+        driveSubfolderId: z.string().optional(),
       }))
       .mutation(async ({ input, ctx }) => {
         const task = await db.getTaskById(input.id);
@@ -928,10 +933,10 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
             isEvidence: true,
           });
         }
-        if (input.driveSubfolder) {
+        if (input.driveSubfolder && !input.driveSubfolderId) {
           await db.ensureClientDriveSubfolder(task.clientId, input.driveSubfolder);
         }
-        pushEvidenceToDrive(task.clientId, input.driveSubfolder, input.evidenceFiles).catch(err =>
+        pushEvidenceToDrive(task.clientId, input.driveSubfolder, input.evidenceFiles, input.driveSubfolderId).catch(err =>
           console.error("[Google Drive] Error subiendo evidencia de la tarea:", err)
         );
         return { success: true };
@@ -1342,7 +1347,7 @@ Responde basándote en estos documentos cuando sea posible. Si la pregunta requi
         if (!client.driveFolderUrl || !isDriveConfigured()) return [];
         const folderId = extractFolderIdFromUrl(client.driveFolderUrl);
         if (!folderId) return [];
-        return listDriveSubfolders(folderId);
+        return listSubfoldersRecursive(folderId);
       }),
   }),
 });

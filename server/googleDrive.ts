@@ -81,6 +81,31 @@ export async function listSubfolders(folderId: string) {
   return res.data.files || [];
 }
 
+/** Same as listSubfolders, but walks into nested subfolders too (up to a
+ * depth limit so a very deep/wide tree can't run away), returning a flat
+ * list with the full path so "IVA" inside "2026" reads differently from
+ * "IVA" inside "2025". */
+export async function listSubfoldersRecursive(
+  rootFolderId: string,
+  maxDepth: number = 3
+): Promise<{ id: string; name: string; path: string }[]> {
+  const results: { id: string; name: string; path: string }[] = [];
+
+  async function walk(folderId: string, pathPrefix: string, depth: number) {
+    if (depth > maxDepth) return;
+    const children = await listSubfolders(folderId);
+    for (const child of children) {
+      if (!child.id || !child.name) continue;
+      const path = pathPrefix ? `${pathPrefix} / ${child.name}` : child.name;
+      results.push({ id: child.id, name: child.name, path });
+      await walk(child.id, path, depth + 1);
+    }
+  }
+
+  await walk(rootFolderId, "", 1);
+  return results;
+}
+
 /** Uploads a file into a specific Drive folder (a client's folder or one of
  * its subfolders) and returns its id + a link to view it. */
 export async function uploadFileToDrive(folderId: string, fileName: string, buffer: Buffer, mimeType: string) {

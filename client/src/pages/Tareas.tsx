@@ -195,11 +195,13 @@ export default function Tareas() {
         uploadedFiles.push({ url, key, fileName: file.name, contentType: file.type, fileSize: file.size });
       }
 
+      const isNewSubfolder = selectedSubfolder === "__new__";
       await completeTask.mutateAsync({
         id: completingTaskId,
         evidenceFiles: uploadedFiles,
         completionNotes: completionNotes || undefined,
-        driveSubfolder: (selectedSubfolder === "__new__" ? newSubfolderName : selectedSubfolder) || undefined,
+        driveSubfolder: isNewSubfolder ? (newSubfolderName || undefined) : (isDriveConfigured ? undefined : (selectedSubfolder || undefined)),
+        driveSubfolderId: isDriveConfigured && !isNewSubfolder ? (selectedSubfolder || undefined) : undefined,
       });
       toast.success(`Tarea completada con ${uploadedFiles.length} archivo(s) de evidencia`);
       setShowCompleteDialog(false);
@@ -528,7 +530,7 @@ export default function Tareas() {
                   </SelectTrigger>
                   <SelectContent>
                     {driveSubfolders?.map((f: any) => (
-                      <SelectItem key={f.id} value={f.name}>{f.name}</SelectItem>
+                      <SelectItem key={f.id} value={isDriveConfigured ? f.id : f.name}>{f.path || f.name}</SelectItem>
                     ))}
                     <SelectItem value="__new__">+ Nueva subcarpeta...</SelectItem>
                   </SelectContent>
@@ -542,7 +544,7 @@ export default function Tareas() {
                 )}
                 <p className="text-xs text-muted-foreground">
                   {isDriveConfigured
-                    ? "El archivo se subirá automáticamente a esta subcarpeta en Google Drive."
+                    ? "El archivo se subirá automáticamente a esta subcarpeta en Google Drive. Las subcarpetas nuevas se crean directamente dentro de la carpeta del cliente."
                     : "Esto es solo para llevar registro de en qué subcarpeta quedó guardado — recuerde subirlo usted mismo a esa subcarpeta dentro de Drive."}
                 </p>
               </div>

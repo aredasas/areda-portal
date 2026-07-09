@@ -129,11 +129,13 @@ export default function Vencimientos() {
         });
         uploadedFiles.push({ url: uploadResult.url, key: uploadResult.key, fileName: file.name, contentType: file.type, fileSize: file.size });
       }
+      const isNewDeadlineSubfolder = selectedDeadlineSubfolder === "__new__";
       await completeDeadline.mutateAsync({
         id: completingDeadline.id,
         clientId: completingDeadline.clientId,
         evidenceFiles: uploadedFiles,
-        driveSubfolder: (selectedDeadlineSubfolder === "__new__" ? newDeadlineSubfolderName : selectedDeadlineSubfolder) || undefined,
+        driveSubfolder: isNewDeadlineSubfolder ? (newDeadlineSubfolderName || undefined) : (isDriveConfigured ? undefined : (selectedDeadlineSubfolder || undefined)),
+        driveSubfolderId: isDriveConfigured && !isNewDeadlineSubfolder ? (selectedDeadlineSubfolder || undefined) : undefined,
       });
       toast.success(`Vencimiento completado con ${uploadedFiles.length} archivo(s) de evidencia`);
       setShowCompleteDeadlineDialog(false);
@@ -976,7 +978,7 @@ export default function Vencimientos() {
                       </SelectTrigger>
                       <SelectContent>
                         {deadlineDriveSubfolders?.map((f: any) => (
-                          <SelectItem key={f.id} value={f.name}>{f.name}</SelectItem>
+                          <SelectItem key={f.id} value={isDriveConfigured ? f.id : f.name}>{f.path || f.name}</SelectItem>
                         ))}
                         <SelectItem value="__new__">+ Nueva subcarpeta...</SelectItem>
                       </SelectContent>
@@ -990,7 +992,7 @@ export default function Vencimientos() {
                     )}
                     <p className="text-xs text-muted-foreground">
                       {isDriveConfigured
-                      ? "El archivo se subirá automáticamente a esta subcarpeta en Google Drive."
+                      ? "El archivo se subirá automáticamente a esta subcarpeta en Google Drive. Las subcarpetas nuevas se crean directamente dentro de la carpeta del cliente."
                       : "Esto es solo para llevar registro de en qué subcarpeta quedó guardado — recuerde subirlo usted mismo a esa subcarpeta dentro de Drive."}
                     </p>
                   </div>
