@@ -14,7 +14,7 @@ const ASISTENCIA_AUTHORIZED_CEDULA = "5820262";
 async function pushEvidenceToDrive(
   clientId: number,
   subfolderName: string | undefined,
-  files: { url: string; fileName: string; contentType?: string }[]
+  files: { url: string; key?: string; fileName: string; contentType?: string }[]
 ) {
   if (!isDriveConfigured()) {
     console.warn("[Google Drive] Saltado: las variables de entorno no están configuradas.");
@@ -36,7 +36,13 @@ async function pushEvidenceToDrive(
   console.log(`[Google Drive] Carpeta destino resuelta: ${targetFolderId}`);
 
   for (const file of files) {
-    const response = await fetch(file.url);
+    // file.url is a relative "/files/..." path meant for the browser, not a
+    // fetchable server-to-server URL — get a real signed R2 URL from the
+    // storage key instead (falling back to stripping the "/files/" prefix
+    // if the key wasn't passed through for some reason).
+    const storageKey = file.key || file.url.replace(/^\/files\//, "");
+    const signedUrl = await storageGetSignedUrl(storageKey);
+    const response = await fetch(signedUrl);
     if (!response.ok) {
       console.error(`[Google Drive] No se pudo descargar ${file.fileName} desde R2 (${response.status})`);
       continue;
