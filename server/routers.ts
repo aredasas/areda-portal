@@ -12,6 +12,7 @@ import { z } from "zod";
 import * as db from "./db";
 import { storagePut, storageGetSignedUrl } from "./storage";
 import { invokeLLM } from "./_core/llm";
+import { isDriveConfigured, extractFolderIdFromUrl, testFolderAccess, listSubfolders as listDriveSubfolders, uploadFileToDrive } from "./googleDrive";
 import { sdk } from "./_core/sdk";
 import { ONE_YEAR_MS } from "@shared/const";
 import bcrypt from "bcryptjs";
@@ -1251,6 +1252,42 @@ Responde basándote en estos documentos cuando sea posible. Si la pregunta requi
         }
         await db.createComment(input.entityType, input.entityId, ctx.user.id, input.content);
         return { success: true };
+      }),
+  }),
+  /** Real Google Drive integration (service account) — lets the admin
+   * verify the connection, and lets anyone browse a client's actual Drive
+   * subfolders when uploading evidence. */
+  googleDrive: router({
+    isConfigured: protectedProcedure.query(() => isDriveConfigured()),
+    /** Admin-only: confirms the credentials work AND that a specific
+     * client's folder was actually shared with the service account. */
+    testConnection: adminProcedure
+      .input(z.object({ clientId: z.number() }))
+      .query(async ({ input }) => {
+        if (!isDriveConfigured()) {
+          throw new Error("Google Drive no está configurado — faltan las variables de entorno en Railway");
+        }
+        const client = await db.getClientById(input.clientId);
+        if (!client?.driveFolderUrl) throw new Error("Este cliente no tiene una carpeta de Drive configurada");
+        const folderId = extractFolderIdFromUrl(client.driveFolderUrl);
+        if (!folderId) throw new Error("No se pudo interpretar el enlace de la carpeta de Drive");
+        const folder = await testFolderAccess(folderId);
+        return { success: true, folderName: folder.name };
+      }),
+    /** Real subfolders inside a client's Drive folder (falls back to the
+     * remembered-name list on the frontend if Drive isn't configured). */
+    listSubfolders: protectedProcedure
+      .input(z.object({ clientId: z.number() }))
+      .query(async ({ input, ctx }) => {
+        const client = await db.getClientById(input.clientId);
+        if (!client) throw new Error("Cliente no encontrado");
+        if (ctx.user.role !== "admin" && client.managerId !== ctx.user.id) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "No tiene acceso a este cliente" });
+        }
+        if (!client.driveFolderUrl || !isDriveConfigured()) return [];
+        const folderId = extractFolderIdFromUrl(client.driveFolderUrl);
+        if (!folderId) return [];
+        return listDriveSubfolders(folderId);
       }),
   }),
 });

@@ -64,6 +64,7 @@ export default function Configuracion() {
 
         <TabsContent value="general" className="mt-4">
           <GeneralSettingsSection />
+          <GoogleDriveTestSection />
         </TabsContent>
       </Tabs>
     </div>
@@ -618,6 +619,71 @@ function GeneralSettingsSection() {
     </Card>
   );
 }
+
+function GoogleDriveTestSection() {
+  const { data: isConfigured } = trpc.googleDrive.isConfigured.useQuery();
+  const { data: clients } = trpc.clients.list.useQuery();
+  const [testClientId, setTestClientId] = useState<string>("");
+  const [shouldTest, setShouldTest] = useState(false);
+
+  const { data: testResult, error: testError, isFetching: isTesting } = trpc.googleDrive.testConnection.useQuery(
+    { clientId: parseInt(testClientId) || 0 },
+    { enabled: shouldTest && !!testClientId, retry: false }
+  );
+
+  const handleTest = () => {
+    if (!testClientId) return;
+    setShouldTest(true);
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base flex items-center gap-2">
+          Integración con Google Drive
+          <span className={`text-xs px-2 py-0.5 rounded-full ${isConfigured ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"}`}>
+            {isConfigured ? "Configurado" : "No configurado"}
+          </span>
+        </CardTitle>
+        <p className="text-sm text-muted-foreground">
+          Prueba que la cuenta de servicio pueda acceder a la carpeta de Drive de un cliente específico.
+        </p>
+      </CardHeader>
+      <CardContent>
+        {!isConfigured ? (
+          <p className="text-sm text-muted-foreground">
+            Faltan las variables de entorno <code>GOOGLE_SERVICE_ACCOUNT_EMAIL</code> y <code>GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY</code> en Railway.
+          </p>
+        ) : (
+          <div className="space-y-3">
+            <div className="flex gap-2">
+              <Select value={testClientId} onValueChange={(v) => { setTestClientId(v); setShouldTest(false); }}>
+                <SelectTrigger className="w-[280px]">
+                  <SelectValue placeholder="Seleccione un cliente para probar" />
+                </SelectTrigger>
+                <SelectContent>
+                  {clients?.map((c: any) => (
+                    <SelectItem key={c.id} value={String(c.id)}>{c.razonSocial}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button onClick={handleTest} disabled={!testClientId || isTesting} className="bg-[#EDA011] hover:bg-[#d48f0f] text-white">
+                {isTesting ? "Probando..." : "Probar conexión"}
+              </Button>
+            </div>
+            {shouldTest && testResult && (
+              <p className="text-sm text-green-700">✓ Conectado correctamente a la carpeta "{testResult.folderName}"</p>
+            )}
+            {shouldTest && testError && (
+              <p className="text-sm text-red-600">✗ {testError.message}</p>
+            )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 
 const frequencyLabels: Record<string, string> = {
   mensual: "Mensual",
