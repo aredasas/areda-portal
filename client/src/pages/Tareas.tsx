@@ -265,10 +265,14 @@ export default function Tareas() {
     }
   };
 
-  const filteredTasks = tasks?.filter((t: any) => {
-    if (activeTab === "todas") return true;
-    return t.status === activeTab;
-  });
+  const filteredTasks = tasks
+    ?.filter((t: any) => {
+      if (activeTab === "todas") return true;
+      return t.status === activeTab;
+    })
+    // Approved tasks sink to the bottom — once reviewed, they're done business,
+    // so unreviewed/active work stays easier to spot at a glance.
+    .sort((a: any, b: any) => (a.reviewedAt ? 1 : 0) - (b.reviewedAt ? 1 : 0));
 
   return (
     <DashboardLayout>

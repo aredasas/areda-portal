@@ -34,8 +34,6 @@ import {
   FolderOpen,
   Settings,
   CheckSquare,
-  Clock,
-  Sparkles,
 } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
@@ -43,17 +41,14 @@ import { DashboardLayoutSkeleton } from "./DashboardLayoutSkeleton";
 import { LoginScreen } from "./LoginScreen";
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
-import TimeTrackingBar from "./TimeTrackingBar";
 
 const menuItems = [
   { icon: LayoutDashboard, label: "Dashboard", path: "/" },
   { icon: Building2, label: "Clientes", path: "/clientes", adminOnly: true },
   { icon: ClipboardList, label: "Tareas", path: "/tareas" },
   { icon: Calendar, label: "Vencimientos", path: "/vencimientos" },
-  { icon: Sparkles, label: "Asistente IA", path: "/asistente" },
   { icon: FolderOpen, label: "Documentos", path: "/documentos" },
   { icon: CheckSquare, label: "Revisión", path: "/revision", adminOnly: true },
-  { icon: Clock, label: "Asistencia", path: "/asistencia", adminOnly: true, restrictedToCedula: "5820262" },
   { icon: Users, label: "Colaboradores", path: "/colaboradores", adminOnly: true },
   { icon: Settings, label: "Configuración", path: "/configuracion", adminOnly: true },
 ];
@@ -126,11 +121,9 @@ function DashboardLayoutContent({
   const activeMenuItem = menuItems.find((item) => item.path === location);
   const isMobile = useIsMobile();
 
-  const visibleMenuItems = menuItems.filter((item) => {
-    if (item.adminOnly && user?.role !== "admin") return false;
-    if (item.restrictedToCedula && user?.cedula !== item.restrictedToCedula) return false;
-    return true;
-  });
+  const visibleMenuItems = menuItems.filter(
+    (item) => !item.adminOnly || user?.role === "admin"
+  );
 
   useEffect(() => {
     if (isCollapsed) {
@@ -295,12 +288,7 @@ function DashboardLayoutContent({
             </div>
           </div>
         )}
-        <main className="flex-1 p-6">
-          <div className="mb-4">
-            <TimeTrackingBar />
-          </div>
-          {children}
-        </main>
+        <main className="flex-1 p-6">{children}</main>
       </SidebarInset>
     </>
   );
