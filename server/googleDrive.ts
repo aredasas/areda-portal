@@ -21,9 +21,17 @@ function getAuthClient() {
   const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
   const rawKey = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY;
   if (!email || !rawKey) return null;
-  // Railway env vars are single-line, so the key's real newlines arrive as
-  // literal "\n" — convert them back before handing to the JWT client.
-  const privateKey = rawKey.includes("\\n") ? rawKey.replace(/\\n/g, "\n") : rawKey;
+  // Expect the key base64-encoded — Railway's build system (Railpack) has a
+  // known issue detecting/parsing raw multi-line PEM values as env vars, so
+  // storing it as plain base64 text sidesteps that entirely.
+  let privateKey: string;
+  try {
+    const decoded = Buffer.from(rawKey, "base64").toString("utf-8");
+    privateKey = decoded.includes("BEGIN PRIVATE KEY") ? decoded : rawKey;
+  } catch {
+    privateKey = rawKey;
+  }
+  privateKey = privateKey.includes("\\n") ? privateKey.replace(/\\n/g, "\n") : privateKey;
   return new google.auth.JWT({
     email,
     key: privateKey,
@@ -81,3 +89,27 @@ export async function uploadFileToDrive(folderId: string, fileName: string, buff
   });
   return res.data;
 }
+
+/** Creates a new subfolder inside a client's Drive folder — used when the
+ * person typed a subfolder name that doesn't exist yet. */
+export async function createSubfolder(parentFolderId: string, name: string) {
+  const drive = getDriveClient();
+  const res = await drive.files.create({
+    requestBody: { name, mimeType: "application/vnd.google-apps.folder", parents: [parentFolderId] },
+    fields: "id, name",
+  });
+  return res.data;
+}
+
+/** Resolves which Drive folder a file should go into: the client's root
+ * folder if no subfolder name was given, an existing subfolder if the name
+ * matches one, or a newly-created subfolder otherwise. */
+export async function resolveUploadFolder(clientRootFolderId: string, subfolderName?: string | null): Promise<string> {
+  if (!subfolderName) return clientRootFolderId;
+  const existing = await listSubfolders(clientRootFolderId);
+  const match = existing.find(f => f.name?.toLowerCase() === subfolderName.toLowerCase());
+  if (match?.id) return match.id;
+  const created = await createSubfolder(clientRootFolderId, subfolderName);
+  return created.id as string;
+}
+

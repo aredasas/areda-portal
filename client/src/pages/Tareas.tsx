@@ -71,10 +71,16 @@ export default function Tareas() {
   const [newSubfolderName, setNewSubfolderName] = useState("");
 
   const completingTask = tasks?.find((t: any) => t.id === completingTaskId);
-  const { data: driveSubfolders } = trpc.clients.getDriveSubfolders.useQuery(
+  const { data: isDriveConfigured } = trpc.googleDrive.isConfigured.useQuery();
+  const { data: rememberedSubfolders } = trpc.clients.getDriveSubfolders.useQuery(
     { clientId: completingTask?.clientId as number },
-    { enabled: !!completingTask?.clientId }
+    { enabled: !!completingTask?.clientId && !isDriveConfigured }
   );
+  const { data: realDriveSubfolders, isLoading: isLoadingDriveSubfolders } = trpc.googleDrive.listSubfolders.useQuery(
+    { clientId: completingTask?.clientId as number },
+    { enabled: !!completingTask?.clientId && !!isDriveConfigured }
+  );
+  const driveSubfolders = isDriveConfigured ? realDriveSubfolders : rememberedSubfolders;
   const [showDetailDialog, setShowDetailDialog] = useState(false);
   const [detailTask, setDetailTask] = useState<any>(null);
   const [attachmentFile, setAttachmentFile] = useState<File | null>(null);
@@ -535,7 +541,9 @@ export default function Tareas() {
                   />
                 )}
                 <p className="text-xs text-muted-foreground">
-                  Esto es solo para llevar registro de en qué subcarpeta quedó guardado — recuerde subirlo usted mismo a esa subcarpeta dentro de Drive.
+                  {isDriveConfigured
+                    ? "El archivo se subirá automáticamente a esta subcarpeta en Google Drive."
+                    : "Esto es solo para llevar registro de en qué subcarpeta quedó guardado — recuerde subirlo usted mismo a esa subcarpeta dentro de Drive."}
                 </p>
               </div>
             )}

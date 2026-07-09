@@ -4,6 +4,49 @@ import crypto from "crypto";
 // Attendance/hours data ("Asistencia") is restricted to this one specific
 // admin by explicit business request — not all admins should see it.
 const ASISTENCIA_AUTHORIZED_CEDULA = "5820262";
+
+/** Best-effort copy of evidence files into the client's Drive folder.
+ * R2 remains the source of truth for the app itself (viewing/downloading
+ * evidence always works even if this fails) — this just also places a copy
+ * where the firm already expects to find client documents. Never throws:
+ * callers fire this without awaiting, so a Drive hiccup never blocks
+ * completing a task or deadline. */
+async function pushEvidenceToDrive(
+  clientId: number,
+  subfolderName: string | undefined,
+  files: { url: string; fileName: string; contentType?: string }[]
+) {
+  if (!isDriveConfigured()) {
+    console.warn("[Google Drive] Saltado: las variables de entorno no están configuradas.");
+    return;
+  }
+  const client = await db.getClientById(clientId);
+  if (!client?.driveFolderUrl) {
+    console.warn(`[Google Drive] Saltado: el cliente ${clientId} no tiene driveFolderUrl configurado.`);
+    return;
+  }
+  const rootFolderId = extractFolderIdFromUrl(client.driveFolderUrl);
+  if (!rootFolderId) {
+    console.warn(`[Google Drive] Saltado: no se pudo extraer el ID de carpeta de la URL "${client.driveFolderUrl}".`);
+    return;
+  }
+
+  console.log(`[Google Drive] Subiendo ${files.length} archivo(s) para el cliente ${clientId}, carpeta raíz ${rootFolderId}, subcarpeta "${subfolderName || "(ninguna)"}"`);
+  const targetFolderId = await resolveUploadFolder(rootFolderId, subfolderName);
+  console.log(`[Google Drive] Carpeta destino resuelta: ${targetFolderId}`);
+
+  for (const file of files) {
+    const response = await fetch(file.url);
+    if (!response.ok) {
+      console.error(`[Google Drive] No se pudo descargar ${file.fileName} desde R2 (${response.status})`);
+      continue;
+    }
+    const buffer = Buffer.from(await response.arrayBuffer());
+    const uploaded = await uploadFileToDrive(targetFolderId, file.fileName, buffer, file.contentType || "application/octet-stream");
+    console.log(`[Google Drive] Subido correctamente: ${file.fileName} -> ${uploaded.webViewLink}`);
+  }
+}
+
 import { TRPCError } from "@trpc/server";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
@@ -12,7 +55,7 @@ import { z } from "zod";
 import * as db from "./db";
 import { storagePut, storageGetSignedUrl } from "./storage";
 import { invokeLLM } from "./_core/llm";
-import { isDriveConfigured, extractFolderIdFromUrl, testFolderAccess, listSubfolders as listDriveSubfolders, uploadFileToDrive } from "./googleDrive";
+import { isDriveConfigured, extractFolderIdFromUrl, testFolderAccess, listSubfolders as listDriveSubfolders, uploadFileToDrive, resolveUploadFolder } from "./googleDrive";
 import { sdk } from "./_core/sdk";
 import { ONE_YEAR_MS } from "@shared/const";
 import bcrypt from "bcryptjs";
@@ -724,6 +767,9 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
         if (input.driveSubfolder) {
           await db.ensureClientDriveSubfolder(input.clientId, input.driveSubfolder);
         }
+        pushEvidenceToDrive(input.clientId, input.driveSubfolder, input.evidenceFiles).catch(err =>
+          console.error("[Google Drive] Error subiendo evidencia del vencimiento:", err)
+        );
         return { success: true };
       }),
     /** Admin-only: reopens a deadline mistakenly marked as completed. */
@@ -879,6 +925,9 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
         if (input.driveSubfolder) {
           await db.ensureClientDriveSubfolder(task.clientId, input.driveSubfolder);
         }
+        pushEvidenceToDrive(task.clientId, input.driveSubfolder, input.evidenceFiles).catch(err =>
+          console.error("[Google Drive] Error subiendo evidencia de la tarea:", err)
+        );
         return { success: true };
       }),
     /** Admin can reopen a completed task */

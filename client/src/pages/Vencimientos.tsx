@@ -93,10 +93,16 @@ export default function Vencimientos() {
   const [deadlineEvidenceFiles, setDeadlineEvidenceFiles] = useState<File[]>([]);
   const [selectedDeadlineSubfolder, setSelectedDeadlineSubfolder] = useState<string>("");
   const [newDeadlineSubfolderName, setNewDeadlineSubfolderName] = useState("");
-  const { data: deadlineDriveSubfolders } = trpc.clients.getDriveSubfolders.useQuery(
+  const { data: isDriveConfigured } = trpc.googleDrive.isConfigured.useQuery();
+  const { data: rememberedDeadlineSubfolders } = trpc.clients.getDriveSubfolders.useQuery(
     { clientId: completingDeadline?.clientId as number },
-    { enabled: !!completingDeadline?.clientId }
+    { enabled: !!completingDeadline?.clientId && !isDriveConfigured }
   );
+  const { data: realDeadlineDriveSubfolders } = trpc.googleDrive.listSubfolders.useQuery(
+    { clientId: completingDeadline?.clientId as number },
+    { enabled: !!completingDeadline?.clientId && !!isDriveConfigured }
+  );
+  const deadlineDriveSubfolders = isDriveConfigured ? realDeadlineDriveSubfolders : rememberedDeadlineSubfolders;
   const deadlineEvidenceInputRef = useRef<HTMLInputElement>(null);
 
   const handleOpenCompleteDeadline = (deadline: any) => {
@@ -983,7 +989,9 @@ export default function Vencimientos() {
                       />
                     )}
                     <p className="text-xs text-muted-foreground">
-                      Esto es solo para llevar registro de en qué subcarpeta quedó guardado — recuerde subirlo usted mismo a esa subcarpeta dentro de Drive.
+                      {isDriveConfigured
+                      ? "El archivo se subirá automáticamente a esta subcarpeta en Google Drive."
+                      : "Esto es solo para llevar registro de en qué subcarpeta quedó guardado — recuerde subirlo usted mismo a esa subcarpeta dentro de Drive."}
                     </p>
                   </div>
                 )}
