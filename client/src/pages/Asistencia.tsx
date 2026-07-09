@@ -153,9 +153,6 @@ export default function Asistencia() {
               if (marksByType.regreso_almuerzo && marksByType.fin) {
                 workedMs += marksByType.fin.getTime() - marksByType.regreso_almuerzo.getTime();
               }
-              if (marksByType.inicio && !marksByType.salida_almuerzo && !marksByType.fin) {
-                // Still working, no lunch marked yet — leave as 0 rather than guessing
-              }
 
               const userTasks = log?.completedTasks?.filter((t: any) => t.completedById === parseInt(userId)) || [];
               const userDeadlines = log?.completedDeadlines?.filter((d: any) => d.completedById === parseInt(userId)) || [];

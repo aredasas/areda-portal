@@ -40,7 +40,6 @@ export default function Asistente() {
       setMessagesByClient(prev => ({ ...prev, [clientId]: [...(prev[clientId] || []), { role: "assistant", content: answer }] }));
     } catch (error: any) {
       toast.error(error.message || "Error al consultar el asistente");
-      // Roll back the optimistically-added user message so the input isn't lost silently
       setMessagesByClient(prev => ({ ...prev, [clientId]: prev[clientId]?.slice(0, -1) || [] }));
       setInput(userMessage.content);
     }

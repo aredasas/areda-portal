@@ -12,6 +12,8 @@ import Colaboradores from "./pages/Colaboradores";
 import Documentos from "./pages/Documentos";
 import Configuracion from "./pages/Configuracion";
 import Revision from "./pages/Revision";
+import Asistencia from "./pages/Asistencia";
+import Asistente from "./pages/Asistente";
 import CambiarClave from "./pages/CambiarClave";
 
 function Router() {
@@ -25,6 +27,8 @@ function Router() {
       <Route path={"/colaboradores"} component={Colaboradores} />
       <Route path={"/configuracion"} component={Configuracion} />
       <Route path={"/revision"} component={Revision} />
+      <Route path={"/asistencia"} component={Asistencia} />
+      <Route path={"/asistente"} component={Asistente} />
       <Route path={"/cambiar-clave"} component={CambiarClave} />
       <Route path={"/404"} component={NotFound} />
       <Route component={NotFound} />

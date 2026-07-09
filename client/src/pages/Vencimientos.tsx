@@ -1,4 +1,5 @@
 import DashboardLayout from "@/components/DashboardLayout";
+import CommentsSection from "@/components/CommentsSection";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -12,7 +13,7 @@ import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { trpc } from "@/lib/trpc";
-import { Calendar, Loader2, RefreshCw, Settings2, CheckCircle2, ChevronLeft, ChevronRight, List, CalendarDays, Pencil, Upload, FileText, FolderOpen, RotateCcw, X } from "lucide-react";
+import { Calendar, Loader2, RefreshCw, Settings2, CheckCircle2, ChevronLeft, ChevronRight, List, CalendarDays, Pencil, Upload, FileText, FolderOpen, RotateCcw, X, MessageSquare } from "lucide-react";
 import { useState, useMemo, useRef } from "react";
 import { toast } from "sonner";
 
@@ -88,6 +89,7 @@ export default function Vencimientos() {
 
   const [showCompleteDeadlineDialog, setShowCompleteDeadlineDialog] = useState(false);
   const [completingDeadline, setCompletingDeadline] = useState<any>(null);
+  const [commentingDeadline, setCommentingDeadline] = useState<any>(null);
   const [deadlineEvidenceFiles, setDeadlineEvidenceFiles] = useState<File[]>([]);
   const [selectedDeadlineSubfolder, setSelectedDeadlineSubfolder] = useState<string>("");
   const [newDeadlineSubfolderName, setNewDeadlineSubfolderName] = useState("");
@@ -276,11 +278,11 @@ export default function Vencimientos() {
     }
     try {
       const result = await generateDeadlines.mutateAsync({ clientId: parseInt(selectedClient), year: calendarYear });
-      toast.success(`Se generaron ${result.count} vencimientos`);
+      toast.success(result.message || `Se generaron ${result.count} vencimientos`);
       refetchClientDeadlines();
       refetchUpcoming();
-    } catch {
-      toast.error("Error al generar vencimientos");
+    } catch (error: any) {
+      toast.error(error.message || "Error al generar vencimientos");
     }
   };
 
@@ -796,6 +798,15 @@ export default function Vencimientos() {
                           </TableCell>
                           <TableCell className="text-right">
                             <div className="flex gap-1 justify-end">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="text-muted-foreground"
+                                onClick={() => setCommentingDeadline(d)}
+                                title="Comentarios"
+                              >
+                                <MessageSquare className="h-3.5 w-3.5" />
+                              </Button>
                               {d.status !== "completado" && (
                                 <Button
                                   variant="outline"
@@ -1059,6 +1070,23 @@ export default function Vencimientos() {
                 Guardar
               </Button>
             </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Comments dialog */}
+        <Dialog open={!!commentingDeadline} onOpenChange={(open) => { if (!open) setCommentingDeadline(null); }}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>Comentarios</DialogTitle>
+              {commentingDeadline && (
+                <p className="text-sm text-muted-foreground">
+                  {commentingDeadline.obligationName} — {commentingDeadline.period}
+                </p>
+              )}
+            </DialogHeader>
+            {commentingDeadline && (
+              <CommentsSection entityType="deadline" entityId={commentingDeadline.id} />
+            )}
           </DialogContent>
         </Dialog>
       </div>

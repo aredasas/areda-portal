@@ -2,6 +2,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { useAuth } from "@/_core/hooks/useAuth";
 import DashboardLayout from "@/components/DashboardLayout";
+import CommentsSection from "@/components/CommentsSection";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -336,6 +337,10 @@ export default function Revision() {
                       </Button>
                     </div>
                   )}
+                </div>
+
+                <div className="border-t pt-3">
+                  <CommentsSection entityType={selectedItem.itemType} entityId={selectedItem.id} />
                 </div>
               </div>
             </>

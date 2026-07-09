@@ -1,4 +1,5 @@
 import DashboardLayout from "@/components/DashboardLayout";
+import CommentsSection from "@/components/CommentsSection";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -699,6 +700,10 @@ export default function Tareas() {
                     )}
                   </div>
                 )}
+              </div>
+
+              <div className="border-t pt-3">
+                <CommentsSection entityType="task" entityId={detailTask.id} />
               </div>
             </div>
           )}
