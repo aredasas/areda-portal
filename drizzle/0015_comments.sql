@@ -1,4 +1,4 @@
-CREATE TABLE `comments` (
+CREATE TABLE IF NOT EXISTS `comments` (
 	`id` int AUTO_INCREMENT NOT NULL,
 	`entityType` enum('task','deadline') NOT NULL,
 	`entityId` int NOT NULL,
