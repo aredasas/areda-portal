@@ -64,7 +64,7 @@ import { z } from "zod";
 import * as db from "./db";
 import { storagePut, storageGetSignedUrl } from "./storage";
 import { invokeLLM } from "./_core/llm";
-import { isDriveConfigured, extractFolderIdFromUrl, testFolderAccess, listSubfoldersRecursive, uploadFileToDrive, resolveUploadFolder } from "./googleDrive";
+import { isDriveConfigured, extractFolderIdFromUrl, testFolderAccess, listSubfoldersRecursive, listAllFilesRecursive, uploadFileToDrive, resolveUploadFolder } from "./googleDrive";
 import { sdk } from "./_core/sdk";
 import { ONE_YEAR_MS } from "@shared/const";
 import bcrypt from "bcryptjs";
@@ -1197,6 +1197,9 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
           throw new TRPCError({ code: "FORBIDDEN", message: "No tiene acceso a este cliente" });
         }
 
+        // Content the assistant can actually "read" — evidence already
+        // uploaded through the app (reliably fetchable), capped so the
+        // request stays within reasonable size/cost.
         const evidence = await db.getClientEvidenceContext(input.clientId, 8);
         const evidenceBlocks = evidence
           .filter(e => e.contentType === "application/pdf" || (e.contentType || "").startsWith("image/"))
@@ -1204,15 +1207,55 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
             type: "file_url" as const,
             file_url: { url: e.fileUrl, mime_type: e.contentType || "application/pdf" },
           }));
-
         const evidenceList = evidence.map(e => `- ${e.title} (${e.detail}${e.date ? `, ${new Date(e.date).toLocaleDateString("es-CO")}` : ""})`).join("\n");
+
+        // Full Drive folder listing — awareness only (names/paths/dates),
+        // not full content, since a client's folder can hold far more
+        // documents than fit in one conversation.
+        let driveFilesList = "";
+        if (isDriveConfigured() && client.driveFolderUrl) {
+          const rootFolderId = extractFolderIdFromUrl(client.driveFolderUrl);
+          if (rootFolderId) {
+            try {
+              const allFiles = await listAllFilesRecursive(rootFolderId);
+              driveFilesList = allFiles
+                .slice(0, 100)
+                .map(f => `- ${f.path} (modificado ${new Date(f.modifiedTime).toLocaleDateString("es-CO")})`)
+                .join("\n");
+            } catch (err) {
+              console.error("[Asistente IA] Error listando archivos de Drive:", err);
+            }
+          }
+        }
+
+        // Operational context: tasks, deadlines, and their comments.
+        const { tasks: clientTasks, deadlines: clientDeadlines } = await db.getClientOperationalContext(input.clientId);
+        const tasksSummary = clientTasks.map(t => {
+          const commentsText = t.comments.length > 0
+            ? "\n  Comentarios: " + t.comments.map((c: any) => `[${c.authorName}: ${c.content}]`).join(" ")
+            : "";
+          return `- "${t.title}" — estado: ${t.status}, asignada a: ${t.assignedToName || "sin asignar"}${t.dueDate ? `, vence: ${new Date(t.dueDate).toLocaleDateString("es-CO")}` : ""}${t.completionNotes ? `, notas: ${t.completionNotes}` : ""}${commentsText}`;
+        }).join("\n");
+        const deadlinesSummary = clientDeadlines.map(d => {
+          const commentsText = d.comments.length > 0
+            ? "\n  Comentarios: " + d.comments.map((c: any) => `[${c.authorName}: ${c.content}]`).join(" ")
+            : "";
+          return `- ${d.obligationName} — período ${d.period}, estado: ${d.status}, vence: ${new Date(d.dueDate).toLocaleDateString("es-CO")}${commentsText}`;
+        }).join("\n");
 
         const systemPrompt = `Eres un asistente contable para el equipo de Areda SAS, una firma de contaduría en Colombia. Estás ayudando a un colaborador con preguntas sobre el cliente "${client.razonSocial}" (NIT ${client.nit}).
 
-Documentos disponibles como contexto (soportes ya subidos de tareas y vencimientos completados de este cliente):
+Documentos con contenido disponible para leer (soportes ya subidos de tareas y vencimientos completados de este cliente):
 ${evidenceList || "No hay documentos de soporte cargados aún para este cliente."}
 
-Responde basándote en estos documentos cuando sea posible. Si la pregunta requiere información que no está en los documentos disponibles, dilo claramente en vez de inventar datos. Sé conciso y directo, como corresponde a un contexto de trabajo contable.`;
+${driveFilesList ? `Otros documentos que existen en la carpeta de Drive del cliente (solo conoces el nombre y la fecha, NO el contenido — si el usuario necesita el contenido de alguno de estos, dile que lo abra manualmente en Drive):\n${driveFilesList}\n` : ""}
+Tareas de este cliente (con sus comentarios, si tienen):
+${tasksSummary || "No hay tareas registradas para este cliente."}
+
+Vencimientos tributarios de este cliente (con sus comentarios, si tienen):
+${deadlinesSummary || "No hay vencimientos registrados para este cliente."}
+
+Responde basándote en esta información cuando sea posible. Si la pregunta requiere el contenido de un documento que no tienes disponible (solo aparece en la lista de "otros documentos"), dile al usuario que lo revise directamente en Drive en vez de inventar su contenido. Sé conciso y directo, como corresponde a un contexto de trabajo contable.`;
 
         const historyMessages = (input.history || []).map(h => ({ role: h.role, content: h.content }));
 

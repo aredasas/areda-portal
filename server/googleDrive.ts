@@ -106,6 +106,50 @@ export async function listSubfoldersRecursive(
   return results;
 }
 
+/** Lists every FILE (not folder) inside a client's Drive folder, walking
+ * into subfolders too — gives the AI assistant awareness of everything that
+ * exists there (names, paths, when last modified), even though reading the
+ * full content of all of them in one go isn't practical. */
+export async function listAllFilesRecursive(
+  rootFolderId: string,
+  maxDepth: number = 3
+): Promise<{ id: string; name: string; path: string; mimeType: string; modifiedTime: string }[]> {
+  const drive = getDriveClient();
+  const results: { id: string; name: string; path: string; mimeType: string; modifiedTime: string }[] = [];
+
+  async function walk(folderId: string, pathPrefix: string, depth: number) {
+    if (depth > maxDepth) return;
+    const res = await drive.files.list({
+      q: `'${folderId}' in parents and trashed = false`,
+      fields: "files(id, name, mimeType, modifiedTime)",
+      orderBy: "modifiedTime desc",
+      pageSize: 200,
+      supportsAllDrives: true,
+      includeItemsFromAllDrives: true,
+      corpora: "allDrives",
+    });
+    const children = res.data.files || [];
+    for (const child of children) {
+      if (!child.id || !child.name) continue;
+      const path = pathPrefix ? `${pathPrefix} / ${child.name}` : child.name;
+      if (child.mimeType === "application/vnd.google-apps.folder") {
+        await walk(child.id, path, depth + 1);
+      } else {
+        results.push({
+          id: child.id,
+          name: child.name,
+          path,
+          mimeType: child.mimeType || "",
+          modifiedTime: child.modifiedTime || "",
+        });
+      }
+    }
+  }
+
+  await walk(rootFolderId, "", 1);
+  return results;
+}
+
 /** Uploads a file into a specific Drive folder (a client's folder or one of
  * its subfolders) and returns its id + a link to view it. */
 export async function uploadFileToDrive(folderId: string, fileName: string, buffer: Buffer, mimeType: string) {

@@ -702,6 +702,53 @@ export async function getCommentCounts(entityType: "task" | "deadline", entityId
   return map;
 }
 
+/** Recent/relevant tasks and deadlines for a client, with their comments —
+ * gives the AI assistant real operational awareness (what's pending, what
+ * was discussed) instead of only reading uploaded documents. */
+export async function getClientOperationalContext(clientId: number) {
+  const db = await getDb();
+  if (!db) return { tasks: [] as any[], deadlines: [] as any[] };
+
+  const clientTasks = await db.select({
+    id: tasks.id,
+    title: tasks.title,
+    description: tasks.description,
+    status: tasks.status,
+    dueDate: tasks.dueDate,
+    assignedToName: users.name,
+    completedAt: tasks.completedAt,
+    completionNotes: tasks.completionNotes,
+  })
+    .from(tasks)
+    .leftJoin(users, eq(tasks.assignedToId, users.id))
+    .where(eq(tasks.clientId, clientId))
+    .orderBy(desc(tasks.createdAt))
+    .limit(15);
+
+  const clientDeadlines = await db.select({
+    id: taxDeadlines.id,
+    obligationName: taxObligations.name,
+    period: taxDeadlines.period,
+    dueDate: taxDeadlines.dueDate,
+    status: taxDeadlines.status,
+    completedAt: taxDeadlines.completedAt,
+  })
+    .from(taxDeadlines)
+    .innerJoin(taxObligations, eq(taxDeadlines.obligationId, taxObligations.id))
+    .where(eq(taxDeadlines.clientId, clientId))
+    .orderBy(desc(taxDeadlines.dueDate))
+    .limit(15);
+
+  const tasksWithComments = await Promise.all(
+    clientTasks.map(async t => ({ ...t, comments: await getComments("task", t.id) }))
+  );
+  const deadlinesWithComments = await Promise.all(
+    clientDeadlines.map(async d => ({ ...d, comments: await getComments("deadline", d.id) }))
+  );
+
+  return { tasks: tasksWithComments, deadlines: deadlinesWithComments };
+}
+
 /** Admin-only: reopens a deadline that was mistakenly marked completed. */
 export async function reopenDeadline(id: number) {
   const db = await getDb();
