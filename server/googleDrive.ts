@@ -60,7 +60,7 @@ export function extractFolderIdFromUrl(url: string): string | null {
  * specific folder has actually been shared with the service account. */
 export async function testFolderAccess(folderId: string) {
   const drive = getDriveClient();
-  const res = await drive.files.get({ fileId: folderId, fields: "id, name, mimeType" });
+  const res = await drive.files.get({ fileId: folderId, fields: "id, name, mimeType", supportsAllDrives: true });
   return res.data;
 }
 
@@ -74,6 +74,9 @@ export async function listSubfolders(folderId: string) {
     fields: "files(id, name)",
     orderBy: "name",
     pageSize: 100,
+    supportsAllDrives: true,
+    includeItemsFromAllDrives: true,
+    corpora: "allDrives",
   });
   return res.data.files || [];
 }
@@ -86,6 +89,7 @@ export async function uploadFileToDrive(folderId: string, fileName: string, buff
     requestBody: { name: fileName, parents: [folderId] },
     media: { mimeType, body: Readable.from(buffer) },
     fields: "id, name, webViewLink",
+    supportsAllDrives: true,
   });
   return res.data;
 }
@@ -97,6 +101,7 @@ export async function createSubfolder(parentFolderId: string, name: string) {
   const res = await drive.files.create({
     requestBody: { name, mimeType: "application/vnd.google-apps.folder", parents: [parentFolderId] },
     fields: "id, name",
+    supportsAllDrives: true,
   });
   return res.data;
 }
