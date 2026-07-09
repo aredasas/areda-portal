@@ -1201,12 +1201,17 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
         // uploaded through the app (reliably fetchable), capped so the
         // request stays within reasonable size/cost.
         const evidence = await db.getClientEvidenceContext(input.clientId, 8);
-        const evidenceBlocks = evidence
-          .filter(e => e.contentType === "application/pdf" || (e.contentType || "").startsWith("image/"))
-          .map(e => ({
-            type: "file_url" as const,
-            file_url: { url: e.fileUrl, mime_type: e.contentType || "application/pdf" },
-          }));
+        const evidenceBlocks = await Promise.all(
+          evidence
+            .filter(e => e.contentType === "application/pdf" || (e.contentType || "").startsWith("image/"))
+            .map(async e => ({
+              type: "file_url" as const,
+              file_url: {
+                url: await storageGetSignedUrl(e.fileKey || e.fileUrl.replace(/^\/files\//, "")),
+                mime_type: e.contentType || "application/pdf",
+              },
+            }))
+        );
         const evidenceList = evidence.map(e => `- ${e.title} (${e.detail}${e.date ? `, ${new Date(e.date).toLocaleDateString("es-CO")}` : ""})`).join("\n");
 
         // Full Drive folder listing — awareness only (names/paths/dates),

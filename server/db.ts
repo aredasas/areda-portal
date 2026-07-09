@@ -608,11 +608,12 @@ export async function getTimeTrackingLog(start: Date, end: Date, userId?: number
  * instead of guessing. */
 export async function getClientEvidenceContext(clientId: number, limit: number = 8) {
   const db = await getDb();
-  if (!db) return [] as { title: string; detail: string; date: Date | null; fileUrl: string; contentType: string | null }[];
+  if (!db) return [] as { title: string; detail: string; date: Date | null; fileUrl: string; fileKey: string; contentType: string | null }[];
 
   const taskEvidence = await db.select({
     fileName: taskAttachments.fileName,
     fileUrl: taskAttachments.fileUrl,
+    fileKey: taskAttachments.fileKey,
     contentType: taskAttachments.contentType,
     createdAt: taskAttachments.createdAt,
     taskTitle: tasks.title,
@@ -626,6 +627,7 @@ export async function getClientEvidenceContext(clientId: number, limit: number =
   const deadlineEvidence = await db.select({
     fileName: deadlineAttachments.fileName,
     fileUrl: deadlineAttachments.fileUrl,
+    fileKey: deadlineAttachments.fileKey,
     contentType: deadlineAttachments.contentType,
     createdAt: deadlineAttachments.createdAt,
     obligationName: taxObligations.name,
@@ -644,6 +646,7 @@ export async function getClientEvidenceContext(clientId: number, limit: number =
       detail: `Soporte de la tarea "${t.taskTitle}"`,
       date: t.createdAt,
       fileUrl: t.fileUrl,
+      fileKey: t.fileKey,
       contentType: t.contentType,
     })),
     ...deadlineEvidence.map(d => ({
@@ -651,6 +654,7 @@ export async function getClientEvidenceContext(clientId: number, limit: number =
       detail: `Soporte de "${d.obligationName}" — período ${d.period}`,
       date: d.createdAt,
       fileUrl: d.fileUrl,
+      fileKey: d.fileKey,
       contentType: d.contentType,
     })),
   ];
