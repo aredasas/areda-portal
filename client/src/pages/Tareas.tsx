@@ -292,11 +292,11 @@ export default function Tareas() {
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList>
           <TabsTrigger value="todas">Todas ({tasks?.length || 0})</TabsTrigger>
-          <TabsTrigger value="pendiente">Pendientes</TabsTrigger>
-          <TabsTrigger value="en_progreso">En Progreso</TabsTrigger>
-          <TabsTrigger value="completada">Completadas</TabsTrigger>
-          <TabsTrigger value="vencida">Vencidas</TabsTrigger>
-          <TabsTrigger value="cancelada">Canceladas</TabsTrigger>
+          <TabsTrigger value="pendiente">Pendientes ({tasks?.filter((t: any) => t.status === "pendiente").length || 0})</TabsTrigger>
+          <TabsTrigger value="en_progreso">En Progreso ({tasks?.filter((t: any) => t.status === "en_progreso").length || 0})</TabsTrigger>
+          <TabsTrigger value="completada">Completadas ({tasks?.filter((t: any) => t.status === "completada").length || 0})</TabsTrigger>
+          <TabsTrigger value="vencida">Vencidas ({tasks?.filter((t: any) => t.status === "vencida").length || 0})</TabsTrigger>
+          <TabsTrigger value="cancelada">Canceladas ({tasks?.filter((t: any) => t.status === "cancelada").length || 0})</TabsTrigger>
         </TabsList>
 
         <TabsContent value={activeTab} className="mt-4">
