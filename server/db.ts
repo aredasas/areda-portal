@@ -420,9 +420,14 @@ export async function getClientDeadlines(clientId: number) {
 export async function getUpcomingDeadlines(daysAhead: number = 30, managerId?: number) {
   const db = await getDb();
   if (!db) return [];
-  const now = new Date();
-  const future = new Date();
-  future.setDate(future.getDate() + daysAhead);
+  const nowInstant = new Date();
+  // Compare against the START of today (UTC), not the exact current
+  // moment — deadline dates are stored as UTC midnight of their calendar
+  // day, so comparing against "right now" would exclude anything due
+  // "today" the instant any time passes past midnight (i.e. always).
+  const now = new Date(Date.UTC(nowInstant.getUTCFullYear(), nowInstant.getUTCMonth(), nowInstant.getUTCDate()));
+  const future = new Date(now);
+  future.setUTCDate(future.getUTCDate() + daysAhead);
   const baseConditions = and(
     inArray(taxDeadlines.status, ["pendiente", "en_progreso"]),
     gte(taxDeadlines.dueDate, now),
