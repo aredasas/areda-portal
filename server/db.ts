@@ -753,6 +753,33 @@ export async function getClientOperationalContext(clientId: number) {
   return { tasks: tasksWithComments, deadlines: deadlinesWithComments };
 }
 
+/** Wipes ALL tasks and tax deadlines (and everything that hangs off them:
+ * attachments, comments) — used once to clear out test/demo data before
+ * starting real tracking. Deliberately does NOT touch clients, the
+ * obligations catalog, client-obligation assignments, collaborators, or the
+ * DIAN calendar — all of that is real master data needed to regenerate
+ * deadlines afterward. Only callable from the one-off script, not exposed
+ * as an API endpoint, since this is destructive and irreversible. */
+export async function clearAllTasksAndDeadlines() {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  const [taskCountRows] = await db.select({ count: sql<number>`count(*)` }).from(tasks);
+  const [deadlineCountRows] = await db.select({ count: sql<number>`count(*)` }).from(taxDeadlines);
+  const taskCount = Number(taskCountRows?.count || 0);
+  const deadlineCount = Number(deadlineCountRows?.count || 0);
+
+  // Children first, then the parent rows.
+  await db.delete(comments).where(eq(comments.entityType, "task"));
+  await db.delete(comments).where(eq(comments.entityType, "deadline"));
+  await db.delete(taskAttachments);
+  await db.delete(deadlineAttachments);
+  await db.delete(tasks);
+  await db.delete(taxDeadlines);
+
+  return { tasksDeleted: taskCount, deadlinesDeleted: deadlineCount };
+}
+
 /** Admin-only: reopens a deadline that was mistakenly marked completed. */
 export async function reopenDeadline(id: number) {
   const db = await getDb();
