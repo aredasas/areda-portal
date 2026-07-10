@@ -336,6 +336,9 @@ export const notifications = mysqlTable("notifications", {
   type: mysqlEnum("type", ["comentario", "aprobada", "correccion_solicitada"]).notNull(),
   entityType: mysqlEnum("entityType", ["task", "deadline"]).notNull(),
   entityId: int("entityId").notNull(),
+  /** So clicking a notification can jump straight to the right client's
+   * deadlines view, without an extra lookup. */
+  clientId: int("clientId"),
   title: varchar("title", { length: 255 }).notNull(),
   message: text("message"),
   isRead: boolean("isRead").default(false).notNull(),

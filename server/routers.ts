@@ -249,7 +249,10 @@ export const appRouter = router({
 
   auth: router({
     me: publicProcedure.query(opts => opts.ctx.user),
-    logout: publicProcedure.mutation(({ ctx }) => {
+    logout: publicProcedure.mutation(async ({ ctx }) => {
+      if (ctx.user?.id) {
+        await db.cleanupOldReadNotifications(ctx.user.id);
+      }
       const cookieOptions = getSessionCookieOptions(ctx.req);
       ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
       return { success: true } as const;
@@ -804,7 +807,7 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
         const deadline = await db.getDeadlineById(input.id);
         const client = deadline ? await db.getClientById(deadline.clientId) : null;
         if (client?.managerId && client.managerId !== ctx.user.id) {
-          await db.createNotification(client.managerId, "aprobada", "deadline", input.id, `Vencimiento — período ${deadline!.period}`, input.reviewNotes);
+          await db.createNotification(client.managerId, "aprobada", "deadline", input.id, `Vencimiento — período ${deadline!.period}`, input.reviewNotes, deadline!.clientId);
         }
         return { success: true };
       }),
@@ -817,7 +820,7 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
         const deadline = await db.getDeadlineById(input.id);
         const client = deadline ? await db.getClientById(deadline.clientId) : null;
         if (client?.managerId && client.managerId !== ctx.user.id) {
-          await db.createNotification(client.managerId, "correccion_solicitada", "deadline", input.id, `Vencimiento — período ${deadline!.period}`, input.reviewNotes);
+          await db.createNotification(client.managerId, "correccion_solicitada", "deadline", input.id, `Vencimiento — período ${deadline!.period}`, input.reviewNotes, deadline!.clientId);
         }
         return { success: true };
       }),
@@ -1049,7 +1052,7 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
         await db.approveTask(input.id, ctx.user.id, input.reviewNotes);
         const task = await db.getTaskById(input.id);
         if (task?.assignedToId && task.assignedToId !== ctx.user.id) {
-          await db.createNotification(task.assignedToId, "aprobada", "task", input.id, task.title, input.reviewNotes);
+          await db.createNotification(task.assignedToId, "aprobada", "task", input.id, task.title, input.reviewNotes, task.clientId);
         }
         return { success: true };
       }),
@@ -1061,7 +1064,7 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
         await db.requestTaskCorrection(input.id, ctx.user.id, input.reviewNotes);
         const task = await db.getTaskById(input.id);
         if (task?.assignedToId && task.assignedToId !== ctx.user.id) {
-          await db.createNotification(task.assignedToId, "correccion_solicitada", "task", input.id, task.title, input.reviewNotes);
+          await db.createNotification(task.assignedToId, "correccion_solicitada", "task", input.id, task.title, input.reviewNotes, task.clientId);
         }
         return { success: true };
       }),
@@ -1408,7 +1411,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           // assignee themselves commented.
           const recipient = task.assignedToId !== ctx.user.id ? task.assignedToId : task.createdById;
           if (recipient && recipient !== ctx.user.id) {
-            await db.createNotification(recipient, "comentario", "task", task.id, task.title, input.content);
+            await db.createNotification(recipient, "comentario", "task", task.id, task.title, input.content, task.clientId);
           }
         } else {
           const deadline = await db.getDeadlineById(input.entityId);
@@ -1421,7 +1424,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           }
           await db.createComment(input.entityType, input.entityId, ctx.user.id, input.content);
           if (client?.managerId && client.managerId !== ctx.user.id) {
-            await db.createNotification(client.managerId, "comentario", "deadline", deadline.id, `Vencimiento — período ${deadline.period}`, input.content);
+            await db.createNotification(client.managerId, "comentario", "deadline", deadline.id, `Vencimiento — período ${deadline.period}`, input.content, deadline.clientId);
           }
         }
         return { success: true };
@@ -1473,6 +1476,9 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
         return db.getNotifications(ctx.user.id, input?.limit);
       }),
     unreadCount: protectedProcedure.query(async ({ ctx }) => {
+      // Piggyback housekeeping on this frequent poll instead of a separate
+      // scheduled job — deletes old READ notifications only.
+      await db.cleanupOldReadNotifications(ctx.user.id);
       return db.getUnreadNotificationCount(ctx.user.id);
     }),
     markRead: protectedProcedure

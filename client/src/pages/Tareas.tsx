@@ -13,7 +13,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { trpc } from "@/lib/trpc";
 import { ClipboardList, Plus, Loader2, Calendar, Upload, CheckCircle2, RotateCcw, Paperclip, FileText, Eye, FolderOpen, XCircle, X } from "lucide-react";
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { toast } from "sonner";
 
 const statusLabels: Record<string, string> = {
@@ -83,6 +83,23 @@ export default function Tareas() {
   const driveSubfolders = isDriveConfigured ? realDriveSubfolders : rememberedSubfolders;
   const [showDetailDialog, setShowDetailDialog] = useState(false);
   const [detailTask, setDetailTask] = useState<any>(null);
+
+  // Coming from a notification click ("/tareas?taskId=X") — open that
+  // task's detail automatically once the list has loaded.
+  useEffect(() => {
+    if (!tasks) return;
+    const params = new URLSearchParams(window.location.search);
+    const taskId = params.get("taskId");
+    if (taskId) {
+      const match = tasks.find((t: any) => String(t.id) === taskId);
+      if (match) {
+        setDetailTask(match);
+        setShowDetailDialog(true);
+      }
+      // Clean the URL so refreshing the page doesn't keep reopening it.
+      window.history.replaceState({}, "", "/tareas");
+    }
+  }, [tasks]);
   const [attachmentFile, setAttachmentFile] = useState<File | null>(null);
   const evidenceInputRef = useRef<HTMLInputElement>(null);
   const attachInputRef = useRef<HTMLInputElement>(null);

@@ -761,14 +761,15 @@ export async function createNotification(
   entityType: "task" | "deadline",
   entityId: number,
   title: string,
-  message?: string | null
+  message?: string | null,
+  clientId?: number | null
 ) {
   const db = await getDb();
   if (!db) return;
   // No point notifying someone about their own action, and avoids a
   // pointless row if a system ever calls this for the same user by mistake.
   if (!userId) return;
-  await db.insert(notifications).values({ userId, type, entityType, entityId, title, message: message || null });
+  await db.insert(notifications).values({ userId, type, entityType, entityId, title, message: message || null, clientId: clientId || null });
 }
 
 export async function getNotifications(userId: number, limit: number = 20) {
@@ -799,6 +800,20 @@ export async function markAllNotificationsRead(userId: number) {
   const db = await getDb();
   if (!db) return;
   await db.update(notifications).set({ isRead: true }).where(and(eq(notifications.userId, userId), eq(notifications.isRead, false)));
+}
+
+/** Housekeeping — deletes already-read notifications older than a day, so
+ * the list doesn't grow forever. Deliberately never touches unread ones,
+ * even if old, so nothing actionable gets silently lost. Runs piggybacked
+ * on normal traffic (checking unread count, logging out) rather than a
+ * separate scheduled job, since there's no cron infrastructure for this app. */
+export async function cleanupOldReadNotifications(userId: number) {
+  const db = await getDb();
+  if (!db) return;
+  const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  await db.delete(notifications).where(
+    and(eq(notifications.userId, userId), eq(notifications.isRead, true), lte(notifications.createdAt, oneDayAgo))
+  );
 }
 
 /** Recent/relevant tasks and deadlines for a client, with their comments —

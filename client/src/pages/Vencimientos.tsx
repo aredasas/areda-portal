@@ -14,7 +14,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { trpc } from "@/lib/trpc";
 import { Calendar, Loader2, RefreshCw, Settings2, CheckCircle2, ChevronLeft, ChevronRight, List, CalendarDays, Pencil, Upload, FileText, FolderOpen, RotateCcw, X, MessageSquare } from "lucide-react";
-import { useState, useMemo, useRef } from "react";
+import { useState, useMemo, useRef, useEffect } from "react";
 import { toast } from "sonner";
 
 const statusLabels: Record<string, string> = {
@@ -93,6 +93,26 @@ export default function Vencimientos() {
   const [deadlineEvidenceFiles, setDeadlineEvidenceFiles] = useState<File[]>([]);
   const [selectedDeadlineSubfolder, setSelectedDeadlineSubfolder] = useState<string>("");
   const [newDeadlineSubfolderName, setNewDeadlineSubfolderName] = useState("");
+
+  // Coming from a notification click ("/vencimientos?clientId=X&deadlineId=Y")
+  // — select that client automatically so its deadlines load.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const clientId = params.get("clientId");
+    if (clientId) setSelectedClient(clientId);
+  }, []);
+
+  // Once that client's deadlines have loaded, open the comments dialog for
+  // the specific one the notification was about, then clean the URL.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const deadlineId = params.get("deadlineId");
+    if (deadlineId && clientDeadlines) {
+      const match = clientDeadlines.find((d: any) => String(d.id) === deadlineId);
+      if (match) setCommentingDeadline(match);
+      window.history.replaceState({}, "", "/vencimientos");
+    }
+  }, [clientDeadlines]);
   const { data: isDriveConfigured } = trpc.googleDrive.isConfigured.useQuery();
   const { data: rememberedDeadlineSubfolders } = trpc.clients.getDriveSubfolders.useQuery(
     { clientId: completingDeadline?.clientId as number },

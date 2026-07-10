@@ -41,7 +41,11 @@ export default function NotificationBell() {
       refetchList();
     }
     setOpen(false);
-    setLocation(n.entityType === "task" ? "/tareas" : "/vencimientos");
+    if (n.entityType === "task") {
+      setLocation(`/tareas?taskId=${n.entityId}`);
+    } else {
+      setLocation(`/vencimientos?clientId=${n.clientId}&deadlineId=${n.entityId}`);
+    }
   };
 
   const handleMarkAllRead = async () => {
