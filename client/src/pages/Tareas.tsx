@@ -576,11 +576,9 @@ export default function Tareas() {
               {evidenceFiles.length > 0 && (
                 <div className="space-y-1">
                   {evidenceFiles.map((f, idx) => (
-                    <div key={idx} className="flex items-center justify-between bg-muted/50 rounded px-2 py-1">
-                      <span className="flex items-center gap-2 text-sm min-w-0">
-                        <FileText className="h-4 w-4 text-[#EDA011] shrink-0" />
-                        <span className="truncate">{f.name}</span>
-                      </span>
+                    <div key={idx} className="flex items-center gap-2 bg-muted/50 rounded px-2 py-1 w-full min-w-0">
+                      <FileText className="h-4 w-4 text-[#EDA011] shrink-0" />
+                      <span className="flex-1 min-w-0 truncate text-sm" title={f.name}>{f.name}</span>
                       <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" onClick={() => setEvidenceFiles(prev => prev.filter((_, i) => i !== idx))}>
                         <X className="h-3.5 w-3.5" />
                       </Button>
