@@ -312,7 +312,15 @@ export default function Home() {
                     <div className="space-y-2 max-h-[340px] overflow-auto">
                       {dashboard.upcomingItems.map((item: any) => {
                         const itemDate = new Date(item.date);
-                        const daysLeft = Math.ceil((itemDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+                        // Compare against the START of today in UTC — item
+                        // dates are stored as UTC midnight of their
+                        // calendar day, so comparing against the exact
+                        // current instant would make anything overdue by
+                        // less than 24h read as "1 day left" instead of
+                        // "vencido", and things due earlier today could
+                        // read wrong depending on the time of day.
+                        const todayUTCMidnight = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+                        const daysLeft = Math.round((itemDate.getTime() - todayUTCMidnight.getTime()) / (1000 * 60 * 60 * 24));
                         return (
                           <div key={item.id} className="flex items-center justify-between p-3 rounded-lg bg-muted/50 hover:bg-muted transition-colors">
                             <div className="min-w-0 flex-1">
@@ -326,8 +334,8 @@ export default function Home() {
                             </div>
                             <div className="text-right shrink-0 ml-2">
                               <p className="text-xs text-muted-foreground">{itemDate.toLocaleDateString("es-CO", { day: "2-digit", month: "short", timeZone: "UTC" })}</p>
-                              <Badge variant="outline" className={daysLeft <= 5 ? "bg-red-50 text-red-700 border-red-200" : daysLeft <= 10 ? "bg-yellow-50 text-yellow-700 border-yellow-200" : "bg-green-50 text-green-700 border-green-200"}>
-                                {daysLeft <= 0 ? "Hoy" : `${daysLeft}d`}
+                              <Badge variant="outline" className={daysLeft < 0 ? "bg-red-100 text-red-800 border-red-300" : daysLeft <= 5 ? "bg-red-50 text-red-700 border-red-200" : daysLeft <= 10 ? "bg-yellow-50 text-yellow-700 border-yellow-200" : "bg-green-50 text-green-700 border-green-200"}>
+                                {daysLeft < 0 ? `Vencido ${Math.abs(daysLeft)}d` : daysLeft === 0 ? "Hoy" : `${daysLeft}d`}
                               </Badge>
                             </div>
                           </div>

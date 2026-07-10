@@ -571,7 +571,13 @@ export default function Vencimientos() {
                     <TableBody>
                       {upcomingDeadlines.map((d) => {
                         const dueDate = new Date(d.dueDate);
-                        const daysLeft = Math.ceil((dueDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+                        // Compare against the start of today in UTC, matching
+                        // how due dates are stored (UTC midnight) — comparing
+                        // against Date.now() made overdue items misread as
+                        // "today" instead of "vencido".
+                        const nowInstant = new Date();
+                        const todayUTCMidnight = new Date(Date.UTC(nowInstant.getUTCFullYear(), nowInstant.getUTCMonth(), nowInstant.getUTCDate()));
+                        const daysLeft = Math.round((dueDate.getTime() - todayUTCMidnight.getTime()) / (1000 * 60 * 60 * 24));
                         return (
                           <TableRow key={d.id}>
                             <TableCell className="font-medium">{d.obligationName}</TableCell>
@@ -584,14 +590,16 @@ export default function Vencimientos() {
                               <Badge
                                 variant="outline"
                                 className={
-                                  daysLeft <= 5
+                                  daysLeft < 0
+                                    ? "bg-red-100 text-red-800 border-red-300"
+                                    : daysLeft <= 5
                                     ? "bg-red-50 text-red-700 border-red-200"
                                     : daysLeft <= 15
                                     ? "bg-yellow-50 text-yellow-700 border-yellow-200"
                                     : "bg-green-50 text-green-700 border-green-200"
                                 }
                               >
-                                {daysLeft <= 0 ? "Hoy" : `${daysLeft} días`}
+                                {daysLeft < 0 ? `Vencido ${Math.abs(daysLeft)}d` : daysLeft === 0 ? "Hoy" : `${daysLeft} días`}
                               </Badge>
                             </TableCell>
                             <TableCell>
