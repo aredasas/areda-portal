@@ -1406,12 +1406,21 @@ export async function getDashboardData(filters: DashboardFilters) {
     .orderBy(asc(taxDeadlines.dueDate));
 
   // ---- KPI counts + tasks grouped by status (for the "recent tasks" columns) ----
+  // Nothing automatically flips a task's stored status to "vencida" when its
+  // due date passes — that only happens if someone picks it manually. For
+  // these counts/groupings, treat an overdue pendiente/en_progreso task as
+  // vencida so the KPI actually reflects reality.
+  const todayUTCMidnight = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), new Date().getUTCDate()));
   const taskStats = { pendiente: 0, en_progreso: 0, completada: 0, vencida: 0 };
   const tasksByStatus: Record<string, any[]> = { pendiente: [], en_progreso: [], completada: [], vencida: [] };
   for (const t of taskRows) {
-    if (t.status in taskStats) {
-      taskStats[t.status as keyof typeof taskStats]++;
-      if (tasksByStatus[t.status].length < 8) tasksByStatus[t.status].push(t);
+    let effectiveStatus = t.status;
+    if ((t.status === "pendiente" || t.status === "en_progreso") && t.dueDate && new Date(t.dueDate).getTime() < todayUTCMidnight.getTime()) {
+      effectiveStatus = "vencida";
+    }
+    if (effectiveStatus in taskStats) {
+      taskStats[effectiveStatus as keyof typeof taskStats]++;
+      if (tasksByStatus[effectiveStatus].length < 8) tasksByStatus[effectiveStatus].push(t);
     }
   }
 

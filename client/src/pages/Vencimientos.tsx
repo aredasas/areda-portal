@@ -38,6 +38,19 @@ const statusDotColors: Record<string, string> = {
   vencido: "bg-red-500",
 };
 
+/** The stored status only ever becomes "vencido" if someone manually picks
+ * it from the dropdown — nothing automatically flips it when a due date
+ * passes. For DISPLAY purposes (badges, calendar dots), treat anything
+ * still pendiente/en_progreso whose due date is in the past as overdue,
+ * without touching what's actually saved. */
+function getDisplayStatus(d: { status: string; dueDate: string | Date }): string {
+  if (d.status !== "pendiente" && d.status !== "en_progreso") return d.status;
+  const due = new Date(d.dueDate);
+  const now = new Date();
+  const todayUTCMidnight = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  return due.getTime() < todayUTCMidnight.getTime() ? "vencido" : d.status;
+}
+
 const MONTHS_ES = [
   "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
   "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"
@@ -449,7 +462,7 @@ export default function Vencimientos() {
                                 {dayDeadlines.slice(0, 3).map((d: any) => (
                                   <Tooltip key={d.id}>
                                     <TooltipTrigger asChild>
-                                      <div className={`text-[9px] leading-tight px-1 py-0.5 rounded truncate cursor-default ${statusColors[d.status]}`}>
+                                      <div className={`text-[9px] leading-tight px-1 py-0.5 rounded truncate cursor-default ${statusColors[getDisplayStatus(d)]}`}>
                                         {d.obligationName?.substring(0, 12)}
                                       </div>
                                     </TooltipTrigger>
@@ -457,8 +470,8 @@ export default function Vencimientos() {
                                       <p className="font-medium text-xs">{d.obligationName}</p>
                                       <p className="text-xs text-muted-foreground">{d.clientName}</p>
                                       <p className="text-xs">Período: {d.period}</p>
-                                      <Badge variant="outline" className={`mt-1 text-xs ${statusColors[d.status]}`}>
-                                        {statusLabels[d.status]}
+                                      <Badge variant="outline" className={`mt-1 text-xs ${statusColors[getDisplayStatus(d)]}`}>
+                                        {statusLabels[getDisplayStatus(d)]}
                                       </Badge>
                                     </TooltipContent>
                                   </Tooltip>
@@ -503,7 +516,7 @@ export default function Vencimientos() {
                           {dayDeadlines.map((d: any) => (
                             <Tooltip key={d.id}>
                               <TooltipTrigger asChild>
-                                <div className={`text-[10px] leading-tight px-1.5 py-1 rounded truncate cursor-default ${statusColors[d.status]}`}>
+                                <div className={`text-[10px] leading-tight px-1.5 py-1 rounded truncate cursor-default ${statusColors[getDisplayStatus(d)]}`}>
                                   {d.obligationName?.substring(0, 15)}
                                 </div>
                               </TooltipTrigger>
@@ -511,8 +524,8 @@ export default function Vencimientos() {
                                 <p className="font-medium text-xs">{d.obligationName}</p>
                                 <p className="text-xs text-muted-foreground">{d.clientName}</p>
                                 <p className="text-xs">Per\u00edodo: {d.period}</p>
-                                <Badge variant="outline" className={`mt-1 text-xs ${statusColors[d.status]}`}>
-                                  {statusLabels[d.status]}
+                                <Badge variant="outline" className={`mt-1 text-xs ${statusColors[getDisplayStatus(d)]}`}>
+                                  {statusLabels[getDisplayStatus(d)]}
                                 </Badge>
                               </TooltipContent>
                             </Tooltip>
@@ -603,8 +616,8 @@ export default function Vencimientos() {
                               </Badge>
                             </TableCell>
                             <TableCell>
-                              <Badge variant="outline" className={statusColors[d.status]}>
-                                {statusLabels[d.status]}
+                              <Badge variant="outline" className={statusColors[getDisplayStatus(d)]}>
+                                {statusLabels[getDisplayStatus(d)]}
                               </Badge>
                             </TableCell>
                             {isAdmin && (
@@ -757,7 +770,7 @@ export default function Vencimientos() {
                                       {deadlinesForDay.length > 0 && (
                                         <div className="flex justify-center gap-0.5 mt-0.5">
                                           {deadlinesForDay.slice(0, 3).map((d: any, i: number) => (
-                                            <div key={i} className={`w-1.5 h-1.5 rounded-full ${statusDotColors[d.status]}`} />
+                                            <div key={i} className={`w-1.5 h-1.5 rounded-full ${statusDotColors[getDisplayStatus(d)]}`} />
                                           ))}
                                         </div>
                                       )}
@@ -770,7 +783,7 @@ export default function Vencimientos() {
                                   {deadlinesForDay.map((d: any, i: number) => (
                                     <div key={i} className="text-xs">
                                       <span className="font-medium">{d.obligationName}</span>
-                                      <span className="text-muted-foreground ml-1">({statusLabels[d.status]})</span>
+                                      <span className="text-muted-foreground ml-1">({statusLabels[getDisplayStatus(d)]})</span>
                                     </div>
                                   ))}
                                 </TooltipContent>
@@ -814,14 +827,14 @@ export default function Vencimientos() {
                           </TableCell>
                           <TableCell>
                             {d.status === "completado" ? (
-                              <Badge variant="outline" className={statusColors[d.status]}>
-                                {statusLabels[d.status]}
+                              <Badge variant="outline" className={statusColors[getDisplayStatus(d)]}>
+                                {statusLabels[getDisplayStatus(d)]}
                               </Badge>
                             ) : (
                               <Select value={d.status} onValueChange={(v) => handleStatusChange(d.id, v as any)}>
                                 <SelectTrigger className="h-7 w-[130px]">
-                                  <Badge variant="outline" className={statusColors[d.status]}>
-                                    {statusLabels[d.status]}
+                                  <Badge variant="outline" className={statusColors[getDisplayStatus(d)]}>
+                                    {statusLabels[getDisplayStatus(d)]}
                                   </Badge>
                                 </SelectTrigger>
                                 <SelectContent>
