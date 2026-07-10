@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { Clock, Coffee, LogIn, LogOut, Loader2 } from "lucide-react";
+import WorkLocationDialog from "./WorkLocationDialog";
 
 type EntryType = "inicio" | "salida_almuerzo" | "regreso_almuerzo" | "fin";
 
@@ -16,7 +17,9 @@ const typeLabels: Record<EntryType, string> = {
 
 /** Self-reported clock in/out bar — replaces the in-person biometric
  * register. The collaborator marks their own start of day, lunch out/in,
- * and end of day; nothing here is inferred or tracked automatically. */
+ * and end of day; nothing here is inferred or tracked automatically.
+ * Marking "inicio" or "regreso_almuerzo" also asks where they'll be for
+ * that 4-hour block (in house / a client / on leave), hour by hour. */
 export default function TimeTrackingBar() {
   const [now] = useState(() => new Date());
   const startOfDay = useMemo(() => {
@@ -29,9 +32,16 @@ export default function TimeTrackingBar() {
     d.setHours(23, 59, 59, 999);
     return d.toISOString();
   }, [now]);
+  // Collaborator's own local calendar day, "YYYY-MM-DD" — used as the key
+  // for their location plan, independent of server timezone.
+  const todayDateKey = useMemo(() => {
+    const d = new Date(now);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }, [now]);
 
   const { data: todayEntries, isLoading, refetch } = trpc.timeTracking.getToday.useQuery({ startOfDay, endOfDay });
   const mark = trpc.timeTracking.mark.useMutation();
+  const [pendingMarkType, setPendingMarkType] = useState<EntryType | null>(null);
 
   const marksByType = useMemo(() => {
     const map = {} as Record<EntryType, Date>;
@@ -52,7 +62,7 @@ export default function TimeTrackingBar() {
     ? "fin"
     : null;
 
-  const handleMark = async (type: EntryType) => {
+  const doMark = async (type: EntryType) => {
     try {
       await mark.mutateAsync({ type });
       toast.success(`${typeLabels[type]} registrado a las ${new Date().toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit" })}`);
@@ -60,6 +70,23 @@ export default function TimeTrackingBar() {
     } catch (error: any) {
       toast.error(error.message || "Error al registrar la marcación");
     }
+  };
+
+  const handleMark = (type: EntryType) => {
+    // These two start a 4-hour block — ask where the collaborator will be
+    // before actually registering the mark.
+    if (type === "inicio" || type === "regreso_almuerzo") {
+      setPendingMarkType(type);
+      return;
+    }
+    doMark(type);
+  };
+
+  const handleLocationSaved = async () => {
+    if (pendingMarkType) {
+      await doMark(pendingMarkType);
+    }
+    setPendingMarkType(null);
   };
 
   const icons: Record<EntryType, any> = {
@@ -105,6 +132,15 @@ export default function TimeTrackingBar() {
           </Button>
         );
       })}
+
+      {pendingMarkType && (
+        <WorkLocationDialog
+          open={true}
+          block={pendingMarkType === "inicio" ? "morning" : "afternoon"}
+          date={todayDateKey}
+          onDone={handleLocationSaved}
+        />
+      )}
     </div>
   );
 }

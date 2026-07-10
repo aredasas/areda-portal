@@ -1374,6 +1374,36 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
         }
         return db.getTimeTrackingLog(new Date(input.startOfDay), new Date(input.endOfDay), input.userId);
       }),
+    /** Saves the collaborator's own hour-by-hour plan for one work block
+     * (in house / a specific client / on leave) — exactly 4 slots. */
+    saveLocation: protectedProcedure
+      .input(z.object({
+        date: z.string(), // "YYYY-MM-DD", the collaborator's own calendar day
+        block: z.enum(["morning", "afternoon"]),
+        slots: z.array(z.object({
+          type: z.enum(["in_house", "client", "libre"]),
+          clientId: z.number().optional(),
+        })).length(4),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        await db.saveWorkLocation(ctx.user.id, input.date, input.block, input.slots);
+        return { success: true };
+      }),
+    getMyLocation: protectedProcedure
+      .input(z.object({ date: z.string() }))
+      .query(async ({ input, ctx }) => {
+        return db.getWorkLocation(ctx.user.id, input.date);
+      }),
+    /** Restricted the same way as getLog — everyone's location plan for a
+     * given day, for the Asistencia admin view. */
+    getLocationsForDate: adminProcedure
+      .input(z.object({ date: z.string() }))
+      .query(async ({ input, ctx }) => {
+        if (ctx.user.cedula !== ASISTENCIA_AUTHORIZED_CEDULA) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Esta sección está restringida" });
+        }
+        return db.getWorkLocationsForDate(input.date);
+      }),
   }),
   /** Comments on a specific task or deadline — for asking/flagging things
    * about that item directly ("revisa el adjunto, faltó algo"), instead of

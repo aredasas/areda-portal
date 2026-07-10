@@ -1,7 +1,7 @@
 import { eq, and, desc, asc, like, sql, inArray, gte, lte, or, ne } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { alias } from "drizzle-orm/mysql-core";
-import { InsertUser, users, clients, InsertClient, taxObligations, InsertTaxObligation, clientObligations, InsertClientObligation, taxDeadlines, InsertTaxDeadline, tasks, InsertTask, taskAttachments, InsertTaskAttachment, deadlineAttachments, InsertDeadlineAttachment, appSettings, InsertAppSetting, dianCalendar, InsertDianCalendar, clientDriveSubfolders, timeEntries, InsertTimeEntry, comments, InsertComment, historyEvents, notifications } from "../drizzle/schema";
+import { InsertUser, users, clients, InsertClient, taxObligations, InsertTaxObligation, clientObligations, InsertClientObligation, taxDeadlines, InsertTaxDeadline, tasks, InsertTask, taskAttachments, InsertTaskAttachment, deadlineAttachments, InsertDeadlineAttachment, appSettings, InsertAppSetting, dianCalendar, InsertDianCalendar, clientDriveSubfolders, timeEntries, InsertTimeEntry, comments, InsertComment, historyEvents, notifications, workLocationEntries } from "../drizzle/schema";
 import { ENV } from './_core/env';
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -610,6 +610,67 @@ export async function getTimeTrackingLog(start: Date, end: Date, userId?: number
     .orderBy(asc(taxDeadlines.completedAt));
 
   return { entries, completedTasks, completedDeadlines };
+}
+
+// ==================== WORK LOCATION (in-house / client / on leave) ====================
+
+export type WorkLocationSlot = { type: "in_house" | "client" | "libre"; clientId?: number };
+
+/** Saves (or replaces) a collaborator's hour-by-hour location plan for one
+ * work block of their own day — called when they mark "inicio" or
+ * "regreso_almuerzo". Always exactly 4 slots, one per hour of the block. */
+export async function saveWorkLocation(userId: number, date: string, block: "morning" | "afternoon", slots: WorkLocationSlot[]) {
+  const db = await getDb();
+  if (!db) return;
+  const existing = await db.select({ id: workLocationEntries.id }).from(workLocationEntries)
+    .where(and(eq(workLocationEntries.userId, userId), eq(workLocationEntries.date, date), eq(workLocationEntries.block, block)))
+    .limit(1);
+  const slotsJson = JSON.stringify(slots);
+  if (existing.length > 0) {
+    await db.update(workLocationEntries).set({ slots: slotsJson }).where(eq(workLocationEntries.id, existing[0].id));
+  } else {
+    await db.insert(workLocationEntries).values({ userId, date, block, slots: slotsJson });
+  }
+}
+
+/** A single collaborator's location plan for one day (both blocks, if set). */
+export async function getWorkLocation(userId: number, date: string) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(workLocationEntries)
+    .where(and(eq(workLocationEntries.userId, userId), eq(workLocationEntries.date, date)));
+}
+
+/** Every collaborator's location plan for one day — used in the Asistencia
+ * admin view, joined with client names so the slots read as "Cliente X"
+ * instead of just an id. */
+export async function getWorkLocationsForDate(date: string) {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db.select({
+    id: workLocationEntries.id,
+    userId: workLocationEntries.userId,
+    block: workLocationEntries.block,
+    slots: workLocationEntries.slots,
+  }).from(workLocationEntries).where(eq(workLocationEntries.date, date));
+
+  // Resolve client names for any "client" slots in one pass.
+  const clientIds = new Set<number>();
+  const parsed = rows.map(r => {
+    const slots: WorkLocationSlot[] = JSON.parse(r.slots);
+    slots.forEach(s => { if (s.type === "client" && s.clientId) clientIds.add(s.clientId); });
+    return { ...r, slots };
+  });
+  const clientRows = clientIds.size > 0
+    ? await db.select({ id: clients.id, razonSocial: clients.razonSocial }).from(clients).where(inArray(clients.id, Array.from(clientIds)))
+    : [];
+  const clientNameById: Record<number, string> = {};
+  for (const c of clientRows) clientNameById[c.id] = c.razonSocial;
+
+  return parsed.map(r => ({
+    ...r,
+    slots: r.slots.map(s => ({ ...s, clientName: s.clientId ? clientNameById[s.clientId] : undefined })),
+  }));
 }
 
 // ==================== AI ASSISTANT CONTEXT ====================

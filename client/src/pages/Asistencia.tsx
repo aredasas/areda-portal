@@ -40,6 +40,23 @@ function formatHours(ms: number) {
   return `${h}h ${m}m`;
 }
 
+const blockHourLabels: Record<string, string[]> = {
+  morning: ["8-9", "9-10", "10-11", "11-12"],
+  afternoon: ["2-3", "3-4", "4-5", "5-6"],
+};
+
+const slotColors: Record<string, string> = {
+  in_house: "bg-blue-100 text-blue-700",
+  client: "bg-green-100 text-green-700",
+  libre: "bg-orange-100 text-orange-700",
+};
+
+function slotLabel(slot: any) {
+  if (slot.type === "in_house") return "In House";
+  if (slot.type === "libre") return "Libre";
+  return slot.clientName || "Cliente";
+}
+
 export default function Asistencia() {
   const { user } = useAuth();
   // Restricted to this one specific admin by explicit business request — not
@@ -57,12 +74,14 @@ export default function Asistencia() {
   const dateObj = new Date(selectedDate.year, selectedDate.month, selectedDate.day);
   const startOfDay = new Date(dateObj); startOfDay.setHours(0, 0, 0, 0);
   const endOfDay = new Date(dateObj); endOfDay.setHours(23, 59, 59, 999);
+  const dateKey = `${selectedDate.year}-${String(selectedDate.month + 1).padStart(2, "0")}-${String(selectedDate.day).padStart(2, "0")}`;
 
   const { data: log, isLoading } = trpc.timeTracking.getLog.useQuery({
     startOfDay: startOfDay.toISOString(),
     endOfDay: endOfDay.toISOString(),
     userId: collaboratorFilter !== "all" ? parseInt(collaboratorFilter) : undefined,
   });
+  const { data: locations } = trpc.timeTracking.getLocationsForDate.useQuery({ date: dateKey });
 
   const changeDay = (delta: number) => {
     const d = new Date(selectedDate.year, selectedDate.month, selectedDate.day + delta);
@@ -186,6 +205,37 @@ export default function Asistencia() {
                         );
                       })}
                     </div>
+
+                    {(() => {
+                      const userLocations = locations?.filter((l: any) => l.userId === parseInt(userId)) || [];
+                      if (userLocations.length === 0) return null;
+                      return (
+                        <div className="pt-2 border-t space-y-2">
+                          <p className="text-xs font-medium text-muted-foreground">Ubicación de la jornada:</p>
+                          {(["morning", "afternoon"] as const).map((block) => {
+                            const loc = userLocations.find((l: any) => l.block === block);
+                            if (!loc) return null;
+                            const hourLabels = blockHourLabels[block];
+                            return (
+                              <div key={block} className="flex flex-wrap gap-1.5 items-center">
+                                <span className="text-[10px] text-muted-foreground w-14 shrink-0">
+                                  {block === "morning" ? "Mañana:" : "Tarde:"}
+                                </span>
+                                {loc.slots.map((slot: any, idx: number) => (
+                                  <span
+                                    key={idx}
+                                    className={`text-[10px] px-1.5 py-0.5 rounded ${slotColors[slot.type] || "bg-gray-100 text-gray-600"}`}
+                                    title={hourLabels[idx]}
+                                  >
+                                    {hourLabels[idx]}: {slotLabel(slot)}
+                                  </span>
+                                ))}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      );
+                    })()}
 
                     {(userTasks.length > 0 || userDeadlines.length > 0) && (
                       <div className="pt-2 border-t">

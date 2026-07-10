@@ -347,3 +347,26 @@ export const notifications = mysqlTable("notifications", {
 
 export type Notification = typeof notifications.$inferSelect;
 export type InsertNotification = typeof notifications.$inferInsert;
+
+/**
+ * Work location schedule — where a collaborator says they'll be during
+ * each hour of a 4-hour work block (morning: 8-12, afternoon: 2-6),
+ * declared when they mark "inicio" or "regreso_almuerzo". Each hour is
+ * either "in_house", a specific assigned client, or "libre" (on leave).
+ * One row per user+date+block; the 4 hourly choices live together as JSON
+ * since they're always filled in and read as a single unit.
+ */
+export const workLocationEntries = mysqlTable("workLocationEntries", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").notNull(),
+  date: varchar("date", { length: 10 }).notNull(), // "YYYY-MM-DD", collaborator's own calendar day
+  block: mysqlEnum("block", ["morning", "afternoon"]).notNull(),
+  /** JSON array of 4 entries, one per hour of the block:
+   * [{ type: "in_house" | "client" | "libre", clientId?: number }, ...] */
+  slots: text("slots").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type WorkLocationEntry = typeof workLocationEntries.$inferSelect;
+export type InsertWorkLocationEntry = typeof workLocationEntries.$inferInsert;
