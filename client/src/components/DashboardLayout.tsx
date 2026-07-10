@@ -42,6 +42,7 @@ import { useLocation } from "wouter";
 import { DashboardLayoutSkeleton } from "./DashboardLayoutSkeleton";
 import { LoginScreen } from "./LoginScreen";
 import TimeTrackingBar from "./TimeTrackingBar";
+import NotificationBell from "./NotificationBell";
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
 
@@ -296,8 +297,11 @@ function DashboardLayoutContent({
           </div>
         )}
         <main className="flex-1 p-6">
-          <div className="mb-4">
-            <TimeTrackingBar />
+          <div className="mb-4 flex items-start gap-2">
+            <div className="flex-1 min-w-0">
+              <TimeTrackingBar />
+            </div>
+            <NotificationBell />
           </div>
           {children}
         </main>

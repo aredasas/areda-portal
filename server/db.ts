@@ -1,7 +1,7 @@
 import { eq, and, desc, asc, like, sql, inArray, gte, lte, or, ne } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { alias } from "drizzle-orm/mysql-core";
-import { InsertUser, users, clients, InsertClient, taxObligations, InsertTaxObligation, clientObligations, InsertClientObligation, taxDeadlines, InsertTaxDeadline, tasks, InsertTask, taskAttachments, InsertTaskAttachment, deadlineAttachments, InsertDeadlineAttachment, appSettings, InsertAppSetting, dianCalendar, InsertDianCalendar, clientDriveSubfolders, timeEntries, InsertTimeEntry, comments, InsertComment, historyEvents } from "../drizzle/schema";
+import { InsertUser, users, clients, InsertClient, taxObligations, InsertTaxObligation, clientObligations, InsertClientObligation, taxDeadlines, InsertTaxDeadline, tasks, InsertTask, taskAttachments, InsertTaskAttachment, deadlineAttachments, InsertDeadlineAttachment, appSettings, InsertAppSetting, dianCalendar, InsertDianCalendar, clientDriveSubfolders, timeEntries, InsertTimeEntry, comments, InsertComment, historyEvents, notifications } from "../drizzle/schema";
 import { ENV } from './_core/env';
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -749,6 +749,56 @@ export async function getHistory(entityType: "task" | "deadline", entityId: numb
     .leftJoin(users, eq(historyEvents.userId, users.id))
     .where(and(eq(historyEvents.entityType, entityType), eq(historyEvents.entityId, entityId)))
     .orderBy(asc(historyEvents.createdAt));
+}
+
+// ==================== NOTIFICATIONS ====================
+
+export type NotificationType = "comentario" | "aprobada" | "correccion_solicitada";
+
+export async function createNotification(
+  userId: number,
+  type: NotificationType,
+  entityType: "task" | "deadline",
+  entityId: number,
+  title: string,
+  message?: string | null
+) {
+  const db = await getDb();
+  if (!db) return;
+  // No point notifying someone about their own action, and avoids a
+  // pointless row if a system ever calls this for the same user by mistake.
+  if (!userId) return;
+  await db.insert(notifications).values({ userId, type, entityType, entityId, title, message: message || null });
+}
+
+export async function getNotifications(userId: number, limit: number = 20) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(notifications)
+    .where(eq(notifications.userId, userId))
+    .orderBy(desc(notifications.createdAt))
+    .limit(limit);
+}
+
+export async function getUnreadNotificationCount(userId: number) {
+  const db = await getDb();
+  if (!db) return 0;
+  const [row] = await db.select({ count: sql<number>`count(*)` })
+    .from(notifications)
+    .where(and(eq(notifications.userId, userId), eq(notifications.isRead, false)));
+  return Number(row?.count || 0);
+}
+
+export async function markNotificationRead(id: number, userId: number) {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(notifications).set({ isRead: true }).where(and(eq(notifications.id, id), eq(notifications.userId, userId)));
+}
+
+export async function markAllNotificationsRead(userId: number) {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(notifications).set({ isRead: true }).where(and(eq(notifications.userId, userId), eq(notifications.isRead, false)));
 }
 
 /** Recent/relevant tasks and deadlines for a client, with their comments —

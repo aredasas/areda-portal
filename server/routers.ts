@@ -801,6 +801,11 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
       .input(z.object({ id: z.number(), reviewNotes: z.string().optional() }))
       .mutation(async ({ input, ctx }) => {
         await db.approveDeadline(input.id, ctx.user.id, input.reviewNotes);
+        const deadline = await db.getDeadlineById(input.id);
+        const client = deadline ? await db.getClientById(deadline.clientId) : null;
+        if (client?.managerId && client.managerId !== ctx.user.id) {
+          await db.createNotification(client.managerId, "aprobada", "deadline", input.id, `Vencimiento — período ${deadline!.period}`, input.reviewNotes);
+        }
         return { success: true };
       }),
     /** Admin sends a completed deadline back to the collaborator for
@@ -809,6 +814,11 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
       .input(z.object({ id: z.number(), reviewNotes: z.string().min(1, "Debe indicar qué corregir") }))
       .mutation(async ({ input, ctx }) => {
         await db.requestDeadlineCorrection(input.id, ctx.user.id, input.reviewNotes);
+        const deadline = await db.getDeadlineById(input.id);
+        const client = deadline ? await db.getClientById(deadline.clientId) : null;
+        if (client?.managerId && client.managerId !== ctx.user.id) {
+          await db.createNotification(client.managerId, "correccion_solicitada", "deadline", input.id, `Vencimiento — período ${deadline!.period}`, input.reviewNotes);
+        }
         return { success: true };
       }),
     getHistory: protectedProcedure
@@ -1037,6 +1047,10 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
       .input(z.object({ id: z.number(), reviewNotes: z.string().optional() }))
       .mutation(async ({ input, ctx }) => {
         await db.approveTask(input.id, ctx.user.id, input.reviewNotes);
+        const task = await db.getTaskById(input.id);
+        if (task?.assignedToId && task.assignedToId !== ctx.user.id) {
+          await db.createNotification(task.assignedToId, "aprobada", "task", input.id, task.title, input.reviewNotes);
+        }
         return { success: true };
       }),
     /** Admin sends a completed task back to the collaborator for
@@ -1045,6 +1059,10 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
       .input(z.object({ id: z.number(), reviewNotes: z.string().min(1, "Debe indicar qué corregir") }))
       .mutation(async ({ input, ctx }) => {
         await db.requestTaskCorrection(input.id, ctx.user.id, input.reviewNotes);
+        const task = await db.getTaskById(input.id);
+        if (task?.assignedToId && task.assignedToId !== ctx.user.id) {
+          await db.createNotification(task.assignedToId, "correccion_solicitada", "task", input.id, task.title, input.reviewNotes);
+        }
         return { success: true };
       }),
     getHistory: protectedProcedure
@@ -1384,17 +1402,28 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           if (ctx.user.role !== "admin" && task.assignedToId !== ctx.user.id) {
             throw new TRPCError({ code: "FORBIDDEN", message: "No tiene acceso a esta tarea" });
           }
+          await db.createComment(input.entityType, input.entityId, ctx.user.id, input.content);
+          // Notify whoever isn't the one commenting: the assignee if an
+          // admin commented, or the person who created the task if the
+          // assignee themselves commented.
+          const recipient = task.assignedToId !== ctx.user.id ? task.assignedToId : task.createdById;
+          if (recipient && recipient !== ctx.user.id) {
+            await db.createNotification(recipient, "comentario", "task", task.id, task.title, input.content);
+          }
         } else {
           const deadline = await db.getDeadlineById(input.entityId);
           if (!deadline) throw new Error("Vencimiento no encontrado");
+          const client = await db.getClientById(deadline.clientId);
           if (ctx.user.role !== "admin") {
-            const client = await db.getClientById(deadline.clientId);
             if (!client || client.managerId !== ctx.user.id) {
               throw new TRPCError({ code: "FORBIDDEN", message: "No tiene acceso a este vencimiento" });
             }
           }
+          await db.createComment(input.entityType, input.entityId, ctx.user.id, input.content);
+          if (client?.managerId && client.managerId !== ctx.user.id) {
+            await db.createNotification(client.managerId, "comentario", "deadline", deadline.id, `Vencimiento — período ${deadline.period}`, input.content);
+          }
         }
-        await db.createComment(input.entityType, input.entityId, ctx.user.id, input.content);
         return { success: true };
       }),
   }),
@@ -1433,6 +1462,29 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
         if (!folderId) return [];
         return listSubfoldersRecursive(folderId);
       }),
+  }),
+  /** In-app notifications — lets a collaborator know something happened on
+   * a task/deadline they care about (comment, approval, correction) without
+   * having to stumble onto it by chance. */
+  notifications: router({
+    list: protectedProcedure
+      .input(z.object({ limit: z.number().optional() }).optional())
+      .query(async ({ input, ctx }) => {
+        return db.getNotifications(ctx.user.id, input?.limit);
+      }),
+    unreadCount: protectedProcedure.query(async ({ ctx }) => {
+      return db.getUnreadNotificationCount(ctx.user.id);
+    }),
+    markRead: protectedProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ input, ctx }) => {
+        await db.markNotificationRead(input.id, ctx.user.id);
+        return { success: true };
+      }),
+    markAllRead: protectedProcedure.mutation(async ({ ctx }) => {
+      await db.markAllNotificationsRead(ctx.user.id);
+      return { success: true };
+    }),
   }),
 });
 

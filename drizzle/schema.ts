@@ -324,3 +324,23 @@ export const historyEvents = mysqlTable("historyEvents", {
 
 export type HistoryEvent = typeof historyEvents.$inferSelect;
 export type InsertHistoryEvent = typeof historyEvents.$inferInsert;
+
+/**
+ * Notifications — lets a collaborator know something happened on a task or
+ * deadline they care about (someone commented, it was approved, or sent
+ * back for correction) without having to stumble onto it by chance.
+ */
+export const notifications = mysqlTable("notifications", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").notNull(),
+  type: mysqlEnum("type", ["comentario", "aprobada", "correccion_solicitada"]).notNull(),
+  entityType: mysqlEnum("entityType", ["task", "deadline"]).notNull(),
+  entityId: int("entityId").notNull(),
+  title: varchar("title", { length: 255 }).notNull(),
+  message: text("message"),
+  isRead: boolean("isRead").default(false).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type Notification = typeof notifications.$inferSelect;
+export type InsertNotification = typeof notifications.$inferInsert;
