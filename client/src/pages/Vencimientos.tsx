@@ -954,7 +954,7 @@ export default function Vencimientos() {
 
         {/* Complete deadline with evidence dialog */}
         <Dialog open={showCompleteDeadlineDialog} onOpenChange={(open) => { setShowCompleteDeadlineDialog(open); if (!open) { setCompletingDeadline(null); setDeadlineEvidenceFiles([]); setSelectedDeadlineSubfolder(""); setNewDeadlineSubfolderName(""); } }}>
-          <DialogContent className="max-w-md">
+          <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>Completar Vencimiento</DialogTitle>
             </DialogHeader>
@@ -1092,7 +1092,7 @@ export default function Vencimientos() {
 
         {/* Comments dialog */}
         <Dialog open={!!commentingDeadline} onOpenChange={(open) => { if (!open) setCommentingDeadline(null); }}>
-          <DialogContent className="max-w-md">
+          <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>Comentarios</DialogTitle>
               {commentingDeadline && (

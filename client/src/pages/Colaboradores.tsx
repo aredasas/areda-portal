@@ -289,7 +289,7 @@ export default function Colaboradores() {
 
       {/* Create/Edit Dialog */}
       <Dialog open={showForm} onOpenChange={(open) => { if (!open) { setShowForm(false); resetForm(); } }}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               {editingUser ? <UserCog className="h-5 w-5" /> : <Plus className="h-5 w-5" />}
