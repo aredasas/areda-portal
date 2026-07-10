@@ -51,24 +51,6 @@ const monthNames = [
   "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre",
 ];
 
-const historyLabels: Record<string, string> = {
-  creada: "Creada",
-  completada: "Completada",
-  correccion_solicitada: "Corrección solicitada",
-  aprobada: "Aprobada",
-  reabierta: "Reabierta",
-  cancelada: "Cancelada",
-};
-
-const historyDot: Record<string, string> = {
-  creada: "bg-gray-400",
-  completada: "bg-blue-500",
-  correccion_solicitada: "bg-orange-500",
-  aprobada: "bg-green-500",
-  reabierta: "bg-yellow-500",
-  cancelada: "bg-red-500",
-};
-
 export default function Revision() {
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
