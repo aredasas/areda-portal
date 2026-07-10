@@ -1,7 +1,7 @@
 import { eq, and, desc, asc, like, sql, inArray, gte, lte, or, ne } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { alias } from "drizzle-orm/mysql-core";
-import { InsertUser, users, clients, InsertClient, taxObligations, InsertTaxObligation, clientObligations, InsertClientObligation, taxDeadlines, InsertTaxDeadline, tasks, InsertTask, taskAttachments, InsertTaskAttachment, deadlineAttachments, InsertDeadlineAttachment, appSettings, InsertAppSetting, dianCalendar, InsertDianCalendar, clientDriveSubfolders, timeEntries, InsertTimeEntry, comments, InsertComment } from "../drizzle/schema";
+import { InsertUser, users, clients, InsertClient, taxObligations, InsertTaxObligation, clientObligations, InsertClientObligation, taxDeadlines, InsertTaxDeadline, tasks, InsertTask, taskAttachments, InsertTaskAttachment, deadlineAttachments, InsertDeadlineAttachment, appSettings, InsertAppSetting, dianCalendar, InsertDianCalendar, clientDriveSubfolders, timeEntries, InsertTimeEntry, comments, InsertComment, historyEvents } from "../drizzle/schema";
 import { ENV } from './_core/env';
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -401,6 +401,7 @@ export async function getClientDeadlines(clientId: number) {
     evidenceFileUrl: taxDeadlines.evidenceFileUrl,
     evidenceFileKey: taxDeadlines.evidenceFileKey,
     driveSubfolder: taxDeadlines.driveSubfolder,
+    reviewStatus: taxDeadlines.reviewStatus,
     reviewNotes: taxDeadlines.reviewNotes,
     reviewedAt: taxDeadlines.reviewedAt,
     reviewedByName: reviewedByUser.name,
@@ -496,6 +497,12 @@ export async function completeDeadline(id: number, evidenceFileUrl: string, evid
     evidenceFileUrl,
     evidenceFileKey,
     driveSubfolder: driveSubfolder || null,
+    // Fresh submission (possibly after a correction) — clear the previous
+    // review outcome so it shows as "sin revisar" again.
+    reviewStatus: null,
+    reviewNotes: null,
+    reviewedById: null,
+    reviewedAt: null,
   }).where(eq(taxDeadlines.id, id));
 }
 
@@ -711,6 +718,39 @@ export async function getCommentCounts(entityType: "task" | "deadline", entityId
   return map;
 }
 
+// ==================== HISTORY (audit trail) ====================
+
+export type HistoryEventType = "creada" | "completada" | "correccion_solicitada" | "aprobada" | "reabierta" | "cancelada";
+
+export async function logHistoryEvent(
+  entityType: "task" | "deadline",
+  entityId: number,
+  eventType: HistoryEventType,
+  userId: number,
+  notes?: string | null
+) {
+  const db = await getDb();
+  if (!db) return;
+  await db.insert(historyEvents).values({ entityType, entityId, eventType, userId, notes: notes || null });
+}
+
+export async function getHistory(entityType: "task" | "deadline", entityId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select({
+    id: historyEvents.id,
+    eventType: historyEvents.eventType,
+    userId: historyEvents.userId,
+    userName: users.name,
+    notes: historyEvents.notes,
+    createdAt: historyEvents.createdAt,
+  })
+    .from(historyEvents)
+    .leftJoin(users, eq(historyEvents.userId, users.id))
+    .where(and(eq(historyEvents.entityType, entityType), eq(historyEvents.entityId, entityId)))
+    .orderBy(asc(historyEvents.createdAt));
+}
+
 /** Recent/relevant tasks and deadlines for a client, with their comments —
  * gives the AI assistant real operational awareness (what's pending, what
  * was discussed) instead of only reading uploaded documents. */
@@ -786,7 +826,7 @@ export async function clearAllTasksAndDeadlines() {
 }
 
 /** Admin-only: reopens a deadline that was mistakenly marked completed. */
-export async function reopenDeadline(id: number) {
+export async function reopenDeadline(id: number, reopenedById: number) {
   const db = await getDb();
   if (!db) return;
   await db.delete(deadlineAttachments).where(eq(deadlineAttachments.deadlineId, id));
@@ -798,6 +838,7 @@ export async function reopenDeadline(id: number) {
     evidenceFileKey: null,
     driveSubfolder: null,
   }).where(eq(taxDeadlines.id, id));
+  await logHistoryEvent("deadline", id, "reabierta", reopenedById);
 }
 
 /** Manually correct a single deadline's due date, e.g. when the auto-generated
@@ -826,7 +867,9 @@ export async function createTask(data: InsertTask) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   const result = await db.insert(tasks).values(data);
-  return result[0].insertId;
+  const id = result[0].insertId;
+  await logHistoryEvent("task", id, "creada", data.createdById || data.assignedToId || 0);
+  return id;
 }
 
 export async function getAllTasks(assignedToId?: number) {
@@ -856,6 +899,7 @@ export async function getAllTasks(assignedToId?: number) {
     evidenceFileKey: tasks.evidenceFileKey,
     driveSubfolder: tasks.driveSubfolder,
     completionNotes: tasks.completionNotes,
+    reviewStatus: tasks.reviewStatus,
     reviewNotes: tasks.reviewNotes,
     reviewedAt: tasks.reviewedAt,
     reviewedByName: reviewedByUser.name,
@@ -919,27 +963,74 @@ export async function approveTask(id: number, reviewedById: number, reviewNotes?
   const db = await getDb();
   if (!db) return;
   await db.update(tasks).set({
+    reviewStatus: "aprobado",
     reviewedById,
     reviewedAt: new Date(),
     reviewNotes: reviewNotes || null,
   }).where(eq(tasks.id, id));
+  await logHistoryEvent("task", id, "aprobada", reviewedById, reviewNotes);
+}
+
+/** Sends a completed task back to the collaborator for correction: clears
+ * the evidence so they upload fresh corrected files, reverts status to
+ * pendiente, and records the observation so they see exactly what to fix. */
+export async function requestTaskCorrection(id: number, reviewedById: number, reviewNotes: string) {
+  const db = await getDb();
+  if (!db) return;
+  await db.delete(taskAttachments).where(and(eq(taskAttachments.taskId, id), eq(taskAttachments.isEvidence, true)));
+  await db.update(tasks).set({
+    status: "pendiente",
+    completedAt: null,
+    completedById: null,
+    evidenceFileUrl: null,
+    evidenceFileKey: null,
+    driveSubfolder: null,
+    completionNotes: null,
+    reviewStatus: "correccion",
+    reviewedById,
+    reviewedAt: new Date(),
+    reviewNotes,
+  }).where(eq(tasks.id, id));
+  await logHistoryEvent("task", id, "correccion_solicitada", reviewedById, reviewNotes);
 }
 
 export async function approveDeadline(id: number, reviewedById: number, reviewNotes?: string | null) {
   const db = await getDb();
   if (!db) return;
   await db.update(taxDeadlines).set({
+    reviewStatus: "aprobado",
     reviewedById,
     reviewedAt: new Date(),
     reviewNotes: reviewNotes || null,
   }).where(eq(taxDeadlines.id, id));
+  await logHistoryEvent("deadline", id, "aprobada", reviewedById, reviewNotes);
+}
+
+/** Same idea as requestTaskCorrection, but for a tax deadline. */
+export async function requestDeadlineCorrection(id: number, reviewedById: number, reviewNotes: string) {
+  const db = await getDb();
+  if (!db) return;
+  await db.delete(deadlineAttachments).where(eq(deadlineAttachments.deadlineId, id));
+  await db.update(taxDeadlines).set({
+    status: "pendiente",
+    completedAt: null,
+    completedById: null,
+    evidenceFileUrl: null,
+    evidenceFileKey: null,
+    driveSubfolder: null,
+    reviewStatus: "correccion",
+    reviewedById,
+    reviewedAt: new Date(),
+    reviewNotes,
+  }).where(eq(taxDeadlines.id, id));
+  await logHistoryEvent("deadline", id, "correccion_solicitada", reviewedById, reviewNotes);
 }
 
 /** Admin cancels a task that's no longer needed. If nothing was ever
  * attached to it, it's just removed outright — there's no work to preserve.
  * If evidence/a response was already attached, it's kept for the record but
  * marked "cancelada" so it stops counting as active work on the dashboard. */
-export async function cancelTask(id: number): Promise<"deleted" | "cancelled"> {
+export async function cancelTask(id: number, cancelledById: number): Promise<"deleted" | "cancelled"> {
   const db = await getDb();
   if (!db) return "deleted";
   const task = await getTaskById(id);
@@ -951,6 +1042,7 @@ export async function cancelTask(id: number): Promise<"deleted" | "cancelled"> {
   }
 
   await db.update(tasks).set({ status: "cancelada" }).where(eq(tasks.id, id));
+  await logHistoryEvent("task", id, "cancelada", cancelledById);
   return "cancelled";
 }
 
@@ -1022,6 +1114,7 @@ export async function getCompletedItemsForReview(filters: ReviewFilters) {
     reviewNotes: tasks.reviewNotes,
     reviewedAt: tasks.reviewedAt,
     reviewedByName: reviewedByUser.name,
+    reviewStatus: tasks.reviewStatus,
   })
     .from(tasks)
     .leftJoin(clients, eq(tasks.clientId, clients.id))
@@ -1053,6 +1146,7 @@ export async function getCompletedItemsForReview(filters: ReviewFilters) {
     reviewNotesRaw: taxDeadlines.reviewNotes,
     reviewedAtRaw: taxDeadlines.reviewedAt,
     reviewedByNameRaw: reviewedByUser.name,
+    reviewStatusRaw: taxDeadlines.reviewStatus,
   })
     .from(taxDeadlines)
     .innerJoin(clients, eq(taxDeadlines.clientId, clients.id))
@@ -1078,6 +1172,7 @@ export async function getCompletedItemsForReview(filters: ReviewFilters) {
       reviewNotes: t.reviewNotes,
       reviewedAt: t.reviewedAt,
       reviewedByName: t.reviewedByName,
+      reviewStatus: t.reviewStatus,
     })),
     ...completedDeadlines.map(d => ({
       itemType: "deadline" as const,
@@ -1094,6 +1189,7 @@ export async function getCompletedItemsForReview(filters: ReviewFilters) {
       reviewNotes: d.reviewNotesRaw,
       reviewedAt: d.reviewedAtRaw,
       reviewedByName: d.reviewedByNameRaw,
+      reviewStatus: d.reviewStatusRaw,
     })),
   ];
 

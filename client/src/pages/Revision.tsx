@@ -20,7 +20,27 @@ import {
   Calendar as CalendarIcon,
   AlertCircle,
   ThumbsUp,
+  RotateCcw,
+  History,
 } from "lucide-react";
+
+const historyLabels: Record<string, string> = {
+  creada: "Creada",
+  completada: "Completada",
+  correccion_solicitada: "Devuelta para corrección",
+  aprobada: "Aprobada",
+  reabierta: "Reabierta",
+  cancelada: "Cancelada",
+};
+
+const historyDot: Record<string, string> = {
+  creada: "bg-gray-400",
+  completada: "bg-blue-500",
+  correccion_solicitada: "bg-orange-500",
+  aprobada: "bg-green-500",
+  reabierta: "bg-yellow-500",
+  cancelada: "bg-red-500",
+};
 
 function pad2(n: number) {
   return String(n).padStart(2, "0");
@@ -30,6 +50,24 @@ const monthNames = [
   "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
   "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre",
 ];
+
+const historyLabels: Record<string, string> = {
+  creada: "Creada",
+  completada: "Completada",
+  correccion_solicitada: "Corrección solicitada",
+  aprobada: "Aprobada",
+  reabierta: "Reabierta",
+  cancelada: "Cancelada",
+};
+
+const historyDot: Record<string, string> = {
+  creada: "bg-gray-400",
+  completada: "bg-blue-500",
+  correccion_solicitada: "bg-orange-500",
+  aprobada: "bg-green-500",
+  reabierta: "bg-yellow-500",
+  cancelada: "bg-red-500",
+};
 
 export default function Revision() {
   const { user } = useAuth();
@@ -68,6 +106,18 @@ export default function Revision() {
   const [reviewNotesInput, setReviewNotesInput] = useState("");
   const approveTask = trpc.tasks.approve.useMutation();
   const approveDeadline = trpc.deadlines.approve.useMutation();
+  const requestTaskCorrection = trpc.tasks.requestCorrection.useMutation();
+  const requestDeadlineCorrection = trpc.deadlines.requestCorrection.useMutation();
+
+  const { data: taskHistory } = trpc.tasks.getHistory.useQuery(
+    { id: selectedItem?.id },
+    { enabled: !!selectedItem && selectedItem.itemType === "task" }
+  );
+  const { data: deadlineHistory } = trpc.deadlines.getHistory.useQuery(
+    { id: selectedItem?.id },
+    { enabled: !!selectedItem && selectedItem.itemType === "deadline" }
+  );
+  const history = selectedItem?.itemType === "task" ? taskHistory : deadlineHistory;
 
   const handleApprove = async () => {
     if (!selectedItem) return;
@@ -83,6 +133,23 @@ export default function Revision() {
       refetch();
     } catch (error: any) {
       toast.error(error.message || "Error al aprobar");
+    }
+  };
+
+  const handleRequestCorrection = async () => {
+    if (!selectedItem || !reviewNotesInput.trim()) return;
+    try {
+      if (selectedItem.itemType === "task") {
+        await requestTaskCorrection.mutateAsync({ id: selectedItem.id, reviewNotes: reviewNotesInput });
+      } else {
+        await requestDeadlineCorrection.mutateAsync({ id: selectedItem.id, reviewNotes: reviewNotesInput });
+      }
+      toast.success("Se envió de vuelta al encargado con la observación");
+      setSelectedItem(null);
+      setReviewNotesInput("");
+      refetch();
+    } catch (error: any) {
+      toast.error(error.message || "Error al solicitar la corrección");
     }
   };
 
@@ -211,7 +278,7 @@ export default function Revision() {
                       {item.completedByName && (
                         <p className="text-xs text-muted-foreground">por {item.completedByName}</p>
                       )}
-                      {item.reviewedAt ? (
+                      {item.reviewStatus === "aprobado" ? (
                         <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200 mt-1">
                           <ThumbsUp className="h-3 w-3 mr-1" /> Aprobado
                         </Badge>
@@ -302,7 +369,7 @@ export default function Revision() {
                 </div>
 
                 <div className="border-t pt-3">
-                  {selectedItem.reviewedAt ? (
+                  {selectedItem.reviewStatus === "aprobado" ? (
                     <div className="bg-green-50 border border-green-200 rounded-md p-3">
                       <p className="text-sm font-medium text-green-800 flex items-center gap-2">
                         <ThumbsUp className="h-4 w-4" /> Aprobado
@@ -320,24 +387,56 @@ export default function Revision() {
                     </div>
                   ) : (
                     <div className="space-y-2">
-                      <Label>Aprobar (observaciones opcionales para el colaborador)</Label>
+                      <Label>Observaciones (obligatorias para corregir, opcionales para aprobar)</Label>
                       <Textarea
                         value={reviewNotesInput}
                         onChange={(e) => setReviewNotesInput(e.target.value)}
                         placeholder="Ej: Todo en orden. / Verificar el valor del renglón 32 para el próximo período."
                         rows={2}
                       />
-                      <Button
-                        onClick={handleApprove}
-                        disabled={approveTask.isPending || approveDeadline.isPending}
-                        className="gap-2 bg-green-600 hover:bg-green-700 text-white w-full"
-                      >
-                        {(approveTask.isPending || approveDeadline.isPending) ? <Loader2 className="h-4 w-4 animate-spin" /> : <ThumbsUp className="h-4 w-4" />}
-                        Aprobar
-                      </Button>
+                      <div className="flex gap-2">
+                        <Button
+                          onClick={handleApprove}
+                          disabled={approveTask.isPending || approveDeadline.isPending || requestTaskCorrection.isPending || requestDeadlineCorrection.isPending}
+                          className="gap-2 bg-green-600 hover:bg-green-700 text-white flex-1"
+                        >
+                          {(approveTask.isPending || approveDeadline.isPending) ? <Loader2 className="h-4 w-4 animate-spin" /> : <ThumbsUp className="h-4 w-4" />}
+                          Aprobar
+                        </Button>
+                        <Button
+                          onClick={handleRequestCorrection}
+                          disabled={!reviewNotesInput.trim() || approveTask.isPending || approveDeadline.isPending || requestTaskCorrection.isPending || requestDeadlineCorrection.isPending}
+                          variant="outline"
+                          className="gap-2 border-orange-300 text-orange-700 hover:bg-orange-50 flex-1"
+                          title={!reviewNotesInput.trim() ? "Escriba qué debe corregirse" : ""}
+                        >
+                          {(requestTaskCorrection.isPending || requestDeadlineCorrection.isPending) ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
+                          Corregir
+                        </Button>
+                      </div>
                     </div>
                   )}
                 </div>
+
+                {history && history.length > 0 && (
+                  <div className="border-t pt-3">
+                    <h4 className="font-medium mb-2 flex items-center gap-2 text-sm">
+                      <History className="h-4 w-4" /> Historial
+                    </h4>
+                    <div className="space-y-2">
+                      {history.map((h: any) => (
+                        <div key={h.id} className="flex items-start gap-2 text-xs">
+                          <span className={`mt-0.5 h-2 w-2 rounded-full shrink-0 ${historyDot[h.eventType] || "bg-gray-400"}`} />
+                          <div>
+                            <span className="font-medium">{historyLabels[h.eventType] || h.eventType}</span>
+                            <span className="text-muted-foreground"> — {new Date(h.createdAt).toLocaleString("es-CO", { dateStyle: "medium", timeStyle: "short" })}{h.userName ? ` por ${h.userName}` : ""}</span>
+                            {h.notes && <p className="text-muted-foreground mt-0.5">{h.notes}</p>}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 <div className="border-t pt-3">
                   <CommentsSection entityType={selectedItem.itemType} entityId={selectedItem.id} />

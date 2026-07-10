@@ -119,8 +119,9 @@ export const taxDeadlines = mysqlTable("taxDeadlines", {
    * where the evidence was saved — free text, since the app doesn't browse
    * the real Drive folder structure. See clientDriveSubfolders below. */
   driveSubfolder: varchar("driveSubfolder", { length: 150 }),
-  /** Set once an admin reviews and approves a completed deadline. Presence
-   * of reviewedAt is what marks it as approved — no separate status needed. */
+  /** Set once an admin reviews a completed deadline — either approving it or
+   * sending it back for correction. reviewStatus distinguishes which. */
+  reviewStatus: mysqlEnum("reviewStatus", ["aprobado", "correccion"]),
   reviewNotes: text("reviewNotes"),
   reviewedById: int("reviewedById"),
   reviewedAt: timestamp("reviewedAt"),
@@ -162,8 +163,9 @@ export const tasks = mysqlTable("tasks", {
   driveSubfolder: varchar("driveSubfolder", { length: 150 }),
   /** Notes when completing the task */
   completionNotes: text("completionNotes"),
-  /** Set once an admin reviews and approves a completed task. Presence of
-   * reviewedAt is what marks it as approved — no separate status needed. */
+  /** Set once an admin reviews a completed task — either approving it or
+   * sending it back for correction. reviewStatus distinguishes which. */
+  reviewStatus: mysqlEnum("reviewStatus", ["aprobado", "correccion"]),
   reviewNotes: text("reviewNotes"),
   reviewedById: int("reviewedById"),
   reviewedAt: timestamp("reviewedAt"),
@@ -296,3 +298,29 @@ export const comments = mysqlTable("comments", {
 
 export type Comment = typeof comments.$inferSelect;
 export type InsertComment = typeof comments.$inferInsert;
+
+/**
+ * History events — an append-only audit trail per task/deadline: when it
+ * was created, completed, sent back for correction, approved, reopened,
+ * etc. Lets Revisión show the full lifecycle instead of just the current
+ * state, since a single item can go through several correction cycles.
+ */
+export const historyEvents = mysqlTable("historyEvents", {
+  id: int("id").autoincrement().primaryKey(),
+  entityType: mysqlEnum("entityType", ["task", "deadline"]).notNull(),
+  entityId: int("entityId").notNull(),
+  eventType: mysqlEnum("eventType", [
+    "creada",
+    "completada",
+    "correccion_solicitada",
+    "aprobada",
+    "reabierta",
+    "cancelada",
+  ]).notNull(),
+  userId: int("userId").notNull(),
+  notes: text("notes"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type HistoryEvent = typeof historyEvents.$inferSelect;
+export type InsertHistoryEvent = typeof historyEvents.$inferInsert;

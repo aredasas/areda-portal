@@ -387,6 +387,15 @@ export default function Tareas() {
                             {isAdmin && task.status !== "completada" && task.status !== "cancelada" && (
                               <Button variant="ghost" size="sm" onClick={() => handleEdit(task)}>Editar</Button>
                             )}
+                            {task.status !== "completada" && task.reviewStatus === "correccion" && (
+                              <Badge
+                                variant="outline"
+                                className="bg-orange-50 text-orange-700 border-orange-200"
+                                title={`Devuelta para corrección${task.reviewedByName ? ` por ${task.reviewedByName}` : ""}`}
+                              >
+                                <RotateCcw className="w-3 h-3 mr-1" /> Corregir: {task.reviewNotes}
+                              </Badge>
+                            )}
                             {!isAdmin && task.status !== "completada" && task.status !== "cancelada" && task.assignedToId === user?.id && (
                               <Button
                                 variant="ghost"
@@ -525,7 +534,7 @@ export default function Tareas() {
                   value={selectedSubfolder}
                   onValueChange={(v) => { setSelectedSubfolder(v); if (v !== "__new__") setNewSubfolderName(""); }}
                 >
-                  <SelectTrigger>
+                  <SelectTrigger className="w-full">
                     <SelectValue placeholder="Seleccione o cree una subcarpeta" />
                   </SelectTrigger>
                   <SelectContent>
@@ -589,7 +598,7 @@ export default function Tareas() {
             <Button variant="outline" onClick={() => { setShowCompleteDialog(false); setEvidenceFiles([]); setCompletionNotes(""); }}>Cancelar</Button>
             <Button onClick={handleCompleteConfirm} disabled={evidenceFiles.length === 0 || completeTask.isPending || uploadEvidence.isPending} className="bg-green-600 hover:bg-green-700 text-white">
               {(completeTask.isPending || uploadEvidence.isPending) && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
-              Confirmar Completación
+              Completar
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -649,10 +658,14 @@ export default function Tareas() {
 
               {/* Review/approval section — visible to the collaborator once an admin reviews it */}
               {detailTask.reviewedAt && (
-                <Card className="bg-blue-50 border-blue-200">
+                <Card className={detailTask.reviewStatus === "correccion" ? "bg-orange-50 border-orange-200" : "bg-blue-50 border-blue-200"}>
                   <CardContent className="p-3">
-                    <p className="text-sm font-medium text-blue-800 flex items-center gap-2">
-                      <CheckCircle2 className="h-4 w-4" /> Aprobado por el revisor
+                    <p className={`text-sm font-medium flex items-center gap-2 ${detailTask.reviewStatus === "correccion" ? "text-orange-800" : "text-blue-800"}`}>
+                      {detailTask.reviewStatus === "correccion" ? (
+                        <><RotateCcw className="h-4 w-4" /> Devuelta para corrección</>
+                      ) : (
+                        <><CheckCircle2 className="h-4 w-4" /> Aprobado por el revisor</>
+                      )}
                     </p>
                     <p className="text-xs text-muted-foreground mt-1">
                       {new Date(detailTask.reviewedAt).toLocaleString("es-CO", { dateStyle: "medium", timeStyle: "short" })}
@@ -700,11 +713,12 @@ export default function Tareas() {
                 {isAdmin && detailTask.status !== "completada" && (
                   <div className="mt-3 flex gap-2 items-center">
                     <input ref={attachInputRef} type="file" className="hidden" accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.gif,.csv,.txt" onChange={(e) => setAttachmentFile(e.target.files?.[0] || null)} />
-                    <Button variant="outline" size="sm" onClick={() => attachInputRef.current?.click()} className="gap-1">
-                      <Upload className="h-3.5 w-3.5" /> {attachmentFile ? attachmentFile.name : "Seleccionar archivo"}
+                    <Button variant="outline" size="sm" onClick={() => attachInputRef.current?.click()} className="gap-1 min-w-0 max-w-[220px]">
+                      <Upload className="h-3.5 w-3.5 shrink-0" />
+                      <span className="truncate">{attachmentFile ? attachmentFile.name : "Seleccionar archivo"}</span>
                     </Button>
                     {attachmentFile && (
-                      <Button size="sm" onClick={handleUploadAttachment} disabled={uploadAttachment.isPending} className="bg-[#EDA011] hover:bg-[#d48f0f] text-white">
+                      <Button size="sm" onClick={handleUploadAttachment} disabled={uploadAttachment.isPending} className="bg-[#EDA011] hover:bg-[#d48f0f] text-white shrink-0">
                         {uploadAttachment.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Adjuntar"}
                       </Button>
                     )}

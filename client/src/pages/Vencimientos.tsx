@@ -815,6 +815,15 @@ export default function Vencimientos() {
                               >
                                 <MessageSquare className="h-3.5 w-3.5" />
                               </Button>
+                              {d.status !== "completado" && d.reviewStatus === "correccion" && (
+                                <Badge
+                                  variant="outline"
+                                  className="bg-orange-50 text-orange-700 border-orange-200"
+                                  title={`Devuelto para corrección el ${d.reviewedAt ? new Date(d.reviewedAt).toLocaleString("es-CO", { dateStyle: "medium", timeStyle: "short" }) : ""}${d.reviewedByName ? ` por ${d.reviewedByName}` : ""}`}
+                                >
+                                  <RotateCcw className="w-3 h-3 mr-1" /> Corregir: {d.reviewNotes}
+                                </Badge>
+                              )}
                               {d.status !== "completado" && (
                                 <Button
                                   variant="outline"
@@ -973,7 +982,7 @@ export default function Vencimientos() {
                       value={selectedDeadlineSubfolder}
                       onValueChange={(v) => { setSelectedDeadlineSubfolder(v); if (v !== "__new__") setNewDeadlineSubfolderName(""); }}
                     >
-                      <SelectTrigger>
+                      <SelectTrigger className="w-full">
                         <SelectValue placeholder="Seleccione o cree una subcarpeta" />
                       </SelectTrigger>
                       <SelectContent>

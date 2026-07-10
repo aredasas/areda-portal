@@ -780,13 +780,14 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
         pushEvidenceToDrive(input.clientId, input.driveSubfolder, input.evidenceFiles, input.driveSubfolderId).catch(err =>
           console.error("[Google Drive] Error subiendo evidencia del vencimiento:", err)
         );
+        await db.logHistoryEvent("deadline", input.id, "completada", ctx.user.id);
         return { success: true };
       }),
     /** Admin-only: reopens a deadline mistakenly marked as completed. */
     reopen: adminProcedure
       .input(z.object({ id: z.number() }))
-      .mutation(async ({ input }) => {
-        await db.reopenDeadline(input.id);
+      .mutation(async ({ input, ctx }) => {
+        await db.reopenDeadline(input.id, ctx.user.id);
         return { success: true };
       }),
     getAttachments: protectedProcedure
@@ -801,6 +802,19 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
       .mutation(async ({ input, ctx }) => {
         await db.approveDeadline(input.id, ctx.user.id, input.reviewNotes);
         return { success: true };
+      }),
+    /** Admin sends a completed deadline back to the collaborator for
+     * correction, with a required observation of what needs fixing. */
+    requestCorrection: adminProcedure
+      .input(z.object({ id: z.number(), reviewNotes: z.string().min(1, "Debe indicar qué corregir") }))
+      .mutation(async ({ input, ctx }) => {
+        await db.requestDeadlineCorrection(input.id, ctx.user.id, input.reviewNotes);
+        return { success: true };
+      }),
+    getHistory: protectedProcedure
+      .input(z.object({ id: z.number() }))
+      .query(async ({ input }) => {
+        return db.getHistory("deadline", input.id);
       }),
     /** Manually correct a deadline's due date when detected to be wrong
      * (e.g. an error in the DIAN calendar import or the fallback estimate) */
@@ -920,6 +934,13 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
           evidenceFileKey: firstFile.key || null,
           completionNotes: input.completionNotes || null,
           driveSubfolder: input.driveSubfolder || null,
+          // Clear any previous review outcome — this is a fresh submission
+          // (possibly after a correction), so it should show as "sin
+          // revisar" again, not the old approval/correction note.
+          reviewStatus: null,
+          reviewNotes: null,
+          reviewedById: null,
+          reviewedAt: null,
         });
         for (const file of input.evidenceFiles) {
           await db.createTaskAttachment({
@@ -939,12 +960,13 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
         pushEvidenceToDrive(task.clientId, input.driveSubfolder, input.evidenceFiles, input.driveSubfolderId).catch(err =>
           console.error("[Google Drive] Error subiendo evidencia de la tarea:", err)
         );
+        await db.logHistoryEvent("task", input.id, "completada", ctx.user.id);
         return { success: true };
       }),
     /** Admin can reopen a completed task */
     reopen: adminProcedure
       .input(z.object({ id: z.number() }))
-      .mutation(async ({ input }) => {
+      .mutation(async ({ input, ctx }) => {
         await db.clearTaskAttachments(input.id);
         await db.updateTask(input.id, {
           status: "pendiente",
@@ -955,6 +977,7 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
           driveSubfolder: null,
           completionNotes: null,
         });
+        await db.logHistoryEvent("task", input.id, "reabierta", ctx.user.id);
         return { success: true };
       }),
     /** Admin-only: cancels a task no longer needed. Deletes it outright if
@@ -962,8 +985,8 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
      * existing work isn't lost, just removed from active dashboard views. */
     cancel: adminProcedure
       .input(z.object({ id: z.number() }))
-      .mutation(async ({ input }) => {
-        const result = await db.cancelTask(input.id);
+      .mutation(async ({ input, ctx }) => {
+        const result = await db.cancelTask(input.id, ctx.user.id);
         return { result };
       }),
     /** Upload attachment to a task */
@@ -1015,6 +1038,19 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
       .mutation(async ({ input, ctx }) => {
         await db.approveTask(input.id, ctx.user.id, input.reviewNotes);
         return { success: true };
+      }),
+    /** Admin sends a completed task back to the collaborator for
+     * correction, with a required observation of what needs fixing. */
+    requestCorrection: adminProcedure
+      .input(z.object({ id: z.number(), reviewNotes: z.string().min(1, "Debe indicar qué corregir") }))
+      .mutation(async ({ input, ctx }) => {
+        await db.requestTaskCorrection(input.id, ctx.user.id, input.reviewNotes);
+        return { success: true };
+      }),
+    getHistory: protectedProcedure
+      .input(z.object({ id: z.number() }))
+      .query(async ({ input }) => {
+        return db.getHistory("task", input.id);
       }),
   }),
 
