@@ -1,4 +1,5 @@
 import DashboardLayout from "@/components/DashboardLayout";
+import RecurringTasksDialog from "@/components/RecurringTasksDialog";
 import CommentsSection from "@/components/CommentsSection";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,7 +13,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { trpc } from "@/lib/trpc";
-import { ClipboardList, Plus, Loader2, Calendar, Upload, CheckCircle2, RotateCcw, Paperclip, FileText, Eye, FolderOpen, XCircle, X } from "lucide-react";
+import { ClipboardList, Plus, Loader2, Calendar, Upload, CheckCircle2, RotateCcw, Paperclip, FileText, Eye, FolderOpen, XCircle, X, Repeat } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
 import { toast } from "sonner";
 
@@ -61,6 +62,7 @@ export default function Tareas() {
   const uploadEvidence = trpc.tasks.uploadEvidence.useMutation();
 
   const [showForm, setShowForm] = useState(false);
+  const [showRecurringDialog, setShowRecurringDialog] = useState(false);
   const [editingTask, setEditingTask] = useState<any>(null);
   const [activeTab, setActiveTab] = useState("todas");
   const [showCompleteDialog, setShowCompleteDialog] = useState(false);
@@ -309,9 +311,14 @@ export default function Tareas() {
           <p className="text-muted-foreground mt-1">Gestión de tareas asignadas a colaboradores</p>
         </div>
         {isAdmin && (
-          <Button onClick={handleOpenNew} className="gap-2 bg-[#EDA011] hover:bg-[#d48f0f] text-white">
-            <Plus className="h-4 w-4" /> Nueva Tarea
-          </Button>
+          <div className="flex gap-2">
+            <Button onClick={() => setShowRecurringDialog(true)} variant="outline" className="gap-2">
+              <Repeat className="h-4 w-4" /> Recurrentes
+            </Button>
+            <Button onClick={handleOpenNew} className="gap-2 bg-[#EDA011] hover:bg-[#d48f0f] text-white">
+              <Plus className="h-4 w-4" /> Nueva Tarea
+            </Button>
+          </div>
         )}
       </div>
 
@@ -746,6 +753,8 @@ export default function Tareas() {
           )}
         </DialogContent>
       </Dialog>
+
+      <RecurringTasksDialog open={showRecurringDialog} onOpenChange={setShowRecurringDialog} />
     </div>
     </DashboardLayout>
   );

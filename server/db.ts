@@ -1,7 +1,7 @@
 import { eq, and, desc, asc, like, sql, inArray, gte, lte, or, ne } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { alias } from "drizzle-orm/mysql-core";
-import { InsertUser, users, clients, InsertClient, taxObligations, InsertTaxObligation, clientObligations, InsertClientObligation, taxDeadlines, InsertTaxDeadline, tasks, InsertTask, taskAttachments, InsertTaskAttachment, deadlineAttachments, InsertDeadlineAttachment, appSettings, InsertAppSetting, dianCalendar, InsertDianCalendar, clientDriveSubfolders, timeEntries, InsertTimeEntry, comments, InsertComment, historyEvents, notifications, workLocationEntries } from "../drizzle/schema";
+import { InsertUser, users, clients, InsertClient, taxObligations, InsertTaxObligation, clientObligations, InsertClientObligation, taxDeadlines, InsertTaxDeadline, tasks, InsertTask, taskAttachments, InsertTaskAttachment, deadlineAttachments, InsertDeadlineAttachment, appSettings, InsertAppSetting, dianCalendar, InsertDianCalendar, clientDriveSubfolders, timeEntries, InsertTimeEntry, comments, InsertComment, historyEvents, notifications, workLocationEntries, taskRecurrences, InsertTaskRecurrence } from "../drizzle/schema";
 import { ENV } from './_core/env';
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -996,6 +996,120 @@ export async function createTask(data: InsertTask) {
   const id = result[0].insertId;
   await logHistoryEvent("task", id, "creada", data.createdById || data.assignedToId || 0);
   return id;
+}
+
+// ==================== RECURRING TASKS ====================
+
+export async function createTaskRecurrence(data: InsertTaskRecurrence) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const result = await db.insert(taskRecurrences).values(data);
+  return result[0].insertId;
+}
+
+export async function getTaskRecurrences() {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select({
+    id: taskRecurrences.id,
+    title: taskRecurrences.title,
+    description: taskRecurrences.description,
+    clientId: taskRecurrences.clientId,
+    clientName: clients.razonSocial,
+    assignedToId: taskRecurrences.assignedToId,
+    assignedToName: users.name,
+    priority: taskRecurrences.priority,
+    recurrenceType: taskRecurrences.recurrenceType,
+    dayOfWeek: taskRecurrences.dayOfWeek,
+    dayOfMonth: taskRecurrences.dayOfMonth,
+    isActive: taskRecurrences.isActive,
+    createdAt: taskRecurrences.createdAt,
+  })
+    .from(taskRecurrences)
+    .innerJoin(clients, eq(taskRecurrences.clientId, clients.id))
+    .leftJoin(users, eq(taskRecurrences.assignedToId, users.id))
+    .orderBy(desc(taskRecurrences.createdAt));
+}
+
+export async function setTaskRecurrenceActive(id: number, isActive: boolean) {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(taskRecurrences).set({ isActive }).where(eq(taskRecurrences.id, id));
+}
+
+export async function deleteTaskRecurrence(id: number) {
+  const db = await getDb();
+  if (!db) return;
+  await db.delete(taskRecurrences).where(eq(taskRecurrences.id, id));
+}
+
+function lastDayOfMonthUTC(year: number, monthIndex0: number): number {
+  return new Date(Date.UTC(year, monthIndex0 + 1, 0)).getUTCDate();
+}
+
+/** Which due date(s) a rule should have a generated task for, given
+ * "today". Weekly/monthly give exactly one candidate for the current
+ * cycle; quincenal gives up to two (the 15th and the last day of the
+ * month), since both may already be due within the same month. */
+function computeCandidateDueDates(rule: { recurrenceType: string; dayOfWeek: number | null; dayOfMonth: number | null }, today: Date): Date[] {
+  const year = today.getUTCFullYear();
+  const month = today.getUTCMonth();
+
+  if (rule.recurrenceType === "semanal") {
+    const targetDow = rule.dayOfWeek ?? 5; // default Friday
+    const currentDow = today.getUTCDay();
+    const diff = targetDow - currentDow;
+    const d = new Date(Date.UTC(year, month, today.getUTCDate() + diff));
+    return [d];
+  }
+
+  if (rule.recurrenceType === "mensual") {
+    const day = Math.min(rule.dayOfMonth ?? 1, lastDayOfMonthUTC(year, month));
+    return [new Date(Date.UTC(year, month, day))];
+  }
+
+  // quincenal — fixed at the 15th and the last day of the current month.
+  const lastDay = lastDayOfMonthUTC(year, month);
+  return [new Date(Date.UTC(year, month, 15)), new Date(Date.UTC(year, month, lastDay))];
+}
+
+/** Checks every active recurrence rule and creates any task instance whose
+ * cycle has come up but wasn't generated yet (checked directly against
+ * existing tasks linked to that rule, so nothing is ever duplicated even
+ * if this is run more than once). Returns how many were created. */
+export async function generateDueRecurringTasks(): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const rules = await db.select().from(taskRecurrences).where(eq(taskRecurrences.isActive, true));
+
+  const now = new Date();
+  const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+
+  let created = 0;
+  for (const rule of rules) {
+    const candidates = computeCandidateDueDates(rule, today).filter(d => d.getTime() <= today.getTime());
+    for (const dueDate of candidates) {
+      const existing = await db.select({ id: tasks.id }).from(tasks)
+        .where(and(eq(tasks.recurrenceId, rule.id), eq(tasks.dueDate, dueDate)))
+        .limit(1);
+      if (existing.length > 0) continue;
+
+      const insertResult = await db.insert(tasks).values({
+        title: rule.title,
+        description: rule.description,
+        clientId: rule.clientId,
+        assignedToId: rule.assignedToId,
+        createdById: rule.createdById,
+        dueDate,
+        priority: rule.priority,
+        isAutoGenerated: true,
+        recurrenceId: rule.id,
+      });
+      await logHistoryEvent("task", insertResult[0].insertId, "creada", rule.createdById);
+      created++;
+    }
+  }
+  return created;
 }
 
 export async function getAllTasks(assignedToId?: number) {

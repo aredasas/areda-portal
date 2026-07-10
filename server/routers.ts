@@ -1079,6 +1079,58 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
       }),
   }),
 
+  /** Recurring task rules — a template that periodically generates real,
+   * independently-trackable task instances (weekly/quincenal/monthly),
+   * instead of one task getting silently reset every cycle. */
+  taskRecurrences: router({
+    list: adminProcedure.query(async () => {
+      return db.getTaskRecurrences();
+    }),
+    create: adminProcedure
+      .input(z.object({
+        title: z.string().min(1),
+        description: z.string().optional(),
+        clientId: z.number(),
+        assignedToId: z.number().optional(),
+        priority: z.enum(["baja", "media", "alta", "urgente"]).default("media"),
+        recurrenceType: z.enum(["semanal", "quincenal", "mensual"]),
+        dayOfWeek: z.number().min(0).max(6).optional(),
+        dayOfMonth: z.number().min(1).max(31).optional(),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        const id = await db.createTaskRecurrence({
+          title: input.title,
+          description: input.description || null,
+          clientId: input.clientId,
+          assignedToId: input.assignedToId || null,
+          priority: input.priority,
+          createdById: ctx.user.id,
+          recurrenceType: input.recurrenceType,
+          dayOfWeek: input.dayOfWeek ?? null,
+          dayOfMonth: input.dayOfMonth ?? null,
+        });
+        return { id };
+      }),
+    setActive: adminProcedure
+      .input(z.object({ id: z.number(), isActive: z.boolean() }))
+      .mutation(async ({ input }) => {
+        await db.setTaskRecurrenceActive(input.id, input.isActive);
+        return { success: true };
+      }),
+    delete: adminProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ input }) => {
+        await db.deleteTaskRecurrence(input.id);
+        return { success: true };
+      }),
+    /** Checks every active rule and creates any task whose cycle is due but
+     * hasn't been generated yet — safe to run repeatedly, never duplicates. */
+    generate: adminProcedure.mutation(async () => {
+      const count = await db.generateDueRecurringTasks();
+      return { count };
+    }),
+  }),
+
   settings: router({
     getAll: adminProcedure.query(async () => {
       return db.getAllSettings();

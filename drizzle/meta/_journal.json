@@ -141,6 +141,13 @@
       "when": 1783682301683,
       "tag": "0019_work_location_entries",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "5",
+      "when": 1783693501824,
+      "tag": "0020_task_recurrences",
+      "breakpoints": true
     }
   ]
 }
