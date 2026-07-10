@@ -331,15 +331,15 @@ export default function Revision() {
                   {attachments && attachments.length > 0 ? (
                     <div className="space-y-1">
                       {attachments.map((att: any) => (
-                        <div key={att.id} className="flex items-center justify-between p-2 bg-muted/50 rounded">
-                          <div className="min-w-0">
-                            <p className="truncate">{att.fileName}</p>
-                            <p className="text-[10px] text-muted-foreground">
+                        <div key={att.id} className="flex items-center gap-2 p-2 bg-muted/50 rounded w-full min-w-0">
+                          <div className="flex-1 min-w-0">
+                            <p className="truncate" title={att.fileName}>{att.fileName}</p>
+                            <p className="text-[10px] text-muted-foreground truncate">
                               {new Date(att.createdAt).toLocaleString("es-CO", { dateStyle: "medium", timeStyle: "short" })}
                               {att.uploadedByName && ` — ${att.uploadedByName}`}
                             </p>
                           </div>
-                          <a href={att.fileUrl} target="_blank" rel="noopener noreferrer" className="text-[#EDA011] text-xs underline shrink-0 ml-2">
+                          <a href={att.fileUrl} target="_blank" rel="noopener noreferrer" className="text-[#EDA011] text-xs underline shrink-0">
                             Ver
                           </a>
                         </div>
