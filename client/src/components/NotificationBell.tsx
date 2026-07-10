@@ -43,8 +43,12 @@ export default function NotificationBell() {
     setOpen(false);
     if (n.entityType === "task") {
       setLocation(`/tareas?taskId=${n.entityId}`);
-    } else {
+    } else if (n.clientId) {
       setLocation(`/vencimientos?clientId=${n.clientId}&deadlineId=${n.entityId}`);
+    } else {
+      // Older notifications created before clientId was tracked — fall
+      // back to just the page instead of a broken link.
+      setLocation("/vencimientos");
     }
   };
 
