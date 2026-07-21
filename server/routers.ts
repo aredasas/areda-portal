@@ -5,6 +5,15 @@ import crypto from "crypto";
 // admin by explicit business request — not all admins should see it.
 const ASISTENCIA_AUTHORIZED_CEDULA = "5820262";
 
+// Módulo Informes (Estado de Resultados por Centro de Costo) — visible por
+// ahora solo para este usuario, mismo criterio que Asistencia.
+export const INFORMES_AUTHORIZED_CEDULA = "5820262";
+function assertInformesAccess(cedula: string | null | undefined) {
+  if (cedula !== INFORMES_AUTHORIZED_CEDULA) {
+    throw new TRPCError({ code: "FORBIDDEN", message: "No autorizado para el módulo Informes" });
+  }
+}
+
 /** Best-effort copy of evidence files into the client's Drive folder.
  * R2 remains the source of truth for the app itself (viewing/downloading
  * evidence always works even if this fails) — this just also places a copy
@@ -62,6 +71,9 @@ import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, protectedProcedure, adminProcedure, router } from "./_core/trpc";
 import { z } from "zod";
 import * as db from "./db";
+import * as informesDb from "./informesDb";
+import { generarReporteERI } from "./informesReportERI";
+import { generarReporteERM } from "./informesReportERM";
 import { storagePut, storageGetSignedUrl } from "./storage";
 import { invokeLLM } from "./_core/llm";
 import { isDriveConfigured, extractFolderIdFromUrl, testFolderAccess, listSubfoldersRecursive, listAllFilesRecursive, uploadFileToDrive, resolveUploadFolder } from "./googleDrive";
@@ -1279,7 +1291,6 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
         clientId: z.number().optional(),
         assignedToId: z.number().optional(),
         obligationId: z.number().optional(),
-        taskSearch: z.string().optional(),
       }).optional())
       .query(async ({ input }) => {
         return db.getCompletedItemsForReview({
@@ -1287,7 +1298,6 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
           clientId: input?.clientId,
           assignedToId: input?.assignedToId,
           obligationId: input?.obligationId,
-          taskSearch: input?.taskSearch,
         });
       }),
   }),
@@ -1580,6 +1590,123 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
     markAllRead: protectedProcedure.mutation(async ({ ctx }) => {
       await db.markAllNotificationsRead(ctx.user.id);
       return { success: true };
+    }),
+  }),
+
+  informes: router({
+    // Clientes disponibles para el módulo (todos los activos de Areda Work;
+    // el módulo en sí ya está restringido por cédula en cada endpoint).
+    clientes: router({
+      list: protectedProcedure.query(async ({ ctx }) => {
+        assertInformesAccess(ctx.user.cedula);
+        return db.getAllClients();
+      }),
+    }),
+    centrosCosto: router({
+      list: protectedProcedure
+        .input(z.object({ clienteId: z.number() }))
+        .query(async ({ input, ctx }) => {
+          assertInformesAccess(ctx.user.cedula);
+          return informesDb.getCentrosCosto(input.clienteId);
+        }),
+      create: protectedProcedure
+        .input(z.object({ clienteId: z.number(), codigo: z.string().min(1), nombre: z.string().min(1) }))
+        .mutation(async ({ input, ctx }) => {
+          assertInformesAccess(ctx.user.cedula);
+          await informesDb.createCentroCosto(input.clienteId, input.codigo, input.nombre);
+          return { success: true };
+        }),
+      // Conveniencia: siembra el catálogo conocido de Colfamil (23 puntos +
+      // Adm) para el clienteId indicado. No hace nada si ese cliente ya
+      // tiene centros cargados.
+      seedColfamil: protectedProcedure
+        .input(z.object({ clienteId: z.number() }))
+        .mutation(async ({ input, ctx }) => {
+          assertInformesAccess(ctx.user.cedula);
+          await informesDb.seedCentrosCosto(input.clienteId, informesDb.CENTROS_SEED_COLFAMIL);
+          return { success: true };
+        }),
+      update: protectedProcedure
+        .input(z.object({ id: z.number(), nombre: z.string().optional(), activo: z.boolean().optional() }))
+        .mutation(async ({ input, ctx }) => {
+          assertInformesAccess(ctx.user.cedula);
+          const { id, ...data } = input;
+          await informesDb.updateCentroCosto(id, data);
+          return { success: true };
+        }),
+    }),
+    cargas: router({
+      list: protectedProcedure
+        .input(z.object({ clienteId: z.number(), anio: z.number().optional() }))
+        .query(async ({ input, ctx }) => {
+          assertInformesAccess(ctx.user.cedula);
+          return informesDb.listarCargas(input.clienteId, input.anio);
+        }),
+      // La subida real del archivo (puede pesar 50-100mb+) va por
+      // POST /api/informes/upload (binario crudo), no por tRPC — ver
+      // server/_core/index.ts. Esta query solo permite consultar el estado
+      // de una carga ya creada, para el polling desde el frontend.
+      getById: protectedProcedure
+        .input(z.object({ clienteId: z.number(), id: z.number() }))
+        .query(async ({ input, ctx }) => {
+          assertInformesAccess(ctx.user.cedula);
+          const cargas = await informesDb.listarCargas(input.clienteId);
+          return cargas.find(c => c.id === input.id) || null;
+        }),
+    }),
+    reportes: router({
+      list: protectedProcedure
+        .input(z.object({ clienteId: z.number(), anio: z.number().optional() }))
+        .query(async ({ input, ctx }) => {
+          assertInformesAccess(ctx.user.cedula);
+          return informesDb.listarReportes(input.clienteId, input.anio);
+        }),
+      // ERM (Estado de Resultados Mensual comparativo) — el informe
+      // principal: un año, comparativo por mes, todos los centros de costo
+      // combinados. Funciona igual con o sin centros de costo.
+      generarERM: protectedProcedure
+        .input(z.object({
+          clienteId: z.number(), anio: z.number(),
+          nivel: z.enum(["resumen", "detalle"]).default("resumen"),
+        }))
+        .mutation(async ({ input, ctx }) => {
+          assertInformesAccess(ctx.user.cedula);
+          const buffer = await generarReporteERM(input.clienteId, input.anio, input.nivel);
+          const key = `informes/ERM_${input.clienteId}_${input.anio}_${input.nivel}_${Date.now()}.xlsx`;
+          const { url, key: fileKey } = await storagePut(
+            key, buffer, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          );
+          await informesDb.guardarReporteGenerado({
+            clienteId: input.clienteId, anio: input.anio, mes: null, tipo: "ERM",
+            nivel: input.nivel, fileKey, generadoPorId: ctx.user.id,
+          });
+          const signedUrl = await storageGetSignedUrl(fileKey);
+          return { url, signedUrl, fileKey };
+        }),
+      // ERI (por centro de costo) — informe derivado del ERM, solo tiene
+      // sentido para clientes que manejan centro de costo.
+      generarERI: protectedProcedure
+        .input(z.object({ clienteId: z.number(), anio: z.number(), mes: z.number().min(1).max(12) }))
+        .mutation(async ({ input, ctx }) => {
+          assertInformesAccess(ctx.user.cedula);
+          const buffer = await generarReporteERI(input.clienteId, input.anio, input.mes);
+          const key = `informes/ERI_${input.clienteId}_${input.anio}_${String(input.mes).padStart(2, "0")}_${Date.now()}.xlsx`;
+          const { url, key: fileKey } = await storagePut(
+            key, buffer, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          );
+          await informesDb.guardarReporteGenerado({
+            clienteId: input.clienteId, anio: input.anio, mes: input.mes, tipo: "ERI",
+            nivel: "detalle", fileKey, generadoPorId: ctx.user.id,
+          });
+          const signedUrl = await storageGetSignedUrl(fileKey);
+          return { url, signedUrl, fileKey };
+        }),
+      getDownloadUrl: protectedProcedure
+        .input(z.object({ fileKey: z.string() }))
+        .query(async ({ input, ctx }) => {
+          assertInformesAccess(ctx.user.cedula);
+          return { signedUrl: await storageGetSignedUrl(input.fileKey) };
+        }),
     }),
   }),
 });

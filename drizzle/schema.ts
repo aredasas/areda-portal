@@ -1,4 +1,4 @@
-import { int, mysqlEnum, mysqlTable, text, timestamp, varchar, boolean, json } from "drizzle-orm/mysql-core";
+import { int, mysqlEnum, mysqlTable, text, timestamp, varchar, boolean, json, double, index, uniqueIndex } from "drizzle-orm/mysql-core";
 
 /**
  * Users table - Colaboradores de la firma
@@ -406,3 +406,118 @@ export const taskRecurrences = mysqlTable("taskRecurrences", {
 
 export type TaskRecurrence = typeof taskRecurrences.$inferSelect;
 export type InsertTaskRecurrence = typeof taskRecurrences.$inferInsert;
+
+/**
+ * ============================================================
+ * MÓDULO INFORMES — Financieros multi-cliente derivados del libro
+ * auxiliar/movimiento contable. Incluye el Estado de Resultados
+ * Mensual comparativo (ERM, el informe principal, por cliente,
+ * sin importar si tiene centros de costo) y el ERI por centro de
+ * costo (derivado, hoy solo aplica a clientes que sí los usan,
+ * como Colfamil). Restringido por ahora al usuario con cédula
+ * autorizada (ver INFORMES_AUTHORIZED_CEDULA en routers.ts).
+ * ============================================================
+ */
+
+/** Catálogo de centros de costo por cliente (código -> nombre real).
+ * Solo aplica a clientes que manejan centro de costo (ej. Colfamil);
+ * para el resto simplemente no se siembra ninguno. Se siembra una
+ * vez por cliente y luego es editable. */
+export const informesCentrosCosto = mysqlTable("informesCentrosCosto", {
+  id: int("id").autoincrement().primaryKey(),
+  clienteId: int("clienteId").notNull(),
+  codigo: varchar("codigo", { length: 4 }).notNull(),
+  nombre: varchar("nombre", { length: 120 }).notNull(),
+  activo: boolean("activo").default(true).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (table) => ({
+  clienteCodigoIdx: uniqueIndex("informesCentrosCosto_cliente_codigo_idx").on(table.clienteId, table.codigo),
+}));
+export type InformeCentroCosto = typeof informesCentrosCosto.$inferSelect;
+export type InsertInformeCentroCosto = typeof informesCentrosCosto.$inferInsert;
+
+/** Catálogo de cuentas PUC, a nivel de detalle completo (hasta el código
+ * exacto que traiga el libro auxiliar, típicamente 6+ dígitos — no se
+ * trunca). Es compartido entre clientes: el PUC colombiano es un
+ * estándar, así que la descripción de una cuenta no depende del cliente.
+ * El tipo (ingreso/costo/gasto/descuento_pp) se deriva del primer
+ * dígito, pero la descripción no viene en el libro auxiliar crudo, así
+ * que se completa una sola vez por IA la primera vez que aparece. */
+export const informesCuentasPuc = mysqlTable("informesCuentasPuc", {
+  id: int("id").autoincrement().primaryKey(),
+  cuenta: varchar("cuenta", { length: 12 }).notNull().unique(),
+  descripcion: varchar("descripcion", { length: 255 }),
+  tipo: mysqlEnum("tipo", ["ingreso", "costo", "gasto", "descuento_pp"]).notNull(),
+  clasificadoPorIA: boolean("clasificadoPorIA").default(false).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+export type InformeCuentaPuc = typeof informesCuentasPuc.$inferSelect;
+export type InsertInformeCuentaPuc = typeof informesCuentasPuc.$inferInsert;
+
+/** Una fila por archivo de libro auxiliar/movimiento cargado (un
+ * cliente + mes). */
+export const informesCargas = mysqlTable("informesCargas", {
+  id: int("id").autoincrement().primaryKey(),
+  clienteId: int("clienteId").notNull(),
+  anio: int("anio").notNull(),
+  mes: int("mes").notNull(), // 1-12
+  nombreArchivo: varchar("nombreArchivo", { length: 255 }).notNull(),
+  fileKey: varchar("fileKey", { length: 500 }),
+  totalFilas: int("totalFilas"),
+  estado: mysqlEnum("estado", ["procesando", "completado", "error"]).default("procesando").notNull(),
+  mensajeError: text("mensajeError"),
+  cargadoPorId: int("cargadoPorId").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (table) => ({
+  clienteAnioMesIdx: index("informesCargas_cliente_anioMes_idx").on(table.clienteId, table.anio, table.mes),
+}));
+export type InformeCarga = typeof informesCargas.$inferSelect;
+export type InsertInformeCarga = typeof informesCargas.$inferInsert;
+
+/** Saldos agregados por cliente + mes + centro de costo + cuenta, a
+ * detalle completo (código de cuenta tal cual viene en el libro
+ * auxiliar, sin truncar a 4 dígitos). Esta es la tabla histórica que
+ * alimenta TODOS los informes derivados: cada carga mensual upsertea
+ * sus filas aquí, así el ERM, el ERI por centro, el punto de
+ * equilibrio y el pareto se calculan sobre lo ya cargado, sin
+ * reprocesar los archivos crudos.
+ * Para clientes sin centro de costo, centroCodigo queda "SC" siempre
+ * (no afecta al ERM, que suma todos los centros).
+ * La agregación a nivel de 4 dígitos (ej. 5105) para vistas resumidas
+ * se hace en tiempo de reporte (LEFT(cuenta, 4)), no al guardar. */
+export const informesSaldosMensuales = mysqlTable("informesSaldosMensuales", {
+  id: int("id").autoincrement().primaryKey(),
+  cargaId: int("cargaId").notNull(),
+  clienteId: int("clienteId").notNull(),
+  anio: int("anio").notNull(),
+  mes: int("mes").notNull(),
+  centroCodigo: varchar("centroCodigo", { length: 4 }).notNull(),
+  cuenta: varchar("cuenta", { length: 12 }).notNull(),
+  tipo: mysqlEnum("tipo", ["ingreso", "costo", "gasto", "descuento_pp"]).notNull(),
+  valor: double("valor").notNull(),
+}, (table) => ({
+  periodoCentroCuentaIdx: uniqueIndex("informesSaldos_periodo_centro_cuenta_idx")
+    .on(table.clienteId, table.anio, table.mes, table.centroCodigo, table.cuenta),
+  clienteAnioIdx: index("informesSaldos_cliente_anio_idx").on(table.clienteId, table.anio),
+}));
+export type InformeSaldoMensual = typeof informesSaldosMensuales.$inferSelect;
+export type InsertInformeSaldoMensual = typeof informesSaldosMensuales.$inferInsert;
+
+/** Un registro por reporte generado (para historial/descarga posterior).
+ * tipo: "ERM" = Estado de Resultados Mensual comparativo (el principal,
+ * por cliente, todo el año); "ERI" = por centro de costo (derivado). */
+export const informesReportes = mysqlTable("informesReportes", {
+  id: int("id").autoincrement().primaryKey(),
+  clienteId: int("clienteId").notNull(),
+  anio: int("anio").notNull(),
+  mes: int("mes"), // null en reportes anuales como el ERM
+  tipo: varchar("tipo", { length: 40 }).default("ERM").notNull(),
+  nivel: mysqlEnum("nivel", ["resumen", "detalle"]).default("resumen").notNull(),
+  fileKey: varchar("fileKey", { length: 500 }).notNull(),
+  generadoPorId: int("generadoPorId").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (table) => ({
+  clienteAnioIdx: index("informesReportes_cliente_anio_idx").on(table.clienteId, table.anio),
+}));
+export type InformeReporte = typeof informesReportes.$inferSelect;
+export type InsertInformeReporte = typeof informesReportes.$inferInsert;

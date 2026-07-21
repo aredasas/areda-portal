@@ -36,6 +36,60 @@ async function startServer() {
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
   registerStorageProxy(app);
   registerOAuthRoutes(app);
+
+  // Módulo Informes: el libro auxiliar/movimiento puede pesar 50-100mb+
+  // (cientos de miles de filas), así que se sube como binario crudo en su
+  // propia ruta con un límite más alto, en vez de base64 dentro del JSON
+  // global de 50mb. Restringido a la misma cédula autorizada para Informes.
+  app.post(
+    "/api/informes/upload",
+    express.raw({ limit: "200mb", type: () => true }),
+    async (req, res) => {
+      try {
+        const { sdk } = await import("./sdk");
+        const user = await sdk.authenticateRequest(req);
+        const { INFORMES_AUTHORIZED_CEDULA } = await import("../routers");
+        if (!user || user.cedula !== INFORMES_AUTHORIZED_CEDULA) {
+          return res.status(403).json({ error: "No autorizado" });
+        }
+        const clienteId = parseInt(String(req.query.clienteId));
+        const anio = parseInt(String(req.query.anio));
+        const mes = parseInt(String(req.query.mes));
+        const nombreArchivo = String(req.query.nombreArchivo || "libro_auxiliar.xlsx");
+        if (!clienteId || !anio || !mes || mes < 1 || mes > 12) {
+          return res.status(400).json({ error: "clienteId, anio y mes son requeridos (mes 1-12)" });
+        }
+
+        const informesDb = await import("../informesDb");
+        const cargaId = await informesDb.crearCarga({
+          clienteId, anio, mes, nombreArchivo, cargadoPorId: user.id,
+        });
+
+        try {
+          const cuentasConocidas = new Set((await informesDb.getCuentasPucConocidas()).keys());
+          const { detalle, totalFilas, filasFueraDePeriodo, cuentasNuevas } = await informesDb.parseLibroAuxiliar(
+            req.body as Buffer, cuentasConocidas, anio, mes,
+          );
+          if (cuentasNuevas.size > 0) {
+            await informesDb.clasificarCuentasNuevas(Array.from(cuentasNuevas));
+          }
+          await informesDb.guardarSaldosMensuales(cargaId, clienteId, anio, mes, detalle);
+          await informesDb.marcarCargaCompletada(cargaId, totalFilas);
+          return res.json({
+            success: true, cargaId, totalFilas, filasFueraDePeriodo,
+            cuentasNuevas: Array.from(cuentasNuevas),
+          });
+        } catch (parseError: any) {
+          await informesDb.marcarCargaError(cargaId, String(parseError?.message || parseError));
+          throw parseError;
+        }
+      } catch (error: any) {
+        console.error("[Informes] Error al procesar carga:", error);
+        return res.status(500).json({ error: error?.message || "Error al procesar el archivo" });
+      }
+    },
+  );
+
   // Scheduled endpoint for deadline notifications AND auto-task generation
   app.post("/api/scheduled/deadline-alerts", async (req, res) => {
     try {
