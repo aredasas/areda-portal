@@ -148,6 +148,13 @@
       "when": 1783693501824,
       "tag": "0020_task_recurrences",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "5",
+      "when": 1784670486652,
+      "tag": "0021_informes_y_tablero",
+      "breakpoints": true
     }
   ]
 }
