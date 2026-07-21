@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { trpc } from "@/lib/trpc";
 import {
@@ -21,6 +22,7 @@ import {
   FileText,
   ChevronDown,
   ChevronUp,
+  Search,
 } from "lucide-react";
 
 export default function Tablero() {
@@ -28,6 +30,7 @@ export default function Tablero() {
   const isAdmin = user?.role === "admin";
 
   const [filtroObligacion, setFiltroObligacion] = useState<string>("todas");
+  const [busqueda, setBusqueda] = useState("");
   const [nuevoContenido, setNuevoContenido] = useState("");
   const [nuevaObligacion, setNuevaObligacion] = useState<string>("general");
   const [archivosNuevos, setArchivosNuevos] = useState<File[]>([]);
@@ -37,6 +40,7 @@ export default function Tablero() {
   const { data: obligations } = trpc.obligations.list.useQuery();
   const { data: posts, isLoading, refetch } = trpc.board.posts.list.useQuery({
     obligationId: filtroObligacion === "todas" ? undefined : filtroObligacion === "general" ? 0 : parseInt(filtroObligacion),
+    busqueda: busqueda.trim() || undefined,
   });
 
   const createPost = trpc.board.posts.create.useMutation();
@@ -119,7 +123,7 @@ export default function Tablero() {
           </CardContent>
         </Card>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <span className="text-sm text-muted-foreground">Filtrar:</span>
           <Select value={filtroObligacion} onValueChange={setFiltroObligacion}>
             <SelectTrigger className="w-52"><SelectValue /></SelectTrigger>
@@ -131,6 +135,15 @@ export default function Tablero() {
               ))}
             </SelectContent>
           </Select>
+          <div className="relative">
+            <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+            <Input
+              value={busqueda}
+              onChange={(e) => setBusqueda(e.target.value)}
+              placeholder="Buscar palabra o frase..."
+              className="w-64 pl-7"
+            />
+          </div>
         </div>
 
         {isLoading ? (

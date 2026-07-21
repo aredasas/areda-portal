@@ -1907,12 +1907,28 @@ export async function createBoardPost(authorId: number, content: string, obligat
 
 /** filters.obligationId: undefined = todas las publicaciones; null =
  * solo "General"; un número = solo esa obligación. */
-export async function getBoardPosts(filters: { obligationId?: number | null }) {
+export async function getBoardPosts(filters: { obligationId?: number | null; busqueda?: string }) {
   const db = await getDb();
   if (!db) return [];
   const conditions = [];
   if (filters.obligationId === null) conditions.push(isNull(boardPosts.obligationId));
   else if (typeof filters.obligationId === "number") conditions.push(eq(boardPosts.obligationId, filters.obligationId));
+
+  if (filters.busqueda && filters.busqueda.trim()) {
+    const termino = `%${filters.busqueda.trim()}%`;
+    // Coincide si el texto está en la publicación misma, o en alguno de sus
+    // comentarios/respuestas — así una búsqueda encuentra el tema aunque la
+    // palabra solo aparezca en una respuesta, no en el mensaje original.
+    const conComentarioCoincidente = await db.select({ entityId: comments.entityId })
+      .from(comments)
+      .where(and(eq(comments.entityType, "board_post"), like(comments.content, termino)));
+    const idsPorComentario = conComentarioCoincidente.map(r => r.entityId);
+    conditions.push(
+      idsPorComentario.length > 0
+        ? or(like(boardPosts.content, termino), inArray(boardPosts.id, idsPorComentario))
+        : like(boardPosts.content, termino),
+    );
+  }
 
   return db.select({
     id: boardPosts.id,
@@ -1988,6 +2004,36 @@ export async function getAllActiveUserIds(excludeUserId?: number): Promise<numbe
   if (!db) return [];
   const rows = await db.select({ id: users.id }).from(users).where(eq(users.isActive, true));
   return rows.map(r => r.id).filter(id => id !== excludeUserId);
+}
+
+/** Publicaciones recientes del Tablero (con nombre de la obligación y sus
+ * adjuntos), para que el asistente de IA las use como contexto — el
+ * Tablero es conocimiento general del equipo (aclaraciones de proceso,
+ * documentos de estudio), útil sin importar de qué cliente se esté
+ * preguntando. Limitado a las más recientes (fijadas primero) para no
+ * inflar cada consulta con todo el histórico. */
+export async function getBoardContextForAssistant(limite: number = 15) {
+  const db = await getDb();
+  if (!db) return [];
+  const posts = await db.select({
+    id: boardPosts.id,
+    content: boardPosts.content,
+    obligationName: taxObligations.name,
+    authorName: users.name,
+    pinned: boardPosts.pinned,
+    createdAt: boardPosts.createdAt,
+  })
+    .from(boardPosts)
+    .leftJoin(users, eq(boardPosts.authorId, users.id))
+    .leftJoin(taxObligations, eq(boardPosts.obligationId, taxObligations.id))
+    .orderBy(desc(boardPosts.pinned), desc(boardPosts.createdAt))
+    .limit(limite);
+
+  const conAdjuntos = await Promise.all(posts.map(async p => ({
+    ...p,
+    adjuntos: await getBoardPostAttachments(p.id),
+  })));
+  return conAdjuntos;
 }
 
 

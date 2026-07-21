@@ -1358,6 +1358,31 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
           }
         }
 
+        // Tablero: avisos y aclaraciones generales del equipo (no atadas a
+        // este cliente en particular) — conocimiento operativo útil sin
+        // importar de qué cliente se esté preguntando, incluyendo
+        // documentos que se hayan subido ahí para estudio.
+        const boardPosts = await db.getBoardContextForAssistant(15);
+        const boardSummary = boardPosts.map(p => {
+          const adjuntosTxt = p.adjuntos.length > 0
+            ? ` [Adjuntos: ${p.adjuntos.map(a => a.fileName).join(", ")}]`
+            : "";
+          return `- ${p.pinned ? "📌 " : ""}[${p.obligationName || "General"}] ${p.authorName || "Usuario"}: ${p.content}${adjuntosTxt}`;
+        }).join("\n");
+        const boardAttachmentBlocks = await Promise.all(
+          boardPosts
+            .flatMap(p => p.adjuntos)
+            .filter(a => a.contentType === "application/pdf" || (a.contentType || "").startsWith("image/"))
+            .slice(0, 6)
+            .map(async a => ({
+              type: "file_url" as const,
+              file_url: {
+                url: await storageGetSignedUrl(a.fileKey),
+                mime_type: a.contentType || "application/pdf",
+              },
+            })),
+        );
+
         // Operational context: tasks, deadlines, and their comments.
         const { tasks: clientTasks, deadlines: clientDeadlines } = await db.getClientOperationalContext(input.clientId);
         const tasksSummary = clientTasks.map(t => {
@@ -1385,6 +1410,9 @@ ${tasksSummary || "No hay tareas registradas para este cliente."}
 Vencimientos tributarios de este cliente (con sus comentarios, si tienen):
 ${deadlinesSummary || "No hay vencimientos registrados para este cliente."}
 
+Avisos y aclaraciones generales del equipo (Tablero — no son específicos de este cliente, pero pueden ser relevantes: procesos, dudas resueltas, documentos de estudio subidos por el equipo):
+${boardSummary || "No hay publicaciones en el Tablero todavía."}
+
 Responde basándote en esta información cuando sea posible. Si la pregunta requiere el contenido de un documento que no tienes disponible (solo aparece en la lista de "otros documentos"), dile al usuario que lo revise directamente en Drive en vez de inventar su contenido. Sé conciso y directo, como corresponde a un contexto de trabajo contable.`;
 
         const historyMessages = (input.history || []).map(h => ({ role: h.role, content: h.content }));
@@ -1399,6 +1427,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
               content: [
                 { type: "text" as const, text: input.message },
                 ...evidenceBlocks,
+                ...boardAttachmentBlocks,
               ],
             },
           ],
@@ -1737,12 +1766,12 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
     posts: router({
       // obligationId: omitir = todas; 0 = solo "General"; N = esa obligación
       list: protectedProcedure
-        .input(z.object({ obligationId: z.number().optional() }).optional())
+        .input(z.object({ obligationId: z.number().optional(), busqueda: z.string().optional() }).optional())
         .query(async ({ input }) => {
           const filtro = input?.obligationId === undefined ? {}
             : input.obligationId === 0 ? { obligationId: null as null }
             : { obligationId: input.obligationId };
-          return db.getBoardPosts(filtro);
+          return db.getBoardPosts({ ...filtro, busqueda: input?.busqueda });
         }),
       create: protectedProcedure
         .input(z.object({ content: z.string().min(1), obligationId: z.number().optional() }))
