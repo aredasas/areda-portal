@@ -1279,6 +1279,7 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
         clientId: z.number().optional(),
         assignedToId: z.number().optional(),
         obligationId: z.number().optional(),
+        taskSearch: z.string().optional(),
       }).optional())
       .query(async ({ input }) => {
         return db.getCompletedItemsForReview({
@@ -1286,6 +1287,7 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
           clientId: input?.clientId,
           assignedToId: input?.assignedToId,
           obligationId: input?.obligationId,
+          taskSearch: input?.taskSearch,
         });
       }),
   }),

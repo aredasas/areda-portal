@@ -5,6 +5,7 @@ import DashboardLayout from "@/components/DashboardLayout";
 import CommentsSection from "@/components/CommentsSection";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
@@ -22,6 +23,7 @@ import {
   ThumbsUp,
   RotateCcw,
   History,
+  Search,
 } from "lucide-react";
 
 const historyLabels: Record<string, string> = {
@@ -61,6 +63,7 @@ export default function Revision() {
   const [clientFilter, setClientFilter] = useState("all");
   const [assigneeFilter, setAssigneeFilter] = useState("all");
   const [obligationFilter, setObligationFilter] = useState("all");
+  const [taskSearch, setTaskSearch] = useState("");
   const [selectedItem, setSelectedItem] = useState<any>(null);
 
   const { data: clients } = trpc.clients.list.useQuery();
@@ -72,6 +75,7 @@ export default function Revision() {
     clientId: clientFilter !== "all" ? parseInt(clientFilter) : undefined,
     assignedToId: assigneeFilter !== "all" ? parseInt(assigneeFilter) : undefined,
     obligationId: obligationFilter !== "all" ? parseInt(obligationFilter) : undefined,
+    taskSearch: taskSearch.trim() || undefined,
   });
 
   const { data: taskDetail } = trpc.tasks.getById.useQuery(
@@ -220,6 +224,16 @@ export default function Revision() {
               ))}
             </SelectContent>
           </Select>
+
+          <div className="relative">
+            <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+            <Input
+              value={taskSearch}
+              onChange={(e) => setTaskSearch(e.target.value)}
+              placeholder="Buscar tarea..."
+              className="w-[190px] h-9 pl-7"
+            />
+          </div>
         </div>
 
         <Card>

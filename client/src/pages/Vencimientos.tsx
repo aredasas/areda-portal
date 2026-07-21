@@ -13,6 +13,7 @@ import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { trpc } from "@/lib/trpc";
+import { bogotaTodayUTCMidnight } from "@/lib/dateUtils";
 import { Calendar, Loader2, RefreshCw, Settings2, CheckCircle2, ChevronLeft, ChevronRight, List, CalendarDays, Pencil, Upload, FileText, FolderOpen, RotateCcw, X, MessageSquare } from "lucide-react";
 import { useState, useMemo, useRef, useEffect } from "react";
 import { toast } from "sonner";
@@ -46,8 +47,7 @@ const statusDotColors: Record<string, string> = {
 function getDisplayStatus(d: { status: string; dueDate: string | Date }): string {
   if (d.status !== "pendiente" && d.status !== "en_progreso") return d.status;
   const due = new Date(d.dueDate);
-  const now = new Date();
-  const todayUTCMidnight = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const todayUTCMidnight = bogotaTodayUTCMidnight();
   return due.getTime() < todayUTCMidnight.getTime() ? "vencido" : d.status;
 }
 
@@ -208,12 +208,12 @@ export default function Vencimientos() {
   const [viewMode, setViewMode] = useState<"list" | "calendar">("calendar");
   const [calendarView, setCalendarView] = useState<"month" | "week">("month");
   const [weekStart, setWeekStart] = useState(() => {
-    const now = new Date();
-    // Use UTC day-of-week so this lines up with how deadline dates are
-    // stored/compared everywhere else (UTC), instead of the browser's local
-    // timezone — that mismatch was shifting the week view by a day.
-    const dayOfWeek = (now.getUTCDay() + 6) % 7; // Monday=0
-    return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - dayOfWeek));
+    // Ancla la semana al día de HOY en Bogotá (no UTC) — de lo contrario,
+    // después de las 7pm hora Colombia la vista semanal saltaba a la
+    // semana siguiente un día antes de tiempo.
+    const hoy = bogotaTodayUTCMidnight();
+    const dayOfWeek = (hoy.getUTCDay() + 6) % 7; // Monday=0
+    return new Date(Date.UTC(hoy.getUTCFullYear(), hoy.getUTCMonth(), hoy.getUTCDate() - dayOfWeek));
   });
 
 
@@ -584,12 +584,11 @@ export default function Vencimientos() {
                     <TableBody>
                       {upcomingDeadlines.map((d) => {
                         const dueDate = new Date(d.dueDate);
-                        // Compare against the start of today in UTC, matching
-                        // how due dates are stored (UTC midnight) — comparing
-                        // against Date.now() made overdue items misread as
-                        // "today" instead of "vencido".
-                        const nowInstant = new Date();
-                        const todayUTCMidnight = new Date(Date.UTC(nowInstant.getUTCFullYear(), nowInstant.getUTCMonth(), nowInstant.getUTCDate()));
+                        // Compare against the start of today en Bogotá
+                        // (no UTC) — comparar contra el día calendario UTC
+                        // hacía que el corte de "hoy" ocurriera a las 7pm
+                        // hora Colombia en vez de a medianoche.
+                        const todayUTCMidnight = bogotaTodayUTCMidnight();
                         const daysLeft = Math.round((dueDate.getTime() - todayUTCMidnight.getTime()) / (1000 * 60 * 60 * 24));
                         return (
                           <TableRow key={d.id}>

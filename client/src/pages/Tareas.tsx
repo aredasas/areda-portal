@@ -13,6 +13,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { trpc } from "@/lib/trpc";
+import { getEffectivePriority, priorityLabels, priorityColors } from "@/lib/priority";
 import { ClipboardList, Plus, Loader2, Calendar, Upload, CheckCircle2, RotateCcw, Paperclip, FileText, Eye, FolderOpen, XCircle, X, Repeat } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
 import { toast } from "sonner";
@@ -31,20 +32,6 @@ const statusColors: Record<string, string> = {
   completada: "bg-green-100 text-green-800 border-green-200",
   vencida: "bg-red-100 text-red-800 border-red-200",
   cancelada: "bg-gray-200 text-gray-600 border-gray-300",
-};
-
-const priorityLabels: Record<string, string> = {
-  baja: "Baja",
-  media: "Media",
-  alta: "Alta",
-  urgente: "Urgente",
-};
-
-const priorityColors: Record<string, string> = {
-  baja: "bg-gray-100 text-gray-700 border-gray-200",
-  media: "bg-blue-50 text-blue-700 border-blue-200",
-  alta: "bg-orange-100 text-orange-700 border-orange-200",
-  urgente: "bg-red-100 text-red-700 border-red-200",
 };
 
 export default function Tareas() {
@@ -374,8 +361,8 @@ export default function Tareas() {
                           ) : "-"}
                         </TableCell>
                         <TableCell>
-                          <Badge variant="outline" className={priorityColors[task.priority]}>
-                            {priorityLabels[task.priority]}
+                          <Badge variant="outline" className={priorityColors[getEffectivePriority(task.priority, task.dueDate, task.status)]}>
+                            {priorityLabels[getEffectivePriority(task.priority, task.dueDate, task.status)]}
                           </Badge>
                         </TableCell>
                         <TableCell>
@@ -644,7 +631,7 @@ export default function Tareas() {
                 <div><span className="text-muted-foreground">Cliente:</span> {detailTask.clientName}</div>
                 <div><span className="text-muted-foreground">Responsable:</span> {detailTask.assignedToName || "Sin asignar"}</div>
                 <div><span className="text-muted-foreground">Estado:</span> <Badge variant="outline" className={statusColors[detailTask.status]}>{statusLabels[detailTask.status]}</Badge></div>
-                <div><span className="text-muted-foreground">Prioridad:</span> <Badge variant="outline" className={priorityColors[detailTask.priority]}>{priorityLabels[detailTask.priority]}</Badge></div>
+                <div><span className="text-muted-foreground">Prioridad:</span> <Badge variant="outline" className={priorityColors[getEffectivePriority(detailTask.priority, detailTask.dueDate, detailTask.status)]}>{priorityLabels[getEffectivePriority(detailTask.priority, detailTask.dueDate, detailTask.status)]}</Badge></div>
                 {detailTask.dueDate && <div><span className="text-muted-foreground">Fecha límite:</span> {new Date(detailTask.dueDate).toLocaleDateString("es-CO", { timeZone: "UTC" })}</div>}
                 {detailTask.completedAt && (
                   <div>

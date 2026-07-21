@@ -6,6 +6,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { trpc } from "@/lib/trpc";
+import { bogotaTodayUTCMidnight } from "@/lib/dateUtils";
+import { getEffectivePriority } from "@/lib/priority";
 import { useMemo, useState } from "react";
 import {
   ClipboardList,
@@ -319,7 +321,7 @@ export default function Home() {
                         // less than 24h read as "1 day left" instead of
                         // "vencido", and things due earlier today could
                         // read wrong depending on the time of day.
-                        const todayUTCMidnight = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+                        const todayUTCMidnight = bogotaTodayUTCMidnight(now);
                         const daysLeft = Math.round((itemDate.getTime() - todayUTCMidnight.getTime()) / (1000 * 60 * 60 * 24));
                         return (
                           <div key={item.id} className="flex items-center justify-between p-3 rounded-lg bg-muted/50 hover:bg-muted transition-colors">
@@ -383,11 +385,14 @@ export default function Home() {
                                   <span className="text-[10px] text-muted-foreground truncate max-w-[60%]">
                                     {task.clientName || "Sin cliente"}
                                   </span>
-                                  {task.priority && (
-                                    <Badge variant="outline" className={`text-[10px] px-1 py-0 ${priorityColors[task.priority] || ""}`}>
-                                      {task.priority}
-                                    </Badge>
-                                  )}
+                                  {task.priority && (() => {
+                                    const efectiva = getEffectivePriority(task.priority, task.dueDate, task.status);
+                                    return (
+                                      <Badge variant="outline" className={`text-[10px] px-1 py-0 ${priorityColors[efectiva] || ""}`}>
+                                        {efectiva}
+                                      </Badge>
+                                    );
+                                  })()}
                                 </div>
                                 {task.assignedToName && (
                                   <p className="text-[10px] text-muted-foreground mt-0.5">

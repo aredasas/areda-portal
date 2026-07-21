@@ -3,6 +3,7 @@ import { drizzle } from "drizzle-orm/mysql2";
 import { alias } from "drizzle-orm/mysql-core";
 import { InsertUser, users, clients, InsertClient, taxObligations, InsertTaxObligation, clientObligations, InsertClientObligation, taxDeadlines, InsertTaxDeadline, tasks, InsertTask, taskAttachments, InsertTaskAttachment, deadlineAttachments, InsertDeadlineAttachment, appSettings, InsertAppSetting, dianCalendar, InsertDianCalendar, clientDriveSubfolders, timeEntries, InsertTimeEntry, comments, InsertComment, historyEvents, notifications, workLocationEntries, taskRecurrences, InsertTaskRecurrence } from "../drizzle/schema";
 import { ENV } from './_core/env';
+import { bogotaTodayUTCMidnight } from "./dateUtils";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
@@ -421,12 +422,12 @@ export async function getClientDeadlines(clientId: number) {
 export async function getUpcomingDeadlines(daysAhead: number = 30, managerId?: number) {
   const db = await getDb();
   if (!db) return [];
-  const nowInstant = new Date();
-  // Compare against the START of today (UTC), not the exact current
-  // moment — deadline dates are stored as UTC midnight of their calendar
-  // day, so comparing against "right now" would exclude anything due
-  // "today" the instant any time passes past midnight (i.e. always).
-  const now = new Date(Date.UTC(nowInstant.getUTCFullYear(), nowInstant.getUTCMonth(), nowInstant.getUTCDate()));
+  // Compare against the START of today in Bogotá (not UTC, and not the
+  // exact current moment) — deadline dates are stored as UTC midnight of
+  // their calendar day, so comparing against UTC's current calendar date
+  // makes "today" flip 5 hours early (7pm Bogotá time), showing tomorrow's
+  // deadlines as due today for the rest of the evening.
+  const now = bogotaTodayUTCMidnight();
   const future = new Date(now);
   future.setUTCDate(future.getUTCDate() + daysAhead);
   const baseConditions = and(
@@ -1082,8 +1083,7 @@ export async function generateDueRecurringTasks(): Promise<number> {
   if (!db) return 0;
   const rules = await db.select().from(taskRecurrences).where(eq(taskRecurrences.isActive, true));
 
-  const now = new Date();
-  const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const today = bogotaTodayUTCMidnight();
 
   let created = 0;
   for (const rule of rules) {
@@ -1309,6 +1309,7 @@ export type ReviewFilters = {
   assignedToId?: number;
   obligationId?: number;
   managerId?: number; // role-scoping for non-admins
+  taskSearch?: string; // busca por texto en el título de la tarea/obligación
 };
 
 /** Completed tasks + completed deadlines across ALL clients, for the admin
@@ -1339,6 +1340,7 @@ export async function getCompletedItemsForReview(filters: ReviewFilters) {
   if (filters.assignedToId) taskConditions.push(eq(tasks.assignedToId, filters.assignedToId));
   if (filters.managerId) taskConditions.push(eq(clients.managerId, filters.managerId));
   if (filters.obligationId) taskConditions.push(eq(taxDeadlines.obligationId, filters.obligationId));
+  if (filters.taskSearch) taskConditions.push(like(tasks.title, `%${filters.taskSearch}%`));
 
   const completedTasks = await db.select({
     id: tasks.id,
@@ -1372,6 +1374,7 @@ export async function getCompletedItemsForReview(filters: ReviewFilters) {
   if (filters.obligationId) deadlineConditions.push(eq(taxDeadlines.obligationId, filters.obligationId));
   if (filters.managerId) deadlineConditions.push(eq(clients.managerId, filters.managerId));
   if (filters.assignedToId) deadlineConditions.push(eq(clients.managerId, filters.assignedToId));
+  if (filters.taskSearch) deadlineConditions.push(like(taxObligations.name, `%${filters.taskSearch}%`));
 
   const completedDeadlines = await db.select({
     id: taxDeadlines.id,
@@ -1524,7 +1527,7 @@ export async function getDashboardData(filters: DashboardFilters) {
   // due date passes — that only happens if someone picks it manually. For
   // these counts/groupings, treat an overdue pendiente/en_progreso task as
   // vencida so the KPI actually reflects reality.
-  const todayUTCMidnight = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), new Date().getUTCDate()));
+  const todayUTCMidnight = bogotaTodayUTCMidnight();
   const taskStats = { pendiente: 0, en_progreso: 0, completada: 0, vencida: 0 };
   const tasksByStatus: Record<string, any[]> = { pendiente: [], en_progreso: [], completada: [], vencida: [] };
   for (const t of taskRows) {
