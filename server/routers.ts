@@ -1504,14 +1504,23 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
             throw new TRPCError({ code: "FORBIDDEN", message: "No tiene acceso a esta tarea" });
           }
           await db.createComment(input.entityType, input.entityId, ctx.user.id, input.content);
-          // Notify whoever isn't the one commenting: the assignee if an
-          // admin commented, or the person who created the task if the
-          // assignee themselves commented.
-          const recipient = task.assignedToId !== ctx.user.id ? task.assignedToId : task.createdById;
-          if (recipient && recipient !== ctx.user.id) {
+          // Notifica a todos los que han participado en la conversación de
+          // esta tarea (encargado, quien la creó, y cualquiera que ya haya
+          // comentado antes) menos a quien acaba de comentar — así, si un
+          // administrador comenta y el encargado responde, el administrador
+          // se entera de la respuesta sin importar quién creó la tarea.
+          const hilo = await db.getComments("task", task.id);
+          const participantes = new Set<number>();
+          if (task.assignedToId) participantes.add(task.assignedToId);
+          if (task.createdById) participantes.add(task.createdById);
+          for (const c of hilo) if (c.authorId) participantes.add(c.authorId);
+          participantes.delete(ctx.user.id);
+          if (participantes.size > 0) {
             const client = await db.getClientById(task.clientId);
             const title = client ? `${client.razonSocial} — ${task.title}` : task.title;
-            await db.createNotification(recipient, "comentario", "task", task.id, title, input.content, task.clientId);
+            for (const uid of Array.from(participantes)) {
+              await db.createNotification(uid, "comentario", "task", task.id, title, input.content, task.clientId);
+            }
           }
         } else {
           const deadline = await db.getDeadlineById(input.entityId);
@@ -1523,8 +1532,22 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
             }
           }
           await db.createComment(input.entityType, input.entityId, ctx.user.id, input.content);
-          if (client?.managerId && client.managerId !== ctx.user.id) {
-            await db.createNotification(client.managerId, "comentario", "deadline", deadline.id, `${client.razonSocial} — período ${deadline.period}`, input.content, deadline.clientId);
+          // Mismo criterio que en tareas: notificar a todo el que ha
+          // participado en el hilo (el encargado del cliente, quien revisó
+          // o completó el vencimiento antes, y cualquiera que ya haya
+          // comentado) menos a quien acaba de comentar.
+          const hilo = await db.getComments("deadline", deadline.id);
+          const participantes = new Set<number>();
+          if (client?.managerId) participantes.add(client.managerId);
+          if (deadline.completedById) participantes.add(deadline.completedById);
+          if (deadline.reviewedById) participantes.add(deadline.reviewedById);
+          for (const c of hilo) if (c.authorId) participantes.add(c.authorId);
+          participantes.delete(ctx.user.id);
+          if (participantes.size > 0 && client) {
+            const title = `${client.razonSocial} — período ${deadline.period}`;
+            for (const uid of Array.from(participantes)) {
+              await db.createNotification(uid, "comentario", "deadline", deadline.id, title, input.content, deadline.clientId);
+            }
           }
         }
         return { success: true };
@@ -1706,6 +1729,93 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
         .query(async ({ input, ctx }) => {
           assertInformesAccess(ctx.user.cedula);
           return { signedUrl: await storageGetSignedUrl(input.fileKey) };
+        }),
+    }),
+  }),
+
+  board: router({
+    posts: router({
+      // obligationId: omitir = todas; 0 = solo "General"; N = esa obligación
+      list: protectedProcedure
+        .input(z.object({ obligationId: z.number().optional() }).optional())
+        .query(async ({ input }) => {
+          const filtro = input?.obligationId === undefined ? {}
+            : input.obligationId === 0 ? { obligationId: null as null }
+            : { obligationId: input.obligationId };
+          return db.getBoardPosts(filtro);
+        }),
+      create: protectedProcedure
+        .input(z.object({ content: z.string().min(1), obligationId: z.number().optional() }))
+        .mutation(async ({ input, ctx }) => {
+          const id = await db.createBoardPost(ctx.user.id, input.content, input.obligationId ?? null);
+          // Avisa a todo el equipo (menos a quien publicó) que hay algo
+          // nuevo en el Tablero.
+          const otros = await db.getAllActiveUserIds(ctx.user.id);
+          const preview = input.content.length > 120 ? input.content.slice(0, 120) + "…" : input.content;
+          for (const uid of otros) {
+            await db.createNotification(uid, "tablero_post", "board_post", id, "Nuevo en el Tablero", preview, null);
+          }
+          return { id };
+        }),
+      setPinned: adminProcedure
+        .input(z.object({ id: z.number(), pinned: z.boolean() }))
+        .mutation(async ({ input }) => {
+          await db.setBoardPostPinned(input.id, input.pinned);
+          return { success: true };
+        }),
+      delete: adminProcedure
+        .input(z.object({ id: z.number() }))
+        .mutation(async ({ input }) => {
+          await db.deleteBoardPost(input.id);
+          return { success: true };
+        }),
+      uploadAttachment: protectedProcedure
+        .input(z.object({
+          postId: z.number(),
+          fileName: z.string(),
+          fileBase64: z.string(),
+          contentType: z.string(),
+          fileSize: z.number().optional(),
+        }))
+        .mutation(async ({ input, ctx }) => {
+          const buffer = Buffer.from(input.fileBase64, "base64");
+          const rawKey = `tablero/${input.postId}/${Date.now()}_${input.fileName}`;
+          const { url, key } = await storagePut(rawKey, buffer, input.contentType);
+          const id = await db.createBoardAttachment({
+            postId: input.postId, fileName: input.fileName, fileUrl: url, fileKey: key,
+            contentType: input.contentType, fileSize: input.fileSize || buffer.length,
+            uploadedById: ctx.user.id,
+          });
+          return { id, url, key, fileName: input.fileName };
+        }),
+      getAttachments: protectedProcedure
+        .input(z.object({ postId: z.number() }))
+        .query(async ({ input }) => db.getBoardPostAttachments(input.postId)),
+      getAttachmentUrl: protectedProcedure
+        .input(z.object({ fileKey: z.string() }))
+        .query(async ({ input }) => ({ signedUrl: await storageGetSignedUrl(input.fileKey) })),
+    }),
+    comments: router({
+      list: protectedProcedure
+        .input(z.object({ postId: z.number() }))
+        .query(async ({ input }) => db.getComments("board_post", input.postId)),
+      create: protectedProcedure
+        .input(z.object({ postId: z.number(), content: z.string().min(1) }))
+        .mutation(async ({ input, ctx }) => {
+          const post = await db.getBoardPostById(input.postId);
+          if (!post) throw new Error("Publicación no encontrada");
+          await db.createComment("board_post", input.postId, ctx.user.id, input.content);
+          // Notifica al autor de la publicación y a todo el que ya haya
+          // comentado antes, menos a quien acaba de comentar.
+          const hilo = await db.getComments("board_post", input.postId);
+          const participantes = new Set<number>();
+          if (post.authorId) participantes.add(post.authorId);
+          for (const c of hilo) if (c.authorId) participantes.add(c.authorId);
+          participantes.delete(ctx.user.id);
+          for (const uid of Array.from(participantes)) {
+            await db.createNotification(uid, "comentario", "board_post", input.postId, "Tablero", input.content, null);
+          }
+          return { success: true };
         }),
     }),
   }),

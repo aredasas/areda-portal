@@ -292,7 +292,7 @@ export type InsertDianCalendar = typeof dianCalendar.$inferInsert;
  */
 export const comments = mysqlTable("comments", {
   id: int("id").autoincrement().primaryKey(),
-  entityType: mysqlEnum("entityType", ["task", "deadline"]).notNull(),
+  entityType: mysqlEnum("entityType", ["task", "deadline", "board_post"]).notNull(),
   entityId: int("entityId").notNull(),
   authorId: int("authorId").notNull(),
   content: text("content").notNull(),
@@ -336,8 +336,8 @@ export type InsertHistoryEvent = typeof historyEvents.$inferInsert;
 export const notifications = mysqlTable("notifications", {
   id: int("id").autoincrement().primaryKey(),
   userId: int("userId").notNull(),
-  type: mysqlEnum("type", ["comentario", "aprobada", "correccion_solicitada"]).notNull(),
-  entityType: mysqlEnum("entityType", ["task", "deadline"]).notNull(),
+  type: mysqlEnum("type", ["comentario", "aprobada", "correccion_solicitada", "tablero_post"]).notNull(),
+  entityType: mysqlEnum("entityType", ["task", "deadline", "board_post"]).notNull(),
   entityId: int("entityId").notNull(),
   /** So clicking a notification can jump straight to the right client's
    * deadlines view, without an extra lookup. */
@@ -521,3 +521,46 @@ export const informesReportes = mysqlTable("informesReportes", {
 }));
 export type InformeReporte = typeof informesReportes.$inferSelect;
 export type InsertInformeReporte = typeof informesReportes.$inferInsert;
+
+/**
+ * ============================================================
+ * TABLERO — mensajes generales para todo el equipo (no atados a una
+ * tarea o cliente puntual): aclaraciones de proceso, documentos para
+ * estudio, avisos. Cualquier usuario puede publicar y comentar; queda
+ * el historial completo. Cada publicación se etiqueta como "General"
+ * (obligacionId null) o con una obligación tributaria específica (ej.
+ * IVA), para poder filtrar después "qué se ha dicho de IVA".
+ * Los comentarios de cada publicación reutilizan la tabla `comments`
+ * genérica (entityType="board_post"), igual que tareas y vencimientos.
+ * ============================================================
+ */
+export const boardPosts = mysqlTable("boardPosts", {
+  id: int("id").autoincrement().primaryKey(),
+  authorId: int("authorId").notNull(),
+  content: text("content").notNull(),
+  /** null = "General"; si no, referencia a una obligación tributaria
+   * (IVA, Renta, ICA, etc.) para poder filtrar el tablero por tema. */
+  obligationId: int("obligationId"),
+  pinned: boolean("pinned").default(false).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (table) => ({
+  obligationIdx: index("boardPosts_obligation_idx").on(table.obligationId),
+}));
+export type BoardPost = typeof boardPosts.$inferSelect;
+export type InsertBoardPost = typeof boardPosts.$inferInsert;
+
+/** Documentos adjuntos a una publicación del tablero (ej. un PDF de IVA
+ * para lectura) — mismo patrón que taskAttachments. */
+export const boardAttachments = mysqlTable("boardAttachments", {
+  id: int("id").autoincrement().primaryKey(),
+  postId: int("postId").notNull(),
+  fileName: varchar("fileName", { length: 255 }).notNull(),
+  fileUrl: text("fileUrl").notNull(),
+  fileKey: varchar("fileKey", { length: 255 }).notNull(),
+  contentType: varchar("contentType", { length: 100 }),
+  fileSize: int("fileSize"),
+  uploadedById: int("uploadedById").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+export type BoardAttachment = typeof boardAttachments.$inferSelect;
+export type InsertBoardAttachment = typeof boardAttachments.$inferInsert;

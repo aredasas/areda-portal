@@ -37,6 +37,7 @@ import {
   Clock,
   Sparkles,
   LineChart,
+  LayoutGrid,
 } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
@@ -54,6 +55,7 @@ const menuItems = [
   { icon: Calendar, label: "Vencimientos", path: "/vencimientos" },
   { icon: Sparkles, label: "Asistente IA", path: "/asistente" },
   { icon: FolderOpen, label: "Documentos", path: "/documentos" },
+  { icon: LayoutGrid, label: "Tablero", path: "/tablero" },
   { icon: CheckSquare, label: "Revisión", path: "/revision", adminOnly: true },
   { icon: Clock, label: "Asistencia", path: "/asistencia", adminOnly: true, restrictedToCedula: "5820262" },
   { icon: LineChart, label: "Informes", path: "/informes", adminOnly: true, restrictedToCedula: "5820262" },

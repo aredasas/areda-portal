@@ -8,12 +8,13 @@ import {
   DropdownMenuContent,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Bell, MessageSquare, ThumbsUp, RotateCcw, CheckCheck } from "lucide-react";
+import { Bell, MessageSquare, ThumbsUp, RotateCcw, CheckCheck, LayoutGrid } from "lucide-react";
 
 const typeConfig: Record<string, { icon: any; color: string }> = {
   comentario: { icon: MessageSquare, color: "text-blue-600" },
   aprobada: { icon: ThumbsUp, color: "text-green-600" },
   correccion_solicitada: { icon: RotateCcw, color: "text-orange-600" },
+  tablero_post: { icon: LayoutGrid, color: "text-purple-600" },
 };
 
 /** In-app notification bell — lets a collaborator know something happened
@@ -43,6 +44,8 @@ export default function NotificationBell() {
     setOpen(false);
     if (n.entityType === "task") {
       setLocation(`/tareas?taskId=${n.entityId}`);
+    } else if (n.entityType === "board_post") {
+      setLocation(`/tablero?postId=${n.entityId}`);
     } else if (n.clientId) {
       setLocation(`/vencimientos?clientId=${n.clientId}&deadlineId=${n.entityId}`);
     } else {

@@ -1,7 +1,7 @@
-import { eq, and, desc, asc, like, sql, inArray, gte, lte, or, ne } from "drizzle-orm";
+import { eq, and, desc, asc, like, sql, inArray, gte, lte, or, ne, isNull } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { alias } from "drizzle-orm/mysql-core";
-import { InsertUser, users, clients, InsertClient, taxObligations, InsertTaxObligation, clientObligations, InsertClientObligation, taxDeadlines, InsertTaxDeadline, tasks, InsertTask, taskAttachments, InsertTaskAttachment, deadlineAttachments, InsertDeadlineAttachment, appSettings, InsertAppSetting, dianCalendar, InsertDianCalendar, clientDriveSubfolders, timeEntries, InsertTimeEntry, comments, InsertComment, historyEvents, notifications, workLocationEntries, taskRecurrences, InsertTaskRecurrence } from "../drizzle/schema";
+import { InsertUser, users, clients, InsertClient, taxObligations, InsertTaxObligation, clientObligations, InsertClientObligation, taxDeadlines, InsertTaxDeadline, tasks, InsertTask, taskAttachments, InsertTaskAttachment, deadlineAttachments, InsertDeadlineAttachment, appSettings, InsertAppSetting, dianCalendar, InsertDianCalendar, clientDriveSubfolders, timeEntries, InsertTimeEntry, comments, InsertComment, historyEvents, notifications, workLocationEntries, taskRecurrences, InsertTaskRecurrence, boardPosts, boardAttachments } from "../drizzle/schema";
 import { ENV } from './_core/env';
 import { bogotaTodayUTCMidnight } from "./dateUtils";
 
@@ -739,7 +739,7 @@ export async function getClientEvidenceContext(clientId: number, limit: number =
 
 // ==================== COMMENTS ====================
 
-export async function getComments(entityType: "task" | "deadline", entityId: number) {
+export async function getComments(entityType: "task" | "deadline" | "board_post", entityId: number) {
   const db = await getDb();
   if (!db) return [];
   return db.select({
@@ -757,7 +757,7 @@ export async function getComments(entityType: "task" | "deadline", entityId: num
     .orderBy(asc(comments.createdAt));
 }
 
-export async function createComment(entityType: "task" | "deadline", entityId: number, authorId: number, content: string) {
+export async function createComment(entityType: "task" | "deadline" | "board_post", entityId: number, authorId: number, content: string) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   await db.insert(comments).values({ entityType, entityId, authorId, content });
@@ -815,12 +815,12 @@ export async function getHistory(entityType: "task" | "deadline", entityId: numb
 
 // ==================== NOTIFICATIONS ====================
 
-export type NotificationType = "comentario" | "aprobada" | "correccion_solicitada";
+export type NotificationType = "comentario" | "aprobada" | "correccion_solicitada" | "tablero_post";
 
 export async function createNotification(
   userId: number,
   type: NotificationType,
-  entityType: "task" | "deadline",
+  entityType: "task" | "deadline" | "board_post",
   entityId: number,
   title: string,
   message?: string | null,
@@ -1891,6 +1891,103 @@ export async function getTasksByDeadlineId(deadlineId: number) {
   if (!db) return [];
   return db.select().from(tasks)
     .where(eq(tasks.taxDeadlineId, deadlineId));
+}
+
+// ==================== TABLERO ====================
+// Mensajes generales para todo el equipo, con o sin obligación tributaria
+// asociada (null = "General"). Los comentarios de cada publicación
+// reutilizan la tabla `comments` genérica (entityType="board_post").
+
+export async function createBoardPost(authorId: number, content: string, obligationId?: number | null): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const result = await db.insert(boardPosts).values({ authorId, content, obligationId: obligationId ?? null });
+  return Number((result as any).insertId ?? (result as any)[0]?.insertId);
+}
+
+/** filters.obligationId: undefined = todas las publicaciones; null =
+ * solo "General"; un número = solo esa obligación. */
+export async function getBoardPosts(filters: { obligationId?: number | null }) {
+  const db = await getDb();
+  if (!db) return [];
+  const conditions = [];
+  if (filters.obligationId === null) conditions.push(isNull(boardPosts.obligationId));
+  else if (typeof filters.obligationId === "number") conditions.push(eq(boardPosts.obligationId, filters.obligationId));
+
+  return db.select({
+    id: boardPosts.id,
+    content: boardPosts.content,
+    obligationId: boardPosts.obligationId,
+    obligationName: taxObligations.name,
+    pinned: boardPosts.pinned,
+    authorId: boardPosts.authorId,
+    authorName: users.name,
+    createdAt: boardPosts.createdAt,
+  })
+    .from(boardPosts)
+    .leftJoin(users, eq(boardPosts.authorId, users.id))
+    .leftJoin(taxObligations, eq(boardPosts.obligationId, taxObligations.id))
+    .where(conditions.length ? and(...conditions) : undefined)
+    .orderBy(desc(boardPosts.pinned), desc(boardPosts.createdAt));
+}
+
+export async function getBoardPostById(id: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select({
+    id: boardPosts.id,
+    content: boardPosts.content,
+    obligationId: boardPosts.obligationId,
+    obligationName: taxObligations.name,
+    pinned: boardPosts.pinned,
+    authorId: boardPosts.authorId,
+    authorName: users.name,
+    createdAt: boardPosts.createdAt,
+  })
+    .from(boardPosts)
+    .leftJoin(users, eq(boardPosts.authorId, users.id))
+    .leftJoin(taxObligations, eq(boardPosts.obligationId, taxObligations.id))
+    .where(eq(boardPosts.id, id));
+  return rows[0] || null;
+}
+
+export async function setBoardPostPinned(id: number, pinned: boolean) {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(boardPosts).set({ pinned }).where(eq(boardPosts.id, id));
+}
+
+export async function deleteBoardPost(id: number) {
+  const db = await getDb();
+  if (!db) return;
+  await db.delete(boardAttachments).where(eq(boardAttachments.postId, id));
+  await db.delete(comments).where(and(eq(comments.entityType, "board_post"), eq(comments.entityId, id)));
+  await db.delete(boardPosts).where(eq(boardPosts.id, id));
+}
+
+export async function createBoardAttachment(data: {
+  postId: number; fileName: string; fileUrl: string; fileKey: string;
+  contentType?: string; fileSize?: number; uploadedById: number;
+}): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const result = await db.insert(boardAttachments).values(data);
+  return Number((result as any).insertId ?? (result as any)[0]?.insertId);
+}
+
+export async function getBoardPostAttachments(postId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(boardAttachments).where(eq(boardAttachments.postId, postId)).orderBy(asc(boardAttachments.createdAt));
+}
+
+/** Todos los usuarios activos, para notificar de una publicación nueva
+ * (menos a quien la publicó). */
+export async function getAllActiveUserIds(excludeUserId?: number): Promise<number[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db.select({ id: users.id }).from(users).where(eq(users.isActive, true));
+  return rows.map(r => r.id).filter(id => id !== excludeUserId);
 }
 
 
