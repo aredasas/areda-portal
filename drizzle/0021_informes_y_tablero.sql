@@ -90,7 +90,7 @@ ALTER TABLE `notifications` MODIFY COLUMN `type` enum('comentario','aprobada','c
 ALTER TABLE `notifications` MODIFY COLUMN `entityType` enum('task','deadline','board_post') NOT NULL;--> statement-breakpoint
 ALTER TABLE `workLocationEntries` MODIFY COLUMN `updatedAt` timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP;--> statement-breakpoint
 ALTER TABLE `taskRecurrences` MODIFY COLUMN `priority` enum('baja','media','alta','urgente') NOT NULL DEFAULT 'media';--> statement-breakpoint
-CREATE INDEX IF NOT EXISTS `boardPosts_obligation_idx` ON `boardPosts` (`obligationId`);--> statement-breakpoint
-CREATE INDEX IF NOT EXISTS `informesCargas_cliente_anioMes_idx` ON `informesCargas` (`clienteId`,`anio`,`mes`);--> statement-breakpoint
-CREATE INDEX IF NOT EXISTS `informesReportes_cliente_anio_idx` ON `informesReportes` (`clienteId`,`anio`);--> statement-breakpoint
-CREATE INDEX IF NOT EXISTS `informesSaldos_cliente_anio_idx` ON `informesSaldosMensuales` (`clienteId`,`anio`);
+CREATE INDEX `boardPosts_obligation_idx` ON `boardPosts` (`obligationId`);--> statement-breakpoint
+CREATE INDEX `informesCargas_cliente_anioMes_idx` ON `informesCargas` (`clienteId`,`anio`,`mes`);--> statement-breakpoint
+CREATE INDEX `informesReportes_cliente_anio_idx` ON `informesReportes` (`clienteId`,`anio`);--> statement-breakpoint
+CREATE INDEX `informesSaldos_cliente_anio_idx` ON `informesSaldosMensuales` (`clienteId`,`anio`);
