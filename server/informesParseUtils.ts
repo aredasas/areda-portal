@@ -1,6 +1,14 @@
+import { invokeLLM } from "./_core/llm";
+
 // Reconocimiento de columnas del libro auxiliar/movimiento por sinónimos, en
 // vez de nombres exactos — cada cliente/sistema contable exporta con
-// encabezados distintos (ej. "CODPUC" vs "CUENTA" vs "Codigo Cuenta").
+// encabezados distintos (ej. "CODPUC" vs "Código contable" vs "Cuenta
+// contable"). La coincidencia es por SUBCADENA (no exacta), probando cada
+// sinónimo en orden de prioridad — así "Fecha elaboración" reconoce
+// "FECHA", y los sinónimos de código de cuenta van ANTES que los de
+// nombre de cuenta, para no confundir la columna de código con la de
+// descripción cuando un archivo trae ambas (ej. "Código contable" +
+// "Cuenta contable").
 
 function normalizar(s: string): string {
   return s
@@ -11,15 +19,20 @@ function normalizar(s: string): string {
 }
 
 const SINONIMOS: Record<string, string[]> = {
-  fecha: ["FECHA", "FECHA COMPROBANTE", "FECHA MOVIMIENTO", "FECHA CONTABLE", "DATE"],
+  fecha: ["FECHA", "DATE"],
   anioCol: ["ANO", "AGNO", "YEAR", "VIGENCIA"],
   mesCol: ["MES", "MONTH"],
-  diaCol: ["DIA", "DAY"],
-  cuenta: ["CODPUC", "CUENTA", "CODIGO CUENTA", "COD CUENTA", "CODCUENTA", "CTA", "CUENTA CONTABLE", "CODIGO", "PUC"],
-  debito: ["DEBITO", "VALOR DEBITO", "DB", "DEBE", "VALOR DEBE"],
-  credito: ["CREDITO", "VALOR CREDITO", "CR", "HABER", "VALOR HABER"],
-  centroCosto: ["CCOSTO", "CENTRO COSTO", "CENTRO DE COSTO", "CC", "CCO", "CENTROCOSTO"],
-  anulado: ["ANULADO", "ANULADA", "ESTADO", "ANULA"],
+  // Los sinónimos de CÓDIGO van primero: si un archivo trae "Código
+  // contable" (el código) Y "Cuenta contable" (el nombre) como columnas
+  // separadas, esto asegura que se elija la columna de código.
+  cuenta: [
+    "CODPUC", "CODIGO CUENTA", "COD CUENTA", "CODCUENTA", "CODIGO CONTABLE",
+    "COD CONTABLE", "PUC", "CUENTA CONTABLE", "CTA", "CUENTA", "CODIGO",
+  ],
+  debito: ["DEBITO", "DEBE"],
+  credito: ["CREDITO", "HABER"],
+  centroCosto: ["CCOSTO", "CENTRO COSTO", "CENTRO DE COSTO", "CENTROCOSTO", "CC", "CCO"],
+  anulado: ["ANULADO", "ANULADA", "ANULA", "ESTADO"],
 };
 
 export type ColumnasResueltas = {
@@ -28,33 +41,40 @@ export type ColumnasResueltas = {
   anioCol: number | null; mesCol: number | null; // solo si modoFecha === "separada"
   cuenta: number; debito: number; credito: number;
   centroCosto: number | null; anulado: number | null;
+  /** true si esta resolución vino del respaldo con IA (para registrar/avisar). */
+  porIA?: boolean;
 };
 
-/** Recibe la fila de encabezados cruda del Excel y ubica cada columna
- * necesaria por sinónimo (sin importar tildes, mayúsculas o espacios).
- * Acepta dos formas de indicar el periodo: una columna de fecha combinada
- * (ej. "FECHA"), o columnas separadas de año y mes (ej. "AÑO"/"MES", como
- * trae el export real de Colfamil). Lanza un error legible si no encuentra
- * ninguna de las dos formas, o si falta cuenta/débito/crédito — mejor fallar
- * temprano con un mensaje claro que producir un reporte silenciosamente
- * vacío o mal armado. */
-export function resolverColumnas(headerRaw: any[]): ColumnasResueltas {
-  const idx: Record<string, number> = {};
-  headerRaw.forEach((h, i) => { if (h) idx[normalizar(String(h))] = i; });
+function buscarPorSinonimo(headersNormalizados: string[], campo: string): number | null {
+  for (const syn of SINONIMOS[campo]) {
+    // Coincidencia por PALABRA completa (con espacios de borde), no
+    // subcadena cruda — así "FECHA" no confunde una columna "FECHAVEN"
+    // (fecha de VENCIMIENTO, no la del movimiento) con la columna de fecha
+    // real. Los espacios de borde tratan el inicio/fin de cada encabezado
+    // como un límite de palabra también.
+    const i = headersNormalizados.findIndex(h => ` ${h} `.includes(` ${syn} `));
+    if (i !== -1) return i;
+  }
+  return null;
+}
 
-  const buscar = (campo: string): number | null => {
-    for (const s of SINONIMOS[campo]) {
-      if (idx[s] !== undefined) return idx[s];
-    }
-    return null;
-  };
+/** Intenta resolver las columnas por sinónimo únicamente (sin IA). Lanza un
+ * error legible si falta alguna columna obligatoria (fecha o año+mes,
+ * cuenta, débito, crédito). */
+function resolverColumnasHeuristico(headerRaw: any[]): ColumnasResueltas {
+  // ExcelJS puede devolver row.values como un array DISPERSO (con huecos
+  // genuinos en celdas vacías, no null explícito). Array.from sí recorre
+  // los huecos (a diferencia de .map, que los salta y los deja como huecos
+  // en el resultado) — necesario porque findIndex más abajo NO salta
+  // huecos y fallaría con "undefined" si quedara alguno.
+  const headers = Array.from(headerRaw, h => (h ? normalizar(String(h)) : ""));
 
-  const fecha = buscar("fecha");
-  const anioCol = buscar("anioCol");
-  const mesCol = buscar("mesCol");
-  const cuenta = buscar("cuenta");
-  const debito = buscar("debito");
-  const credito = buscar("credito");
+  const fecha = buscarPorSinonimo(headers, "fecha");
+  const anioCol = buscarPorSinonimo(headers, "anioCol");
+  const mesCol = buscarPorSinonimo(headers, "mesCol");
+  const cuenta = buscarPorSinonimo(headers, "cuenta");
+  const debito = buscarPorSinonimo(headers, "debito");
+  const credito = buscarPorSinonimo(headers, "credito");
 
   const faltantes: string[] = [];
   const tieneFechaCombinada = fecha !== null;
@@ -74,8 +94,88 @@ export function resolverColumnas(headerRaw: any[]): ColumnasResueltas {
     modoFecha: tieneFechaCombinada ? "combinada" : "separada",
     fecha, anioCol, mesCol,
     cuenta: cuenta!, debito: debito!, credito: credito!,
-    centroCosto: buscar("centroCosto"), anulado: buscar("anulado"),
+    centroCosto: buscarPorSinonimo(headers, "centroCosto"),
+    anulado: buscarPorSinonimo(headers, "anulado"),
   };
+}
+
+/** Qué tan confiable se ve la columna de cuenta resuelta: si la mayoría de
+ * los valores de muestra no parecen un código contable limpio (solo
+ * dígitos), es señal de que se agarró la columna equivocada (ej. la de
+ * descripción en vez de la de código) y conviene confirmar con IA. */
+function pareceColumnaDeCodigos(muestras: any[][], colIdx: number): boolean {
+  const valores = muestras.map(fila => fila[colIdx]).filter(v => v !== null && v !== undefined && v !== "");
+  if (valores.length === 0) return false;
+  const limpios = valores.filter(v => /^\d+$/.test(String(v).trim())).length;
+  return limpios / valores.length >= 0.5;
+}
+
+/** Le pide a la IA que identifique las columnas a partir del encabezado y
+ * unas filas de muestra, cuando el reconocimiento por sinónimo falla o no
+ * es confiable. Devuelve null si la IA tampoco pudo identificarlas. */
+async function resolverColumnasConIA(headerRaw: any[], muestras: any[][]): Promise<ColumnasResueltas | null> {
+  const headers = Array.from(headerRaw, (h, i) => `${i}: ${h ?? ""}`).join(" | ");
+  const filasTexto = muestras.slice(0, 8)
+    .map((fila, i) => `Fila ${i}: ${Array.from(fila, v => (v === null || v === undefined ? "" : String(v))).join(" | ")}`)
+    .join("\n");
+
+  try {
+    const response = await invokeLLM({
+      messages: [
+        {
+          role: "system",
+          content: `Eres un experto en libros auxiliares contables colombianos. Dado el encabezado de un Excel (con el índice de cada columna) y unas filas de muestra, identifica el ÍNDICE de columna (número) para cada campo. Responde ÚNICAMENTE un JSON con esta forma exacta, sin texto adicional ni markdown:
+{"fecha": <indice o null>, "anioCol": <indice o null>, "mesCol": <indice o null>, "cuenta": <indice>, "debito": <indice>, "credito": <indice>, "centroCosto": <indice o null>, "anulado": <indice o null>}
+"cuenta" es la columna con el CÓDIGO contable/PUC (numérico, ej. "11050501"), NUNCA la columna con el nombre/descripción de la cuenta. "fecha" es una columna de fecha combinada (día+mes+año en una celda); si en cambio el año y el mes vienen en columnas separadas, deja "fecha" en null y usa "anioCol"/"mesCol". "cuenta", "debito" y "credito" son obligatorios; si no logras identificar alguno de esos tres, responde {"error": "razón breve"}.`,
+        },
+        { role: "user", content: `Encabezados (índice: nombre):\n${headers}\n\nMuestra de filas:\n${filasTexto}` },
+      ],
+    });
+
+    const raw = response.choices?.[0]?.message?.content || "{}";
+    const jsonStr = raw.includes("```") ? (raw.match(/```(?:json)?\s*([\s\S]*?)```/)?.[1] ?? raw) : raw;
+    const parsed = JSON.parse(jsonStr);
+    if (parsed.error || parsed.cuenta === undefined || parsed.debito === undefined || parsed.credito === undefined) {
+      return null;
+    }
+
+    const tieneFechaCombinada = parsed.fecha !== null && parsed.fecha !== undefined;
+    return {
+      modoFecha: tieneFechaCombinada ? "combinada" : "separada",
+      fecha: tieneFechaCombinada ? parsed.fecha : null,
+      anioCol: parsed.anioCol ?? null,
+      mesCol: parsed.mesCol ?? null,
+      cuenta: parsed.cuenta, debito: parsed.debito, credito: parsed.credito,
+      centroCosto: parsed.centroCosto ?? null, anulado: parsed.anulado ?? null,
+      porIA: true,
+    };
+  } catch (error) {
+    console.error("[Informes] Resolución de columnas por IA falló:", error);
+    return null;
+  }
+}
+
+/** Resuelve las columnas del archivo: primero por sinónimo (rápido, sin
+ * costo); si falla o la columna de cuenta resuelta no parece confiable
+ * (valores de muestra no lucen como códigos), confirma con IA. Lanza un
+ * error legible si ninguna de las dos formas lo logra. */
+export async function resolverColumnasRobusto(headerRaw: any[], muestras: any[][]): Promise<ColumnasResueltas> {
+  let heuristico: ColumnasResueltas | null = null;
+  let errorHeuristico: Error | null = null;
+  try {
+    heuristico = resolverColumnasHeuristico(headerRaw);
+  } catch (e: any) {
+    errorHeuristico = e;
+  }
+
+  const confiable = heuristico && pareceColumnaDeCodigos(muestras, heuristico.cuenta);
+  if (heuristico && confiable) return heuristico;
+
+  const porIA = await resolverColumnasConIA(headerRaw, muestras);
+  if (porIA) return porIA;
+
+  if (heuristico) return heuristico; // sin confirmación de IA, pero es lo mejor que hay
+  throw errorHeuristico || new Error("No se pudieron identificar las columnas del archivo.");
 }
 
 /** true si el valor de la columna "anulado" representa un registro anulado,
@@ -85,6 +185,15 @@ export function esAnulado(valor: any): boolean {
   if (typeof valor === "boolean") return valor;
   const s = String(valor).trim().toUpperCase();
   return s === ".T." || s === "T" || s === "SI" || s === "S" || s === "TRUE" || s === "1" || s === "ANULADO";
+}
+
+/** true si el valor de la celda de cuenta parece un código contable limpio
+ * (solo dígitos) — filtra filas de resumen/subtotal que algunos exports
+ * intercalan (ej. "Cuenta contable: 11050501 Caja general...") y que de
+ * otro modo duplicarían los valores ya sumados en las filas de detalle. */
+export function pareceCodigoDeCuenta(valor: any): boolean {
+  if (valor === null || valor === undefined) return false;
+  return /^\d+$/.test(String(valor).trim());
 }
 
 /** Extrae {anio, mes} de una fila ya con las columnas resueltas, sin

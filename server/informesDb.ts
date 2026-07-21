@@ -9,7 +9,9 @@ import {
   informesReportes,
 } from "../drizzle/schema";
 import { invokeLLM } from "./_core/llm";
-import { resolverColumnas, esAnulado, periodoDeFila, type ColumnasResueltas } from "./informesParseUtils";
+import {
+  resolverColumnasRobusto, esAnulado, periodoDeFila, pareceCodigoDeCuenta, type ColumnasResueltas,
+} from "./informesParseUtils";
 
 // ==================== CATÁLOGO DE CENTROS DE COSTO (por cliente) ====================
 // Solo aplica a clientes que manejan centro de costo (ej. Colfamil). Para el
@@ -67,31 +69,96 @@ export async function createCentroCosto(clienteId: number, codigo: string, nombr
 
 export type TipoSaldo = "ingreso" | "costo" | "gasto" | "descuento_pp";
 
+export type DetallePeriodo = Record<string, Record<string, { tipo: TipoSaldo; valor: number }>>;
+
 export type Agregado = {
-  // centroCodigo -> cuenta (detalle completo, sin truncar) -> {tipo, valor}
-  detalle: Record<string, Record<string, { tipo: TipoSaldo; valor: number }>>;
+  // "YYYY-MM" -> centroCodigo -> cuenta (detalle completo) -> {tipo, valor}.
+  // Un mismo archivo puede traer uno o varios meses (ej. un semestre
+  // completo) — cada periodo detectado en la fecha de cada fila queda
+  // separado aquí, sin que el usuario tenga que indicar de antemano cuál
+  // mes es.
+  porPeriodo: Record<string, DetallePeriodo>;
+  filasPorPeriodo: Record<string, number>;
   totalFilas: number;
-  filasFueraDePeriodo: number;
+  filasOmitidas: number; // filas de resumen/subtotal o sin fecha interpretable
   cuentasNuevas: Set<string>;
+  /** true si se tuvo que recurrir a IA para identificar las columnas
+   * (para avisar en el resultado de la carga). */
+  columnasPorIA: boolean;
 };
 
+const TAMANO_MUESTRA = 15;
+
+function extraerCentroCodigo(valorCrudo: any): string {
+  if (valorCrudo === null || valorCrudo === undefined) return "SC";
+  const texto = String(valorCrudo).trim();
+  if (texto === "") return "SC";
+  // Algunos exports traen "01" (Colfamil); otros "001 Nombre completo del
+  // centro" (código + nombre en una sola celda) — en ambos casos, el
+  // primer token es el código real.
+  const primerToken = texto.split(/\s+/)[0];
+  return primerToken.padStart(2, "0");
+}
+
+function procesarFila(
+  values: any[], cols: ColumnasResueltas, porPeriodo: Record<string, DetallePeriodo>,
+  cuentasConocidas: Set<string>, cuentasNuevas: Set<string>,
+): string | null {
+  if (cols.anulado !== null && esAnulado(values[cols.anulado])) return null;
+
+  const cuentaRaw = values[cols.cuenta];
+  if (!pareceCodigoDeCuenta(cuentaRaw)) return null; // fila de resumen/subtotal, no una transacción
+  const cuentaKey = String(cuentaRaw).trim();
+  const primerDigito = cuentaKey[0];
+  if (!"456".includes(primerDigito)) return null;
+
+  const periodo = periodoDeFila(values, cols);
+  if (!periodo) return null;
+  const claveP = `${periodo.anio}-${String(periodo.mes).padStart(2, "0")}`;
+
+  if (!cuentasConocidas.has(cuentaKey)) cuentasNuevas.add(cuentaKey);
+
+  const ccosto = extraerCentroCodigo(cols.centroCosto !== null ? values[cols.centroCosto] : null);
+  const debito = Number(values[cols.debito]) || 0;
+  const credito = Number(values[cols.credito]) || 0;
+  const esProntoPago = primerDigito === "6" && (cuentaKey.startsWith("613505") || cuentaKey.startsWith("613506"));
+
+  if (!porPeriodo[claveP]) porPeriodo[claveP] = {};
+  const detalle = porPeriodo[claveP];
+  if (!detalle[ccosto]) detalle[ccosto] = {};
+  if (!detalle[ccosto][cuentaKey]) {
+    const tipo: TipoSaldo = esProntoPago ? "descuento_pp"
+      : primerDigito === "4" ? "ingreso"
+      : primerDigito === "5" ? "gasto" : "costo";
+    detalle[ccosto][cuentaKey] = { tipo, valor: 0 };
+  }
+  // El descuento pronto pago se guarda en positivo (es un ahorro/crédito);
+  // costo y gasto en su convención normal débito-crédito; ingreso crédito-débito.
+  const valorDelta =
+    primerDigito === "4" ? credito - debito :
+    primerDigito === "5" ? debito - credito :
+    esProntoPago ? credito - debito :
+    debito - credito;
+  detalle[ccosto][cuentaKey].valor += valorDelta;
+  return claveP;
+}
+
 /** Lee el libro auxiliar/movimiento (streaming, soporta archivos de cientos de
- * miles de filas) y agrega DÉBITO/CRÉDITO por centro de costo + cuenta PUC a
- * DETALLE COMPLETO (el código tal cual viene en la columna de cuenta, sin
- * truncar a 4 dígitos — así el informe puede agregar a nivel de cuenta 4
- * dígitos ej. 5105, o mostrar cada subcuenta). Filtra registros anulados.
- * Clasifica por el primer dígito de la cuenta: 4=ingreso (crédito-débito),
- * 5=gasto (débito-crédito), 6=costo (débito-crédito).
+ * miles de filas) y agrega DÉBITO/CRÉDITO por PERIODO + centro de costo +
+ * cuenta PUC a DETALLE COMPLETO (el código tal cual viene en la columna de
+ * cuenta, sin truncar a 4 dígitos). El archivo puede traer un solo mes o
+ * varios (ej. un semestre completo) — el periodo de cada fila se detecta
+ * por su propia fecha, no hay que indicarlo de antemano.
  *
- * Las columnas se reconocen por sinónimo (ver informesParseUtils), no por
- * nombre exacto — cada cliente puede traer un formato distinto de su
- * sistema contable, siempre que tenga fecha, cuenta, débito y crédito
- * identificables. Se lanza un error legible si falta alguna.
+ * Las columnas se reconocen por sinónimo, con respaldo de IA cuando el
+ * archivo trae un formato que no calza con los sinónimos conocidos (ver
+ * informesParseUtils.resolverColumnasRobusto). Se lanza un error legible
+ * si ni el sinónimo ni la IA logran identificar cuenta/débito/crédito.
  *
- * Cada fila se valida contra el periodo objetivo (anioObjetivo/mesObjetivo,
- * el que el usuario seleccionó al subir el archivo) usando su propia fecha:
- * las filas de otro mes se excluyen y se cuentan en filasFueraDePeriodo, en
- * vez de mezclarse silenciosamente con el periodo equivocado.
+ * Las filas de resumen/subtotal que algunos exports intercalan (con un
+ * texto en la columna de cuenta en vez de un código limpio) se detectan y
+ * se omiten automáticamente, para no duplicar valores ya sumados en las
+ * filas de detalle.
  *
  * El descuento por pronto pago (subcuentas 613505/613506) se clasifica APARTE
  * con tipo "descuento_pp" en vez de netearse dentro de "costo" — así el
@@ -100,71 +167,55 @@ export type Agregado = {
 export async function parseLibroAuxiliar(
   filePathOrBuffer: string | Buffer,
   cuentasConocidas: Set<string>,
-  anioObjetivo: number,
-  mesObjetivo: number,
 ): Promise<Agregado> {
-  const detalle: Agregado["detalle"] = {};
+  const porPeriodo: Record<string, DetallePeriodo> = {};
+  const filasPorPeriodo: Record<string, number> = {};
   const cuentasNuevas = new Set<string>();
   let totalFilas = 0;
-  let filasFueraDePeriodo = 0;
+  let filasOmitidas = 0;
+  let columnasPorIA = false;
 
   const reader = new ExcelJS.stream.xlsx.WorkbookReader(filePathOrBuffer as any, {});
   let header: any[] | null = null;
   let cols: ColumnasResueltas | null = null;
+  const buffer: any[][] = [];
+  let bufferProcesado = false;
+
+  const procesarYContar = (values: any[]) => {
+    totalFilas++;
+    const clave = procesarFila(values, cols!, porPeriodo, cuentasConocidas, cuentasNuevas);
+    if (clave === null) filasOmitidas++;
+    else filasPorPeriodo[clave] = (filasPorPeriodo[clave] || 0) + 1;
+  };
 
   for await (const worksheetReader of reader) {
     for await (const row of worksheetReader) {
       const values = row.values as any[];
       if (!header) {
         header = values;
-        cols = resolverColumnas(header);
         continue;
       }
-      const c = cols!;
-      totalFilas++;
-      if (c.anulado !== null && esAnulado(values[c.anulado])) continue;
-
-      const periodo = periodoDeFila(values, c);
-      if (!periodo || periodo.anio !== anioObjetivo || periodo.mes !== mesObjetivo) {
-        filasFueraDePeriodo++;
+      if (!bufferProcesado) {
+        buffer.push(values);
+        if (buffer.length < TAMANO_MUESTRA) continue;
+        cols = await resolverColumnasRobusto(header, buffer);
+        columnasPorIA = !!cols.porIA;
+        bufferProcesado = true;
+        for (const filaBuffer of buffer) procesarYContar(filaBuffer);
         continue;
       }
-
-      const cuentaRaw = values[c.cuenta];
-      if (!cuentaRaw) continue;
-      const cuentaKey = String(cuentaRaw).trim();
-      const primerDigito = cuentaKey[0];
-      if (!"456".includes(primerDigito)) continue;
-
-      if (!cuentasConocidas.has(cuentaKey)) cuentasNuevas.add(cuentaKey);
-
-      let ccosto = c.centroCosto !== null ? values[c.centroCosto] : null;
-      ccosto = ccosto === null || ccosto === undefined || ccosto === ""
-        ? "SC" : String(ccosto).padStart(2, "0");
-
-      const debito = Number(values[c.debito]) || 0;
-      const credito = Number(values[c.credito]) || 0;
-      const esProntoPago = primerDigito === "6" && (cuentaKey.startsWith("613505") || cuentaKey.startsWith("613506"));
-
-      if (!detalle[ccosto]) detalle[ccosto] = {};
-      if (!detalle[ccosto][cuentaKey]) {
-        const tipo: TipoSaldo = esProntoPago ? "descuento_pp"
-          : primerDigito === "4" ? "ingreso"
-          : primerDigito === "5" ? "gasto" : "costo";
-        detalle[ccosto][cuentaKey] = { tipo, valor: 0 };
-      }
-      // El descuento pronto pago se guarda en positivo (es un ahorro/crédito);
-      // costo y gasto en su convención normal débito-crédito; ingreso crédito-débito.
-      const valorDelta =
-        primerDigito === "4" ? credito - debito :
-        primerDigito === "5" ? debito - credito :
-        esProntoPago ? credito - debito :
-        debito - credito;
-      detalle[ccosto][cuentaKey].valor += valorDelta;
+      procesarYContar(values);
     }
   }
+  // Archivo con menos filas de datos que TAMANO_MUESTRA: nunca se llegó a
+  // resolver columnas dentro del loop principal.
+  if (!bufferProcesado && header) {
+    cols = await resolverColumnasRobusto(header, buffer);
+    columnasPorIA = !!cols.porIA;
+    for (const filaBuffer of buffer) procesarYContar(filaBuffer);
+  }
 
-  return { detalle, totalFilas, filasFueraDePeriodo, cuentasNuevas };
+  return { porPeriodo, filasPorPeriodo, totalFilas, filasOmitidas, cuentasNuevas, columnasPorIA };
 }
 
 // ==================== CATÁLOGO DE CUENTAS PUC (con IA, compartido entre clientes) ====================
@@ -252,7 +303,7 @@ export async function marcarCargaError(cargaId: number, mensaje: string) {
  * Si el usuario vuelve a cargar el mismo mes (corrección), pisa los valores
  * anteriores de ese periodo en vez de duplicarlos. */
 export async function guardarSaldosMensuales(
-  cargaId: number, clienteId: number, anio: number, mes: number, detalle: Agregado["detalle"],
+  cargaId: number, clienteId: number, anio: number, mes: number, detalle: DetallePeriodo,
 ): Promise<void> {
   const db = await getDb();
   if (!db) return;

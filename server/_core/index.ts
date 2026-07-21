@@ -53,36 +53,47 @@ async function startServer() {
           return res.status(403).json({ error: "No autorizado" });
         }
         const clienteId = parseInt(String(req.query.clienteId));
-        const anio = parseInt(String(req.query.anio));
-        const mes = parseInt(String(req.query.mes));
         const nombreArchivo = String(req.query.nombreArchivo || "libro_auxiliar.xlsx");
-        if (!clienteId || !anio || !mes || mes < 1 || mes > 12) {
-          return res.status(400).json({ error: "clienteId, anio y mes son requeridos (mes 1-12)" });
+        if (!clienteId) {
+          return res.status(400).json({ error: "clienteId es requerido" });
         }
 
         const informesDb = await import("../informesDb");
-        const cargaId = await informesDb.crearCarga({
-          clienteId, anio, mes, nombreArchivo, cargadoPorId: user.id,
-        });
+        const cuentasConocidas = new Set((await informesDb.getCuentasPucConocidas()).keys());
+        const { porPeriodo, filasPorPeriodo, totalFilas, filasOmitidas, cuentasNuevas, columnasPorIA } =
+          await informesDb.parseLibroAuxiliar(req.body as Buffer, cuentasConocidas);
 
-        try {
-          const cuentasConocidas = new Set((await informesDb.getCuentasPucConocidas()).keys());
-          const { detalle, totalFilas, filasFueraDePeriodo, cuentasNuevas } = await informesDb.parseLibroAuxiliar(
-            req.body as Buffer, cuentasConocidas, anio, mes,
-          );
-          if (cuentasNuevas.size > 0) {
-            await informesDb.clasificarCuentasNuevas(Array.from(cuentasNuevas));
-          }
-          await informesDb.guardarSaldosMensuales(cargaId, clienteId, anio, mes, detalle);
-          await informesDb.marcarCargaCompletada(cargaId, totalFilas);
-          return res.json({
-            success: true, cargaId, totalFilas, filasFueraDePeriodo,
-            cuentasNuevas: Array.from(cuentasNuevas),
-          });
-        } catch (parseError: any) {
-          await informesDb.marcarCargaError(cargaId, String(parseError?.message || parseError));
-          throw parseError;
+        if (cuentasNuevas.size > 0) {
+          await informesDb.clasificarCuentasNuevas(Array.from(cuentasNuevas));
         }
+
+        const clavesPeriodo = Object.keys(porPeriodo).sort();
+        if (clavesPeriodo.length === 0) {
+          return res.status(400).json({
+            error: "No se encontró ninguna fila con fecha y cuenta contable válidas en el archivo.",
+          });
+        }
+
+        // Un mismo archivo puede traer uno o varios meses (ej. un semestre
+        // completo) — se crea una carga independiente por cada periodo
+        // detectado, y cada una reemplaza los valores previos de ese
+        // periodo si ya existían (mismo comportamiento que antes, ahora
+        // por cada mes en vez de uno solo fijo).
+        const periodos: { anio: number; mes: number; cargaId: number; filas: number }[] = [];
+        for (const clave of clavesPeriodo) {
+          const [anioStr, mesStr] = clave.split("-");
+          const anio = Number(anioStr), mes = Number(mesStr);
+          const filas = filasPorPeriodo[clave] || 0;
+          const cargaId = await informesDb.crearCarga({ clienteId, anio, mes, nombreArchivo, cargadoPorId: user.id });
+          await informesDb.guardarSaldosMensuales(cargaId, clienteId, anio, mes, porPeriodo[clave]);
+          await informesDb.marcarCargaCompletada(cargaId, filas);
+          periodos.push({ anio, mes, cargaId, filas });
+        }
+
+        return res.json({
+          success: true, totalFilas, filasOmitidas, columnasPorIA, periodos,
+          cuentasNuevas: Array.from(cuentasNuevas),
+        });
       } catch (error: any) {
         console.error("[Informes] Error al procesar carga:", error);
         return res.status(500).json({ error: error?.message || "Error al procesar el archivo" });

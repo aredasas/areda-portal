@@ -76,8 +76,6 @@ export default function Informes() {
     const xhr = new XMLHttpRequest();
     const params = new URLSearchParams({
       clienteId: String(clienteId),
-      anio: String(anio),
-      mes: String(mes),
       nombreArchivo: file.name,
     });
     xhr.open("POST", `/api/informes/upload?${params.toString()}`);
@@ -89,11 +87,19 @@ export default function Informes() {
       setSubiendo(false);
       if (xhr.status >= 200 && xhr.status < 300) {
         const data = JSON.parse(xhr.responseText);
-        toast.success(`Archivo procesado: ${data.totalFilas?.toLocaleString()} filas`);
-        if (data.filasFueraDePeriodo > 0) {
-          toast.warning(
-            `${data.filasFueraDePeriodo.toLocaleString()} fila(s) tenían fecha fuera de ${MESES[mes - 1]} ${anio} y se ignoraron. Verifica que sea el archivo correcto.`,
-          );
+        const periodosTxt = data.periodos
+          ?.map((p: any) => `${MESES[p.mes - 1]} ${p.anio} (${p.filas.toLocaleString()} filas)`)
+          .join(", ");
+        toast.success(
+          data.periodos?.length > 1
+            ? `Se detectaron ${data.periodos.length} periodos: ${periodosTxt}`
+            : `Archivo procesado: ${periodosTxt || `${data.totalFilas?.toLocaleString()} filas`}`,
+        );
+        if (data.filasOmitidas > 0) {
+          toast.info(`${data.filasOmitidas.toLocaleString()} fila(s) se omitieron (subtotales, anuladas, o sin cuenta/fecha reconocible).`);
+        }
+        if (data.columnasPorIA) {
+          toast.info("Este archivo tenía un formato distinto al habitual — las columnas se identificaron con ayuda de IA.");
         }
         if (data.cuentasNuevas?.length) {
           toast.info(`${data.cuentasNuevas.length} cuenta(s) nueva(s) clasificada(s) por IA`);
@@ -155,20 +161,12 @@ export default function Informes() {
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-3">
-                <div className="flex items-center gap-3">
-                  <Select value={String(mes)} onValueChange={(v) => setMes(Number(v))}>
-                    <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {MESES.map((nombre, i) => (
-                        <SelectItem key={i} value={String(i + 1)}>{nombre}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <p className="text-sm text-muted-foreground">
-                    Libro auxiliar de {MESES[mes - 1]} {anio} para {clienteSeleccionado?.razonSocial}. Si ya
-                    cargaste este mes antes, el nuevo archivo reemplaza los valores anteriores de ese periodo.
-                  </p>
-                </div>
+                <p className="text-sm text-muted-foreground">
+                  Libro auxiliar / movimiento para {clienteSeleccionado?.razonSocial}. Puede traer un solo mes o
+                  varios (ej. un semestre completo) — el periodo de cada fila se detecta automáticamente por su
+                  fecha, no hace falta indicarlo. Si ya cargaste alguno de esos meses antes, el nuevo archivo
+                  reemplaza los valores anteriores de ese periodo.
+                </p>
                 <input
                   ref={fileInputRef}
                   type="file"
