@@ -1,5 +1,6 @@
 import { and, eq, sql } from "drizzle-orm";
 import ExcelJS from "exceljs";
+import { Readable } from "stream";
 import { getDb } from "./db";
 import {
   informesCentrosCosto,
@@ -175,7 +176,14 @@ export async function parseLibroAuxiliar(
   let filasOmitidas = 0;
   let columnasPorIA = false;
 
-  const reader = new ExcelJS.stream.xlsx.WorkbookReader(filePathOrBuffer as any, {});
+  // ExcelJS.stream.xlsx.WorkbookReader necesita una ruta de archivo o un
+  // stream de lectura — NO acepta un Buffer crudo directamente (falla con
+  // "Could not recognise input" aunque el archivo esté perfectamente bien).
+  // El servidor real recibe el archivo como Buffer en memoria (la subida
+  // llega como binario, no como ruta), así que hay que envolverlo en un
+  // stream antes de dárselo al lector.
+  const entrada = Buffer.isBuffer(filePathOrBuffer) ? Readable.from(filePathOrBuffer) : filePathOrBuffer;
+  const reader = new ExcelJS.stream.xlsx.WorkbookReader(entrada as any, {});
   let header: any[] | null = null;
   let cols: ColumnasResueltas | null = null;
   const buffer: any[][] = [];
