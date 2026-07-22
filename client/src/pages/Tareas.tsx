@@ -446,14 +446,14 @@ export default function Tareas() {
 
       {/* Create/Edit Task Dialog */}
       <Dialog open={showForm} onOpenChange={(open) => { if (!open) { setShowForm(false); resetForm(); } }}>
-        <DialogContent className="sm:max-w-2xl max-h-[85vh] overflow-y-auto">
+        <DialogContent className="sm:max-w-2xl max-h-[85vh] overflow-y-auto overflow-x-hidden">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <ClipboardList className="h-5 w-5" />
               {editingTask ? "Editar Tarea" : "Nueva Tarea"}
             </DialogTitle>
           </DialogHeader>
-          <div className="space-y-4 py-2">
+          <div className="space-y-4 py-2 min-w-0">
             <div className="space-y-2">
               <Label>Título *</Label>
               <Input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="Descripción breve de la tarea" />
@@ -615,14 +615,14 @@ export default function Tareas() {
 
       {/* Task Detail Dialog (view attachments, add attachments) */}
       <Dialog open={showDetailDialog} onOpenChange={(open) => { if (!open) { setShowDetailDialog(false); setDetailTask(null); setAttachmentFile(null); } }}>
-        <DialogContent className="sm:max-w-3xl max-h-[85vh] overflow-y-auto">
+        <DialogContent className="sm:max-w-3xl max-h-[85vh] overflow-y-auto overflow-x-hidden">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <FileText className="h-5 w-5" /> Detalle de Tarea
             </DialogTitle>
           </DialogHeader>
           {detailTask && (
-            <div className="space-y-4 py-2">
+            <div className="space-y-4 py-2 min-w-0">
               <div>
                 <h3 className="font-semibold text-lg">{detailTask.title}</h3>
                 {detailTask.description && <p className="text-sm text-muted-foreground mt-1">{detailTask.description}</p>}

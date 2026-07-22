@@ -1132,7 +1132,7 @@ export default function Vencimientos() {
 
         {/* Comments dialog */}
         <Dialog open={!!commentingDeadline} onOpenChange={(open) => { if (!open) setCommentingDeadline(null); }}>
-          <DialogContent className="sm:max-w-2xl max-h-[85vh] overflow-y-auto">
+          <DialogContent className="sm:max-w-2xl max-h-[85vh] overflow-y-auto overflow-x-hidden">
             <DialogHeader>
               <DialogTitle>Comentarios</DialogTitle>
               {commentingDeadline && (
@@ -1142,7 +1142,9 @@ export default function Vencimientos() {
               )}
             </DialogHeader>
             {commentingDeadline && (
-              <CommentsSection entityType="deadline" entityId={commentingDeadline.id} />
+              <div className="min-w-0">
+                <CommentsSection entityType="deadline" entityId={commentingDeadline.id} />
+              </div>
             )}
           </DialogContent>
         </Dialog>

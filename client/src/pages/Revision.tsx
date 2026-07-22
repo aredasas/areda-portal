@@ -299,7 +299,7 @@ export default function Revision() {
 
       {/* Detail dialog */}
       <Dialog open={!!selectedItem} onOpenChange={(open) => { if (!open) { setSelectedItem(null); setReviewNotesInput(""); } }}>
-        <DialogContent className="sm:max-w-3xl max-h-[85vh] overflow-y-auto">
+        <DialogContent className="sm:max-w-3xl max-h-[85vh] overflow-y-auto overflow-x-hidden">
           {selectedItem && (
             <>
               <DialogHeader>
@@ -310,7 +310,7 @@ export default function Revision() {
                   {selectedItem.title}
                 </DialogTitle>
               </DialogHeader>
-              <div className="space-y-3 text-sm">
+              <div className="space-y-3 text-sm min-w-0">
                 <div><span className="text-muted-foreground">Cliente:</span> {selectedItem.clientName || "Sin cliente"}</div>
                 <div><span className="text-muted-foreground">Detalle:</span> {selectedItem.subtitle}</div>
                 {selectedItem.completedAt && (
