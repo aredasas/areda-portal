@@ -79,8 +79,9 @@ async function startServer() {
         const { porPeriodo, filasPorPeriodo, totalFilas, filasOmitidas, cuentasNuevas, columnasPorIA } =
           await informesDb.parseLibroAuxiliar(req.body as Buffer, cuentasConocidas);
 
+        let clasificacionIA: { exito: boolean; clasificadas: number } = { exito: true, clasificadas: 0 };
         if (cuentasNuevas.size > 0) {
-          await informesDb.clasificarCuentasNuevas(Array.from(cuentasNuevas));
+          clasificacionIA = await informesDb.clasificarCuentasNuevas(Array.from(cuentasNuevas));
         }
 
         const clavesPeriodo = Object.keys(porPeriodo).sort();
@@ -124,6 +125,8 @@ async function startServer() {
         return res.json({
           success: true, totalFilas, filasOmitidas, columnasPorIA, periodos,
           cuentasNuevas: Array.from(cuentasNuevas),
+          cuentasNuevasClasificadas: clasificacionIA.clasificadas,
+          clasificacionExitosa: clasificacionIA.exito,
         });
       } catch (error: any) {
         console.error("[Informes] Error al procesar carga:", String(error?.message || error).slice(0, 500));

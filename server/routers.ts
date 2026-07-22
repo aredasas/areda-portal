@@ -1654,6 +1654,21 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
         return db.getAllClients();
       }),
     }),
+    cuentas: router({
+      // Cuentas que ya se vieron en alguna carga pero se quedaron sin
+      // nombre (ej. porque la clasificación por IA falló esa vez).
+      pendientesDeNombre: protectedProcedure.query(async ({ ctx }) => {
+        assertInformesAccess(ctx.user.cedula);
+        return informesDb.getCuentasSinDescripcion();
+      }),
+      reclasificar: protectedProcedure.mutation(async ({ ctx }) => {
+        assertInformesAccess(ctx.user.cedula);
+        const pendientes = await informesDb.getCuentasSinDescripcion();
+        if (pendientes.length === 0) return { intentadas: 0, clasificadas: 0 };
+        const resultado = await informesDb.clasificarCuentasNuevas(pendientes);
+        return { intentadas: pendientes.length, clasificadas: resultado.clasificadas, exito: resultado.exito };
+      }),
+    }),
     centrosCosto: router({
       list: protectedProcedure
         .input(z.object({ clienteId: z.number() }))

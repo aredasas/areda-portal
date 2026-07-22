@@ -4,8 +4,12 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { trpc } from "@/lib/trpc";
-import { Upload, FileSpreadsheet, Loader2, Download, CheckCircle2, XCircle, Clock, Plus } from "lucide-react";
+import {
+  Upload, FileSpreadsheet, Loader2, Download, CheckCircle2, XCircle, Clock, Plus,
+  Sparkles, LineChart, Landmark, Banknote, Receipt, UserSquare2, Construction,
+} from "lucide-react";
 import { toast } from "sonner";
 
 const MESES = [
@@ -44,6 +48,7 @@ export default function Informes() {
     { clienteId: clienteId as number },
     { enabled: clienteId !== null },
   );
+  const cuentasPendientesQuery = trpc.informes.cuentas.pendientesDeNombre.useQuery();
 
   const generarERMMutation = trpc.informes.reportes.generarERM.useMutation({
     onSuccess: (data) => {
@@ -67,6 +72,17 @@ export default function Informes() {
       utils.informes.centrosCosto.list.invalidate();
     },
     onError: (err) => toast.error(err.message || "No se pudo sembrar el catálogo"),
+  });
+  const reclasificarMutation = trpc.informes.cuentas.reclasificar.useMutation({
+    onSuccess: (data) => {
+      if (data.intentadas === 0) {
+        toast.info("No hay cuentas pendientes de nombre");
+      } else {
+        toast.success(`Se reclasificaron ${data.clasificadas} de ${data.intentadas} cuenta(s)`);
+      }
+      utils.informes.cuentas.pendientesDeNombre.invalidate();
+    },
+    onError: (err) => toast.error(err.message || "No se pudo reclasificar"),
   });
 
   function handleSubirArchivo(file: File) {
@@ -111,9 +127,14 @@ export default function Informes() {
           toast.info("Este archivo tenía un formato distinto al habitual — las columnas se identificaron con ayuda de IA.");
         }
         if (data.cuentasNuevas?.length) {
-          toast.info(`${data.cuentasNuevas.length} cuenta(s) nueva(s) clasificada(s) por IA`);
+          if (data.clasificacionExitosa) {
+            toast.info(`${data.cuentasNuevas.length} cuenta(s) nueva(s) clasificada(s) por IA`);
+          } else {
+            toast.warning(`${data.cuentasNuevas.length} cuenta(s) nueva(s) encontradas, pero la clasificación por IA falló — puedes reintentarla abajo en "Cuentas sin nombre".`);
+          }
         }
         utils.informes.cargas.list.invalidate();
+        utils.informes.cuentas.pendientesDeNombre.invalidate();
       } else {
         try {
           const err = JSON.parse(xhr.responseText);
@@ -129,6 +150,7 @@ export default function Informes() {
 
   const clienteSeleccionado = clientesQuery.data?.find((c: any) => c.id === clienteId);
   const tieneCentros = !!centrosQuery.data?.length;
+  const cuentasPendientes = cuentasPendientesQuery.data || [];
 
   return (
     <DashboardLayout>
@@ -136,7 +158,8 @@ export default function Informes() {
         <div>
           <h1 className="text-2xl font-semibold">Informes</h1>
           <p className="text-muted-foreground text-sm">
-            Estado de Resultados Mensual comparativo, por cliente · con centro de costo opcional
+            Herramientas contables por cliente: estado de resultados, comparación DIAN, conciliación bancaria,
+            apoyo de impuestos, y renta persona natural
           </p>
         </div>
 
@@ -162,171 +185,253 @@ export default function Informes() {
         {!clienteId ? (
           <p className="text-sm text-muted-foreground">Selecciona un cliente para continuar.</p>
         ) : (
-          <>
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base flex items-center gap-2">
-                  <Upload className="w-4 h-4" /> Cargar libro auxiliar / movimiento
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <p className="text-sm text-muted-foreground">
-                  Libro auxiliar / movimiento para {clienteSeleccionado?.razonSocial}. Puede traer un solo mes o
-                  varios (ej. un semestre completo) — el periodo de cada fila se detecta automáticamente por su
-                  fecha, no hace falta indicarlo. Si ya cargaste alguno de esos meses antes, el nuevo archivo
-                  reemplaza los valores anteriores de ese periodo.
-                </p>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept=".xlsx"
-                  className="hidden"
-                  onChange={(e) => { const f = e.target.files?.[0]; if (f) handleSubirArchivo(f); }}
-                />
-                <Button
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={subiendo}
-                  className="gap-2"
-                >
-                  {subiendo ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileSpreadsheet className="w-4 h-4" />}
-                  {subiendo ? `Subiendo... ${progreso}%` : "Seleccionar archivo"}
-                </Button>
-              </CardContent>
-            </Card>
+          <Tabs defaultValue="resultados">
+            <TabsList className="flex-wrap h-auto">
+              <TabsTrigger value="resultados" className="gap-1.5"><LineChart className="w-3.5 h-3.5" /> Estado de Resultados</TabsTrigger>
+              <TabsTrigger value="dian" className="gap-1.5"><Landmark className="w-3.5 h-3.5" /> Comparación DIAN</TabsTrigger>
+              <TabsTrigger value="bancaria" className="gap-1.5"><Banknote className="w-3.5 h-3.5" /> Conciliación Bancaria</TabsTrigger>
+              <TabsTrigger value="impuestos" className="gap-1.5"><Receipt className="w-3.5 h-3.5" /> Apoyo Impuestos</TabsTrigger>
+              <TabsTrigger value="renta" className="gap-1.5"><UserSquare2 className="w-3.5 h-3.5" /> Renta Persona Natural</TabsTrigger>
+            </TabsList>
 
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base">Cargas de {anio}</CardTitle>
-              </CardHeader>
-              <CardContent>
-                {cargasQuery.isLoading ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                ) : !cargasQuery.data?.length ? (
-                  <p className="text-sm text-muted-foreground">Sin cargas para este año todavía.</p>
-                ) : (
-                  <div className="space-y-2">
-                    {cargasQuery.data.map((c: any) => {
-                      const badge = estadoBadge[c.estado] || estadoBadge.procesando;
-                      const Icon = badge.icon;
-                      return (
-                        <div key={c.id} className="flex items-center justify-between border rounded-md p-2 text-sm">
-                          <span>{MESES[c.mes - 1]} — {c.nombreArchivo}</span>
-                          <div className="flex items-center gap-2">
-                            {c.totalFilas && <span className="text-muted-foreground">{c.totalFilas.toLocaleString()} filas</span>}
-                            <Badge className={badge.className} title={c.estado === "error" ? c.mensajeError : undefined}>
-                              <Icon className="w-3 h-3 mr-1" />{badge.label}
-                            </Badge>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
-            <Card className="border-primary/30">
-              <CardHeader>
-                <CardTitle className="text-base">Estado de Resultados Mensual Comparativo (principal)</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <p className="text-sm text-muted-foreground">
-                  Todo el año {anio} de {clienteSeleccionado?.razonSocial}, un mes por columna más el acumulado.
-                  Suma todos los centros de costo combinados — sirve igual para clientes con o sin centro de costo,
-                  y es la base contra la que se validan los demás informes.
-                </p>
-                <div className="flex items-center gap-3">
-                  <Select value={nivelERM} onValueChange={(v) => setNivelERM(v as "resumen" | "detalle")}>
-                    <SelectTrigger className="w-56"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="resumen">Resumen (cuentas a 4 dígitos)</SelectItem>
-                      <SelectItem value="detalle">Detalle completo (subcuentas)</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <Button
-                    onClick={() => generarERMMutation.mutate({ clienteId, anio, nivel: nivelERM })}
-                    disabled={generarERMMutation.isPending}
-                    className="gap-2"
-                  >
-                    {generarERMMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileSpreadsheet className="w-4 h-4" />}
-                    Generar ERM {anio}
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base">Centros de costo</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                {centrosQuery.isLoading ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                ) : !tieneCentros ? (
-                  <div className="space-y-2">
-                    <p className="text-sm text-muted-foreground">
-                      Este cliente todavía no tiene centros de costo. El ERM funciona igual sin ellos; el
-                      ERI por centro solo aplica si los defines.
-                    </p>
-                    <Button
-                      size="sm" variant="outline" className="gap-2"
-                      onClick={() => seedColfamilMutation.mutate({ clienteId })}
-                      disabled={seedColfamilMutation.isPending}
-                    >
-                      <Plus className="w-3 h-3" /> Sembrar catálogo de Colfamil (23 puntos + Adm)
-                    </Button>
-                  </div>
-                ) : (
-                  <p className="text-sm text-muted-foreground">
-                    {centrosQuery.data!.length} centro(s) de costo definido(s) para este cliente.
-                  </p>
-                )}
-              </CardContent>
-            </Card>
-
-            {tieneCentros && (
+            <TabsContent value="resultados" className="space-y-6 mt-4">
               <Card>
                 <CardHeader>
-                  <CardTitle className="text-base">Generar ERI por centro de costo (derivado)</CardTitle>
+                  <CardTitle className="text-base flex items-center gap-2">
+                    <Upload className="w-4 h-4" /> Cargar libro auxiliar / movimiento
+                  </CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-3">
                   <p className="text-sm text-muted-foreground">
-                    Estado de resultados de {MESES[mes - 1]} {anio} desglosado por centro de costo, con punto
-                    de equilibrio y pareto de utilidad sobre todos los meses ya cargados del año.
+                    Libro auxiliar / movimiento para {clienteSeleccionado?.razonSocial}. Puede traer un solo mes o
+                    varios (ej. un semestre completo) — el periodo de cada fila se detecta automáticamente por su
+                    fecha, no hace falta indicarlo. <strong>Si ya cargaste alguno de esos meses antes, el nuevo
+                    archivo reemplaza los valores anteriores de ese periodo</strong> — para actualizar un mes en
+                    particular, sube un archivo que contenga ese mes (solo o junto con otros); para actualizar todo
+                    el año, sube un archivo con todos los meses que quieras corregir.
                   </p>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".xlsx"
+                    className="hidden"
+                    onChange={(e) => { const f = e.target.files?.[0]; if (f) handleSubirArchivo(f); }}
+                  />
                   <Button
-                    onClick={() => generarERIMutation.mutate({ clienteId, anio, mes })}
-                    disabled={generarERIMutation.isPending}
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={subiendo}
                     className="gap-2"
                   >
-                    {generarERIMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileSpreadsheet className="w-4 h-4" />}
-                    Generar ERI de {MESES[mes - 1]}
+                    {subiendo ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileSpreadsheet className="w-4 h-4" />}
+                    {subiendo ? `Subiendo... ${progreso}%` : "Seleccionar archivo"}
                   </Button>
                 </CardContent>
               </Card>
-            )}
 
-            {!!reportesQuery.data?.length && (
               <Card>
                 <CardHeader>
-                  <CardTitle className="text-base">Reportes generados en {anio}</CardTitle>
+                  <CardTitle className="text-base">Cargas de {anio}</CardTitle>
                 </CardHeader>
-                <CardContent className="space-y-2">
-                  {reportesQuery.data.map((r: any) => (
-                    <div key={r.id} className="flex items-center justify-between border rounded-md p-2 text-sm">
-                      <span>
-                        {r.tipo === "ERM" ? `ERM ${r.anio} (${r.nivel})` : `ERI ${MESES[r.mes - 1]} ${r.anio}`}
-                      </span>
-                      <ReporteDownloadLink fileKey={r.fileKey} />
+                <CardContent>
+                  {cargasQuery.isLoading ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : !cargasQuery.data?.length ? (
+                    <p className="text-sm text-muted-foreground">Sin cargas para este año todavía.</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {cargasQuery.data.map((c: any) => {
+                        const badge = estadoBadge[c.estado] || estadoBadge.procesando;
+                        const Icon = badge.icon;
+                        return (
+                          <div key={c.id} className="flex items-center justify-between border rounded-md p-2 text-sm">
+                            <span>{MESES[c.mes - 1]} — {c.nombreArchivo}</span>
+                            <div className="flex items-center gap-2">
+                              {c.totalFilas && <span className="text-muted-foreground">{c.totalFilas.toLocaleString()} filas</span>}
+                              <Badge className={badge.className} title={c.estado === "error" ? c.mensajeError : undefined}>
+                                <Icon className="w-3 h-3 mr-1" />{badge.label}
+                              </Badge>
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
-                  ))}
+                  )}
                 </CardContent>
               </Card>
-            )}
-          </>
+
+              {cuentasPendientes.length > 0 && (
+                <Card className="border-orange-300">
+                  <CardHeader>
+                    <CardTitle className="text-base flex items-center gap-2">
+                      <Sparkles className="w-4 h-4" /> Cuentas sin nombre ({cuentasPendientes.length})
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    <p className="text-sm text-muted-foreground">
+                      Estas cuentas aparecieron en alguna carga pero no se les pudo asignar nombre automáticamente
+                      (la clasificación por IA falló esa vez): {cuentasPendientes.slice(0, 15).join(", ")}
+                      {cuentasPendientes.length > 15 ? "…" : ""}
+                    </p>
+                    <Button
+                      size="sm" variant="outline" className="gap-2"
+                      onClick={() => reclasificarMutation.mutate()}
+                      disabled={reclasificarMutation.isPending}
+                    >
+                      {reclasificarMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+                      Reintentar clasificación con IA
+                    </Button>
+                  </CardContent>
+                </Card>
+              )}
+
+              <Card className="border-primary/30">
+                <CardHeader>
+                  <CardTitle className="text-base">Estado de Resultados Mensual Comparativo (principal)</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <p className="text-sm text-muted-foreground">
+                    Todo el año {anio} de {clienteSeleccionado?.razonSocial}, un mes por columna más el acumulado.
+                    Suma todos los centros de costo combinados — sirve igual para clientes con o sin centro de costo,
+                    y es la base contra la que se validan los demás informes.
+                  </p>
+                  <div className="flex items-center gap-3">
+                    <Select value={nivelERM} onValueChange={(v) => setNivelERM(v as "resumen" | "detalle")}>
+                      <SelectTrigger className="w-56"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="resumen">Resumen (cuentas a 4 dígitos)</SelectItem>
+                        <SelectItem value="detalle">Detalle completo (subcuentas)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <Button
+                      onClick={() => generarERMMutation.mutate({ clienteId, anio, nivel: nivelERM })}
+                      disabled={generarERMMutation.isPending}
+                      className="gap-2"
+                    >
+                      {generarERMMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileSpreadsheet className="w-4 h-4" />}
+                      Generar ERM {anio}
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-base">Centros de costo</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  {centrosQuery.isLoading ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : !tieneCentros ? (
+                    <div className="space-y-2">
+                      <p className="text-sm text-muted-foreground">
+                        Este cliente todavía no tiene centros de costo. El ERM funciona igual sin ellos; el
+                        ERI por centro solo aplica si los defines.
+                      </p>
+                      <Button
+                        size="sm" variant="outline" className="gap-2"
+                        onClick={() => seedColfamilMutation.mutate({ clienteId })}
+                        disabled={seedColfamilMutation.isPending}
+                      >
+                        <Plus className="w-3 h-3" /> Sembrar catálogo de Colfamil (23 puntos + Adm)
+                      </Button>
+                    </div>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">
+                      {centrosQuery.data!.length} centro(s) de costo definido(s) para este cliente.
+                    </p>
+                  )}
+                </CardContent>
+              </Card>
+
+              {tieneCentros && (
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-base">Generar ERI por centro de costo (derivado)</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    <p className="text-sm text-muted-foreground">
+                      Estado de resultados de {MESES[mes - 1]} {anio} desglosado por centro de costo, con punto
+                      de equilibrio y pareto de utilidad sobre todos los meses ya cargados del año.
+                    </p>
+                    <Button
+                      onClick={() => generarERIMutation.mutate({ clienteId, anio, mes })}
+                      disabled={generarERIMutation.isPending}
+                      className="gap-2"
+                    >
+                      {generarERIMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileSpreadsheet className="w-4 h-4" />}
+                      Generar ERI de {MESES[mes - 1]}
+                    </Button>
+                  </CardContent>
+                </Card>
+              )}
+
+              {!!reportesQuery.data?.length && (
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-base">Reportes generados en {anio}</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-2">
+                    {reportesQuery.data.map((r: any) => (
+                      <div key={r.id} className="flex items-center justify-between border rounded-md p-2 text-sm">
+                        <span>
+                          {r.tipo === "ERM" ? `ERM ${r.anio} (${r.nivel})` : `ERI ${MESES[r.mes - 1]} ${r.anio}`}
+                        </span>
+                        <ReporteDownloadLink fileKey={r.fileKey} />
+                      </div>
+                    ))}
+                  </CardContent>
+                </Card>
+              )}
+            </TabsContent>
+
+            <TabsContent value="dian" className="mt-4">
+              <ProximamenteCard
+                icono={Landmark}
+                titulo="Comparación mensual DIAN"
+                descripcion="Se sube un archivo de la DIAN y se compara contra el libro auxiliar contable del mismo mes, para detectar diferencias."
+              />
+            </TabsContent>
+            <TabsContent value="bancaria" className="mt-4">
+              <ProximamenteCard
+                icono={Banknote}
+                titulo="Revisión / Conciliación bancaria"
+                descripcion="Se sube el extracto bancario y los movimientos de la pasarela de pagos, y se comparan contra el mes de contabilidad."
+              />
+            </TabsContent>
+            <TabsContent value="impuestos" className="mt-4">
+              <ProximamenteCard
+                icono={Receipt}
+                titulo="Apoyo de impuestos"
+                descripcion="Consumo, IVA y retención — herramientas de apoyo para la liquidación y revisión de estos impuestos."
+              />
+            </TabsContent>
+            <TabsContent value="renta" className="mt-4">
+              <ProximamenteCard
+                icono={UserSquare2}
+                titulo="Renta persona natural"
+                descripcion="Módulo especial para el apoyo en la declaración de renta de persona natural."
+              />
+            </TabsContent>
+          </Tabs>
         )}
       </div>
     </DashboardLayout>
+  );
+}
+
+function ProximamenteCard({ icono: Icono, titulo, descripcion }: { icono: any; titulo: string; descripcion: string }) {
+  return (
+    <Card className="border-dashed">
+      <CardContent className="py-10 flex flex-col items-center text-center gap-3">
+        <div className="flex items-center gap-2 text-muted-foreground">
+          <Icono className="w-5 h-5" />
+          <Construction className="w-4 h-4" />
+        </div>
+        <h3 className="font-medium">{titulo}</h3>
+        <p className="text-sm text-muted-foreground max-w-md">{descripcion}</p>
+        <Badge variant="outline" className="text-xs">En construcción</Badge>
+      </CardContent>
+    </Card>
   );
 }
 

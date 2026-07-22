@@ -1,4 +1,4 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, sql, isNull } from "drizzle-orm";
 import ExcelJS from "exceljs";
 import { Readable } from "stream";
 import { getDb } from "./db";
@@ -248,9 +248,9 @@ function tipoDeCuenta(cuenta: string): "ingreso" | "costo" | "gasto" | "descuent
  * Anthropic ya usado para el RUT) una descripción PUC colombiana estándar, y
  * guarda el resultado para no volver a preguntar. Compartido entre clientes:
  * el PUC es un estándar nacional, no depende de quién lo cargó. */
-export async function clasificarCuentasNuevas(cuentasNuevas: string[]): Promise<void> {
+export async function clasificarCuentasNuevas(cuentasNuevas: string[]): Promise<{ exito: boolean; clasificadas: number }> {
   const db = await getDb();
-  if (!db || cuentasNuevas.length === 0) return;
+  if (!db || cuentasNuevas.length === 0) return { exito: true, clasificadas: 0 };
 
   const response = await invokeLLM({
     messages: [
@@ -266,22 +266,39 @@ export async function clasificarCuentasNuevas(cuentasNuevas: string[]): Promise<
     const raw = response.choices?.[0]?.message?.content || "[]";
     const jsonStr = raw.includes("```") ? (raw.match(/```(?:json)?\s*([\s\S]*?)```/)?.[1] ?? raw) : raw;
     const parsed: { cuenta: string; descripcion: string }[] = JSON.parse(jsonStr);
+    let clasificadas = 0;
     for (const cuenta of cuentasNuevas) {
       const found = parsed.find(p => p.cuenta === cuenta);
       const tipo = tipoDeCuenta(cuenta);
+      if (found?.descripcion) clasificadas++;
       await db.insert(informesCuentasPuc)
         .values({ cuenta, descripcion: found?.descripcion || null, tipo, clasificadoPorIA: true })
         .onDuplicateKeyUpdate({ set: { descripcion: found?.descripcion || null } });
     }
+    return { exito: true, clasificadas };
   } catch (error) {
-    console.error("[Informes] Clasificación IA de cuentas falló:", error);
+    console.error("[Informes] Clasificación IA de cuentas falló:", String((error as any)?.message || error).slice(0, 500));
     // Aun sin descripción, se guarda el tipo (derivado del código) para no reintentar en cada carga.
     for (const cuenta of cuentasNuevas) {
       await db.insert(informesCuentasPuc)
         .values({ cuenta, descripcion: null, tipo: tipoDeCuenta(cuenta), clasificadoPorIA: false })
         .onDuplicateKeyUpdate({ set: {} });
     }
+    return { exito: false, clasificadas: 0 };
   }
+}
+
+/** Cuentas que ya se vieron pero se quedaron sin descripción (ej. porque la
+ * clasificación por IA falló la primera vez) — para poder reintentarlas
+ * manualmente desde la página de Informes en vez de esperar a que la
+ * cuenta vuelva a aparecer en una carga futura. */
+export async function getCuentasSinDescripcion(): Promise<string[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const filas = await db.select({ cuenta: informesCuentasPuc.cuenta })
+    .from(informesCuentasPuc)
+    .where(isNull(informesCuentasPuc.descripcion));
+  return filas.map(f => f.cuenta);
 }
 
 // ==================== PERSISTENCIA DE CARGAS MENSUALES (por cliente) ====================
