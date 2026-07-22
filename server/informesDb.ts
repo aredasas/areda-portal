@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import ExcelJS from "exceljs";
 import { getDb } from "./db";
 import {
@@ -302,17 +302,37 @@ export async function marcarCargaError(cargaId: number, mensaje: string) {
 /** Reemplaza (upsert) los saldos agregados de un cliente/mes/centro/cuenta.
  * Si el usuario vuelve a cargar el mismo mes (corrección), pisa los valores
  * anteriores de ese periodo en vez de duplicarlos. */
+/** Guarda todos los saldos de un periodo de una sola vez (en lotes), en vez
+ * de una consulta a la base de datos por cada cuenta+centro — con archivos
+ * grandes (cientos de cuentas), hacerlo una por una podía tardar minutos y
+ * saturar el log de consultas. Un lote de 200 es un tamaño seguro para no
+ * exceder el límite de parámetros de una sola consulta MySQL. */
 export async function guardarSaldosMensuales(
   cargaId: number, clienteId: number, anio: number, mes: number, detalle: DetallePeriodo,
 ): Promise<void> {
   const db = await getDb();
   if (!db) return;
+
+  const filas: { cargaId: number; clienteId: number; anio: number; mes: number; centroCodigo: string; cuenta: string; tipo: TipoSaldo; valor: number }[] = [];
   for (const [centroCodigo, cuentas] of Object.entries(detalle)) {
     for (const [cuenta, { tipo, valor }] of Object.entries(cuentas)) {
-      await db.insert(informesSaldosMensuales)
-        .values({ cargaId, clienteId, anio, mes, centroCodigo, cuenta, tipo, valor })
-        .onDuplicateKeyUpdate({ set: { valor, tipo, cargaId } });
+      filas.push({ cargaId, clienteId, anio, mes, centroCodigo, cuenta, tipo, valor });
     }
+  }
+  if (filas.length === 0) return;
+
+  const TAMANO_LOTE = 200;
+  for (let i = 0; i < filas.length; i += TAMANO_LOTE) {
+    const lote = filas.slice(i, i + TAMANO_LOTE);
+    await db.insert(informesSaldosMensuales)
+      .values(lote)
+      .onDuplicateKeyUpdate({
+        set: {
+          valor: sql`values(\`valor\`)`,
+          tipo: sql`values(\`tipo\`)`,
+          cargaId: sql`values(\`cargaId\`)`,
+        },
+      });
   }
 }
 

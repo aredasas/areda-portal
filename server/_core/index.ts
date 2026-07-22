@@ -98,7 +98,7 @@ async function startServer() {
             await informesDb.marcarCargaCompletada(cargaId, filas);
             periodos.push({ anio, mes, cargaId, filas });
           } catch (errorPeriodo: any) {
-            console.error(`[Informes] Error guardando periodo ${clave}:`, errorPeriodo);
+            console.error(`[Informes] Error guardando periodo ${clave}:`, String(errorPeriodo?.message || errorPeriodo).slice(0, 500));
             const mensaje = String(errorPeriodo?.message || errorPeriodo);
             if (cargaId) await informesDb.marcarCargaError(cargaId, mensaje);
             periodos.push({ anio, mes, cargaId: cargaId || 0, filas, error: mensaje });
