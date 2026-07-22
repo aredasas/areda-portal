@@ -37,6 +37,14 @@ async function startServer() {
   registerStorageProxy(app);
   registerOAuthRoutes(app);
 
+  // Evita procesar dos subidas del mismo cliente al mismo tiempo — si el
+  // usuario reintenta subir un archivo porque la primera vez pareció
+  // quedarse colgada, sin este seguro el intento anterior seguía corriendo
+  // en el servidor de fondo, y con varios intentos acumulados a la vez el
+  // consumo de memoria se multiplica (esto fue lo que causó que Railway
+  // reportara "out of memory" — no el tamaño del archivo en sí).
+  const clientesEnProceso = new Set<number>();
+
   // Módulo Informes: el libro auxiliar/movimiento puede pesar 50-100mb+
   // (cientos de miles de filas), así que se sube como binario crudo en su
   // propia ruta con un límite más alto, en vez de base64 dentro del JSON
@@ -45,6 +53,7 @@ async function startServer() {
     "/api/informes/upload",
     express.raw({ limit: "200mb", type: () => true }),
     async (req, res) => {
+      let clienteIdParaLiberar: number | null = null;
       try {
         const { sdk } = await import("./sdk");
         const user = await sdk.authenticateRequest(req);
@@ -57,6 +66,13 @@ async function startServer() {
         if (!clienteId) {
           return res.status(400).json({ error: "clienteId es requerido" });
         }
+        if (clientesEnProceso.has(clienteId)) {
+          return res.status(409).json({
+            error: "Ya hay una carga en curso para este cliente. Espera a que termine antes de subir otro archivo.",
+          });
+        }
+        clientesEnProceso.add(clienteId);
+        clienteIdParaLiberar = clienteId;
 
         const informesDb = await import("../informesDb");
         const cuentasConocidas = new Set((await informesDb.getCuentasPucConocidas()).keys());
@@ -110,8 +126,10 @@ async function startServer() {
           cuentasNuevas: Array.from(cuentasNuevas),
         });
       } catch (error: any) {
-        console.error("[Informes] Error al procesar carga:", error);
+        console.error("[Informes] Error al procesar carga:", String(error?.message || error).slice(0, 500));
         return res.status(500).json({ error: error?.message || "Error al procesar el archivo" });
+      } finally {
+        if (clienteIdParaLiberar !== null) clientesEnProceso.delete(clienteIdParaLiberar);
       }
     },
   );
