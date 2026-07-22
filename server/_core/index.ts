@@ -79,15 +79,30 @@ async function startServer() {
         // detectado, y cada una reemplaza los valores previos de ese
         // periodo si ya existían (mismo comportamiento que antes, ahora
         // por cada mes en vez de uno solo fijo).
-        const periodos: { anio: number; mes: number; cargaId: number; filas: number }[] = [];
+        //
+        // Cada periodo se procesa en su propio try/catch: si uno falla
+        // (ej. un valor que no cabe en una columna, un error de conexión a
+        // la base de datos), esa carga queda marcada como "error" con el
+        // motivo, en vez de quedarse en "Procesando" para siempre sin
+        // explicación — y los demás periodos del mismo archivo se siguen
+        // procesando normalmente.
+        const periodos: { anio: number; mes: number; cargaId: number; filas: number; error?: string }[] = [];
         for (const clave of clavesPeriodo) {
           const [anioStr, mesStr] = clave.split("-");
           const anio = Number(anioStr), mes = Number(mesStr);
           const filas = filasPorPeriodo[clave] || 0;
-          const cargaId = await informesDb.crearCarga({ clienteId, anio, mes, nombreArchivo, cargadoPorId: user.id });
-          await informesDb.guardarSaldosMensuales(cargaId, clienteId, anio, mes, porPeriodo[clave]);
-          await informesDb.marcarCargaCompletada(cargaId, filas);
-          periodos.push({ anio, mes, cargaId, filas });
+          let cargaId: number | null = null;
+          try {
+            cargaId = await informesDb.crearCarga({ clienteId, anio, mes, nombreArchivo, cargadoPorId: user.id });
+            await informesDb.guardarSaldosMensuales(cargaId, clienteId, anio, mes, porPeriodo[clave]);
+            await informesDb.marcarCargaCompletada(cargaId, filas);
+            periodos.push({ anio, mes, cargaId, filas });
+          } catch (errorPeriodo: any) {
+            console.error(`[Informes] Error guardando periodo ${clave}:`, errorPeriodo);
+            const mensaje = String(errorPeriodo?.message || errorPeriodo);
+            if (cargaId) await informesDb.marcarCargaError(cargaId, mensaje);
+            periodos.push({ anio, mes, cargaId: cargaId || 0, filas, error: mensaje });
+          }
         }
 
         return res.json({

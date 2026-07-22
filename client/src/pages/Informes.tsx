@@ -87,14 +87,23 @@ export default function Informes() {
       setSubiendo(false);
       if (xhr.status >= 200 && xhr.status < 300) {
         const data = JSON.parse(xhr.responseText);
-        const periodosTxt = data.periodos
-          ?.map((p: any) => `${MESES[p.mes - 1]} ${p.anio} (${p.filas.toLocaleString()} filas)`)
+        const periodosOk = (data.periodos || []).filter((p: any) => !p.error);
+        const periodosError = (data.periodos || []).filter((p: any) => p.error);
+        const periodosTxt = periodosOk
+          .map((p: any) => `${MESES[p.mes - 1]} ${p.anio} (${p.filas.toLocaleString()} filas)`)
           .join(", ");
-        toast.success(
-          data.periodos?.length > 1
-            ? `Se detectaron ${data.periodos.length} periodos: ${periodosTxt}`
-            : `Archivo procesado: ${periodosTxt || `${data.totalFilas?.toLocaleString()} filas`}`,
-        );
+        if (periodosOk.length > 0) {
+          toast.success(
+            periodosOk.length > 1
+              ? `Se detectaron ${periodosOk.length} periodos: ${periodosTxt}`
+              : `Archivo procesado: ${periodosTxt || `${data.totalFilas?.toLocaleString()} filas`}`,
+          );
+        }
+        if (periodosError.length > 0) {
+          for (const p of periodosError) {
+            toast.error(`${MESES[p.mes - 1]} ${p.anio} no se pudo guardar: ${p.error}`);
+          }
+        }
         if (data.filasOmitidas > 0) {
           toast.info(`${data.filasOmitidas.toLocaleString()} fila(s) se omitieron (subtotales, anuladas, o sin cuenta/fecha reconocible).`);
         }
@@ -204,7 +213,9 @@ export default function Informes() {
                           <span>{MESES[c.mes - 1]} — {c.nombreArchivo}</span>
                           <div className="flex items-center gap-2">
                             {c.totalFilas && <span className="text-muted-foreground">{c.totalFilas.toLocaleString()} filas</span>}
-                            <Badge className={badge.className}><Icon className="w-3 h-3 mr-1" />{badge.label}</Badge>
+                            <Badge className={badge.className} title={c.estado === "error" ? c.mensajeError : undefined}>
+                              <Icon className="w-3 h-3 mr-1" />{badge.label}
+                            </Badge>
                           </div>
                         </div>
                       );
