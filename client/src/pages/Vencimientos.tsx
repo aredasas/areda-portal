@@ -1132,7 +1132,7 @@ export default function Vencimientos() {
 
         {/* Comments dialog */}
         <Dialog open={!!commentingDeadline} onOpenChange={(open) => { if (!open) setCommentingDeadline(null); }}>
-          <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
+          <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>Comentarios</DialogTitle>
               {commentingDeadline && (

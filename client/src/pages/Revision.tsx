@@ -299,7 +299,7 @@ export default function Revision() {
 
       {/* Detail dialog */}
       <Dialog open={!!selectedItem} onOpenChange={(open) => { if (!open) { setSelectedItem(null); setReviewNotesInput(""); } }}>
-        <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+        <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto">
           {selectedItem && (
             <>
               <DialogHeader>
