@@ -34,6 +34,8 @@ export default function Informes() {
   const [subiendo, setSubiendo] = useState(false);
   const [progreso, setProgreso] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [subiendoCentros, setSubiendoCentros] = useState(false);
+  const fileInputCentrosRef = useRef<HTMLInputElement>(null);
 
   const utils = trpc.useUtils();
   const clientesQuery = trpc.informes.clientes.list.useQuery();
@@ -67,13 +69,6 @@ export default function Informes() {
       utils.informes.reportes.list.invalidate();
     },
     onError: (err) => toast.error(err.message || "No se pudo generar el reporte"),
-  });
-  const seedColfamilMutation = trpc.informes.centrosCosto.seedColfamil.useMutation({
-    onSuccess: () => {
-      toast.success("Centros de costo sembrados");
-      utils.informes.centrosCosto.list.invalidate();
-    },
-    onError: (err) => toast.error(err.message || "No se pudo sembrar el catálogo"),
   });
   const reclasificarMutation = trpc.informes.cuentas.reclasificar.useMutation({
     onSuccess: (data) => {
@@ -151,6 +146,31 @@ export default function Informes() {
       }
     };
     xhr.onerror = () => { setSubiendo(false); toast.error("Error de red al subir el archivo"); };
+    xhr.send(file);
+  }
+
+  function subirCentrosCosto(file: File) {
+    if (!clienteId) return;
+    setSubiendoCentros(true);
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `/api/informes/upload-centros-costo?clienteId=${clienteId}`);
+    xhr.setRequestHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    xhr.onload = () => {
+      setSubiendoCentros(false);
+      if (xhr.status >= 200 && xhr.status < 300) {
+        const data = JSON.parse(xhr.responseText);
+        toast.success(`Catálogo cargado: ${data.centrosSembrados} centro(s) sembrado(s)/actualizado(s)`);
+        utils.informes.centrosCosto.list.invalidate();
+      } else {
+        try {
+          const err = JSON.parse(xhr.responseText);
+          toast.error(err.error || "Error al subir el catálogo");
+        } catch {
+          toast.error("Error al subir el catálogo");
+        }
+      }
+    };
+    xhr.onerror = () => { setSubiendoCentros(false); toast.error("Error de red al subir el catálogo"); };
     xhr.send(file);
   }
 
@@ -321,29 +341,37 @@ export default function Informes() {
               </Card>
 
               <Card>
-                <CardHeader>
+                <CardHeader className="flex flex-row items-center justify-between space-y-0">
                   <CardTitle className="text-base">Centros de costo</CardTitle>
+                  <input
+                    ref={fileInputCentrosRef}
+                    type="file"
+                    accept=".xlsx"
+                    className="hidden"
+                    onChange={(e) => { const f = e.target.files?.[0]; if (f) subirCentrosCosto(f); }}
+                  />
+                  <Button
+                    size="sm" variant="outline" className="gap-2"
+                    onClick={() => fileInputCentrosRef.current?.click()}
+                    disabled={subiendoCentros}
+                  >
+                    {subiendoCentros ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
+                    {subiendoCentros ? "Subiendo..." : "Subir catálogo (Excel)"}
+                  </Button>
                 </CardHeader>
                 <CardContent className="space-y-3">
                   {centrosQuery.isLoading ? (
                     <Loader2 className="w-4 h-4 animate-spin" />
                   ) : !tieneCentros ? (
-                    <div className="space-y-2">
-                      <p className="text-sm text-muted-foreground">
-                        Este cliente todavía no tiene centros de costo. El ERM funciona igual sin ellos; el
-                        ERI por centro solo aplica si los defines.
-                      </p>
-                      <Button
-                        size="sm" variant="outline" className="gap-2"
-                        onClick={() => seedColfamilMutation.mutate({ clienteId })}
-                        disabled={seedColfamilMutation.isPending}
-                      >
-                        <Plus className="w-3 h-3" /> Sembrar catálogo de Colfamil (23 puntos + Adm)
-                      </Button>
-                    </div>
+                    <p className="text-sm text-muted-foreground">
+                      Este cliente todavía no tiene centros de costo. El ERM funciona igual sin ellos; el
+                      ERI por centro solo aplica si los defines. Sube un archivo con código y nombre de cada
+                      centro (cualquier formato) para sembrarlos de una vez.
+                    </p>
                   ) : (
                     <p className="text-sm text-muted-foreground">
-                      {centrosQuery.data!.length} centro(s) de costo definido(s) para este cliente.
+                      {centrosQuery.data!.length} centro(s) de costo definido(s). Puedes volver a subir un
+                      archivo en cualquier momento para agregar o actualizar nombres.
                     </p>
                   )}
                 </CardContent>

@@ -67,6 +67,48 @@ export async function createCentroCosto(clienteId: number, codigo: string, nombr
   await db.insert(informesCentrosCosto).values({ clienteId, codigo, nombre, activo: true });
 }
 
+/** Lee un archivo de CATÁLOGO de centros de costo (código+nombre, formato
+ * flexible igual que el de cuentas) y devuelve código -> nombre. */
+export async function parseCatalogoCentrosCosto(filePathOrBuffer: string | Buffer): Promise<Map<string, string>> {
+  const nombres = new Map<string, string>();
+  const entrada = Buffer.isBuffer(filePathOrBuffer) ? Readable.from(filePathOrBuffer) : filePathOrBuffer;
+  const reader = new ExcelJS.stream.xlsx.WorkbookReader(entrada as any, {});
+  let header: any[] | null = null;
+  let cols: { cuenta: number; nombre: number } | null = null;
+
+  for await (const worksheetReader of reader) {
+    for await (const row of worksheetReader) {
+      const values = row.values as any[];
+      if (!header) {
+        header = values;
+        cols = resolverColumnasCatalogo(header);
+        continue;
+      }
+      const codigoRaw = values[cols!.cuenta];
+      if (!pareceCodigoDeCuenta(codigoRaw)) continue;
+      const nombreRaw = values[cols!.nombre];
+      const nombre = nombreRaw !== null && nombreRaw !== undefined ? String(nombreRaw).trim() : "";
+      if (nombre) nombres.set(String(codigoRaw).trim().padStart(2, "0"), nombre);
+    }
+  }
+  return nombres;
+}
+
+/** Siembra/actualiza en bloque el catálogo de centros de costo de un
+ * cliente desde un archivo — sirve para cualquier cliente, no solo uno en
+ * particular. Si el centro ya existe para ese cliente, actualiza el
+ * nombre; si no, lo crea. */
+export async function sembrarCentrosCostoDesdeArchivo(clienteId: number, nombres: Map<string, string>): Promise<number> {
+  const db = await getDb();
+  if (!db || nombres.size === 0) return 0;
+  for (const [codigo, nombre] of Array.from(nombres.entries())) {
+    await db.insert(informesCentrosCosto)
+      .values({ clienteId, codigo, nombre, activo: true })
+      .onDuplicateKeyUpdate({ set: { nombre: sql`values(\`nombre\`)` } });
+  }
+  return nombres.size;
+}
+
 // ==================== PARSEO DEL LIBRO AUXILIAR ====================
 
 export type TipoSaldo = "ingreso" | "costo" | "gasto" | "descuento_pp";
