@@ -75,7 +75,7 @@ import * as informesDb from "./informesDb";
 import { generarReporteERI } from "./informesReportERI";
 import { generarReporteERM } from "./informesReportERM";
 import * as informesDian from "./informesDianDb";
-import { storagePut, storageGetSignedUrl } from "./storage";
+import { storagePut, storageGetSignedUrl, storageGetBuffer } from "./storage";
 import { invokeLLM } from "./_core/llm";
 import { isDriveConfigured, extractFolderIdFromUrl, testFolderAccess, listSubfoldersRecursive, listAllFilesRecursive, uploadFileToDrive, resolveUploadFolder } from "./googleDrive";
 import { sdk } from "./_core/sdk";
@@ -1793,21 +1793,46 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
         }),
     }),
     dian: router({
+      // Consulta si ya existe un libro auxiliar cargado (desde Estado de
+      // Resultados) para este cliente+periodo, para reutilizarlo en la
+      // comparación DIAN sin pedirlo de nuevo.
+      auxiliarDisponible: protectedProcedure
+        .input(z.object({ clienteId: z.number(), anio: z.number(), mes: z.number().min(1).max(12) }))
+        .query(async ({ input, ctx }) => {
+          assertInformesAccess(ctx.user.cedula);
+          const carga = await informesDb.getCargaConArchivo(input.clienteId, input.anio, input.mes);
+          if (!carga) return null;
+          return { nombreArchivo: carga.nombreArchivo, totalFilas: carga.totalFilas };
+        }),
       // Compara el archivo de reporte de documentos de la DIAN contra el
-      // libro auxiliar del mismo mes y genera un Excel con lo que está en
-      // cada lado sin encontrar contraparte en el otro. Ambos archivos se
-      // mandan en base64 en una sola llamada — son de tamaño moderado
-      // (unos pocos MB), no requieren la ruta de subida binaria aparte.
+      // libro auxiliar del mismo mes. Por defecto reutiliza el libro
+      // auxiliar ya cargado en Estado de Resultados para ese cliente+mes
+      // (un solo auxiliar sirve de base para todo el módulo) — solo si no
+      // hay ninguno cargado, o si se manda uno explícitamente, se usa el
+      // que llegue en auxiliarBase64.
       comparar: protectedProcedure
         .input(z.object({
           clienteId: z.number(), anio: z.number(), mes: z.number().min(1).max(12),
-          dianBase64: z.string(), auxiliarBase64: z.string(),
+          dianBase64: z.string(), auxiliarBase64: z.string().optional(),
         }))
         .mutation(async ({ input, ctx }) => {
           assertInformesAccess(ctx.user.cedula);
           const cliente = (await db.getAllClients()).find((c: any) => c.id === input.clienteId);
           const bufferDian = Buffer.from(input.dianBase64, "base64");
-          const bufferAuxiliar = Buffer.from(input.auxiliarBase64, "base64");
+
+          let bufferAuxiliar: Buffer;
+          if (input.auxiliarBase64) {
+            bufferAuxiliar = Buffer.from(input.auxiliarBase64, "base64");
+          } else {
+            const carga = await informesDb.getCargaConArchivo(input.clienteId, input.anio, input.mes);
+            if (!carga || !carga.fileKey) {
+              throw new Error(
+                "No hay un libro auxiliar cargado para este cliente y mes en Estado de Resultados. " +
+                "Súbelo ahí primero, o adjunta uno manualmente aquí.",
+              );
+            }
+            bufferAuxiliar = await storageGetBuffer(carga.fileKey);
+          }
 
           const filasDian = await informesDian.parseArchivoDian(bufferDian);
           if (filasDian.length === 0) {
@@ -1815,7 +1840,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           }
           const documentosAux = await informesDian.parseAuxiliarParaDian(bufferAuxiliar, input.anio, input.mes);
           if (documentosAux.size === 0) {
-            throw new Error("No se encontró ningún documento válido en el libro auxiliar.");
+            throw new Error("No se encontró ningún documento válido en el libro auxiliar para ese mes.");
           }
 
           const resultado = informesDian.compararDianVsAuxiliar(filasDian, documentosAux);

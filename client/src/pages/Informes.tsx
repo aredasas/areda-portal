@@ -648,6 +648,8 @@ function ComparacionDianCard({ clienteId, anio, mes, setMes }: {
   const fileDianRef = useRef<HTMLInputElement>(null);
   const fileAuxiliarRef = useRef<HTMLInputElement>(null);
 
+  const auxiliarDisponibleQuery = trpc.informes.dian.auxiliarDisponible.useQuery({ clienteId, anio, mes });
+
   const compararMutation = trpc.informes.dian.comparar.useMutation({
     onSuccess: (data) => {
       toast.success(
@@ -667,13 +669,15 @@ function ComparacionDianCard({ clienteId, anio, mes, setMes }: {
     reader.readAsDataURL(file);
   });
 
+  const hayAuxiliarCargado = !!auxiliarDisponibleQuery.data;
+  const puedeComparar = !!archivoDian && (hayAuxiliarCargado || !!archivoAuxiliar);
+
   const handleComparar = async () => {
-    if (!archivoDian || !archivoAuxiliar) return;
+    if (!archivoDian || !puedeComparar) return;
     setComparando(true);
     try {
-      const [dianBase64, auxiliarBase64] = await Promise.all([
-        fileToBase64(archivoDian), fileToBase64(archivoAuxiliar),
-      ]);
+      const dianBase64 = await fileToBase64(archivoDian);
+      const auxiliarBase64 = archivoAuxiliar ? await fileToBase64(archivoAuxiliar) : undefined;
       await compararMutation.mutateAsync({ clienteId, anio, mes, dianBase64, auxiliarBase64 });
     } catch (error: any) {
       toast.error(error.message || "Error al leer los archivos");
@@ -691,11 +695,12 @@ function ComparacionDianCard({ clienteId, anio, mes, setMes }: {
       </CardHeader>
       <CardContent className="space-y-4">
         <p className="text-sm text-muted-foreground">
-          Sube el reporte de documentos electrónicos de la DIAN de un mes, junto con el libro auxiliar de
-          ese mismo mes. Se cruzan primero por número de documento, y lo que no cruce así se intenta por
-          NIT del tercero + valor. El resultado son dos listas: lo que está en contabilidad sin documento
-          electrónico (para verificar si son servicios públicos u otros pagos que no lo requieren), y —de
-          especial cuidado— lo que está en la DIAN sin registrar en contabilidad.
+          Sube el reporte de documentos electrónicos de la DIAN de un mes. Se compara contra el libro
+          auxiliar de ese mismo mes que ya cargaste en "Estado de Resultados" — un solo auxiliar sirve de
+          base para todo, no hace falta subirlo dos veces. Se cruza primero por número de documento, y lo
+          que no cruce así se intenta por NIT del tercero + valor. El resultado son dos listas: lo que está
+          en contabilidad sin documento electrónico (para verificar si son servicios públicos u otros pagos
+          que no lo requieren), y —de especial cuidado— lo que está en la DIAN sin registrar en contabilidad.
         </p>
 
         <div className="flex items-center gap-3">
@@ -710,6 +715,22 @@ function ComparacionDianCard({ clienteId, anio, mes, setMes }: {
           </Select>
         </div>
 
+        {auxiliarDisponibleQuery.isLoading ? (
+          <Loader2 className="w-4 h-4 animate-spin" />
+        ) : hayAuxiliarCargado ? (
+          <div className="flex items-center gap-2 text-sm bg-green-50 text-green-800 border border-green-200 rounded-md p-2">
+            <CheckCircle2 className="w-4 h-4 shrink-0" />
+            Usando el libro auxiliar ya cargado para {MESES[mes - 1]} {anio}: {auxiliarDisponibleQuery.data!.nombreArchivo}
+            {auxiliarDisponibleQuery.data!.totalFilas ? ` (${auxiliarDisponibleQuery.data!.totalFilas!.toLocaleString()} filas)` : ""}.
+          </div>
+        ) : (
+          <div className="flex items-center gap-2 text-sm bg-orange-50 text-orange-800 border border-orange-200 rounded-md p-2">
+            <XCircle className="w-4 h-4 shrink-0" />
+            No hay un libro auxiliar cargado para {MESES[mes - 1]} {anio} en Estado de Resultados. Súbelo ahí
+            primero, o adjunta uno manualmente abajo solo para esta comparación.
+          </div>
+        )}
+
         <div className="grid sm:grid-cols-2 gap-3">
           <div className="space-y-1.5">
             <span className="text-sm font-medium">Archivo de la DIAN</span>
@@ -722,7 +743,9 @@ function ComparacionDianCard({ clienteId, anio, mes, setMes }: {
             </Button>
           </div>
           <div className="space-y-1.5">
-            <span className="text-sm font-medium">Libro auxiliar del mismo mes</span>
+            <span className="text-sm font-medium">
+              {hayAuxiliarCargado ? "Libro auxiliar (opcional, para usar otro distinto)" : "Libro auxiliar del mismo mes"}
+            </span>
             <input
               ref={fileAuxiliarRef} type="file" accept=".xlsx" className="hidden"
               onChange={(e) => { const f = e.target.files?.[0]; if (f) setArchivoAuxiliar(f); }}
@@ -735,7 +758,7 @@ function ComparacionDianCard({ clienteId, anio, mes, setMes }: {
 
         <Button
           onClick={handleComparar}
-          disabled={!archivoDian || !archivoAuxiliar || comparando || compararMutation.isPending}
+          disabled={!puedeComparar || comparando || compararMutation.isPending}
           className="gap-2"
         >
           {comparando || compararMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileSpreadsheet className="w-4 h-4" />}

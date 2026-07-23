@@ -1,4 +1,4 @@
-import { and, eq, sql, isNull } from "drizzle-orm";
+import { and, eq, sql, isNull, desc } from "drizzle-orm";
 import ExcelJS from "exceljs";
 import { Readable } from "stream";
 import { getDb } from "./db";
@@ -506,6 +506,22 @@ export async function listarCargas(clienteId: number, anio?: number) {
   const condiciones = [eq(informesCargas.clienteId, clienteId)];
   if (anio) condiciones.push(eq(informesCargas.anio, anio));
   return db.select().from(informesCargas).where(and(...condiciones));
+}
+
+/** Busca la carga completada más reciente de un cliente+periodo que tenga
+ * el archivo original guardado — para que otros módulos (ej. la
+ * comparación DIAN) puedan reutilizar el mismo libro auxiliar ya subido
+ * en Estado de Resultados, en vez de pedirlo de nuevo. */
+export async function getCargaConArchivo(clienteId: number, anio: number, mes: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const filas = await db.select().from(informesCargas)
+    .where(and(
+      eq(informesCargas.clienteId, clienteId), eq(informesCargas.anio, anio), eq(informesCargas.mes, mes),
+      eq(informesCargas.estado, "completado"),
+    ))
+    .orderBy(desc(informesCargas.createdAt));
+  return filas.find(f => !!f.fileKey) || null;
 }
 
 /** Trae todos los saldos guardados de un cliente + año (para calcular

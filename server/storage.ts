@@ -78,3 +78,20 @@ export async function storageGetSignedUrl(relKey: string): Promise<string> {
   // Signed URL valid for 15 minutes — plenty for a redirect-and-view/download flow.
   return getSignedUrl(client, command, { expiresIn: 900 });
 }
+
+/** Descarga el contenido de un archivo guardado directamente como Buffer,
+ * sin pasar por una URL firmada — para cuando el propio servidor necesita
+ * reprocesar un archivo ya subido antes (ej. reutilizar el libro auxiliar
+ * ya cargado en Estado de Resultados para la comparación DIAN, en vez de
+ * pedirlo de nuevo). */
+export async function storageGetBuffer(relKey: string): Promise<Buffer> {
+  const { client, bucket } = getR2Client();
+  const key = normalizeKey(relKey);
+  const response = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+  const stream = response.Body as NodeJS.ReadableStream;
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks);
+}

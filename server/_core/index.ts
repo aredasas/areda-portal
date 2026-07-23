@@ -75,6 +75,15 @@ async function startServer() {
         clienteIdParaLiberar = clienteId;
 
         const informesDb = await import("../informesDb");
+        const { storagePut } = await import("../storage");
+        // Se guarda el archivo original en storage — así la comparación
+        // DIAN (y futuros módulos) pueden reutilizar este mismo libro
+        // auxiliar sin que el usuario tenga que volver a subirlo.
+        const { key: fileKeyOriginal } = await storagePut(
+          `informes/auxiliar/${clienteId}_${Date.now()}_${nombreArchivo}`,
+          req.body as Buffer,
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        );
         const cuentasConocidas = new Set((await informesDb.getCuentasPucConocidas()).keys());
         const { porPeriodo, filasPorPeriodo, totalFilas, filasOmitidas, cuentasNuevas, nombresDeCuenta, columnasPorIA } =
           await informesDb.parseLibroAuxiliar(req.body as Buffer, cuentasConocidas);
@@ -119,7 +128,7 @@ async function startServer() {
           const filas = filasPorPeriodo[clave] || 0;
           let cargaId: number | null = null;
           try {
-            cargaId = await informesDb.crearCarga({ clienteId, anio, mes, nombreArchivo, cargadoPorId: user.id });
+            cargaId = await informesDb.crearCarga({ clienteId, anio, mes, nombreArchivo, fileKey: fileKeyOriginal, cargadoPorId: user.id });
             await informesDb.guardarSaldosMensuales(cargaId, clienteId, anio, mes, porPeriodo[clave]);
             await informesDb.marcarCargaCompletada(cargaId, filas);
             periodos.push({ anio, mes, cargaId, filas });
