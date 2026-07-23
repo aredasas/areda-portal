@@ -37,6 +37,7 @@ import {
   Clock,
   Sparkles,
   LineChart,
+  UserSquare2,
   LayoutGrid,
 } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
@@ -59,6 +60,7 @@ const menuItems = [
   { icon: CheckSquare, label: "Revisión", path: "/revision", adminOnly: true },
   { icon: Clock, label: "Asistencia", path: "/asistencia", adminOnly: true, restrictedToCedula: "5820262" },
   { icon: LineChart, label: "Informes", path: "/informes", adminOnly: true, restrictedToCedula: "5820262" },
+  { icon: UserSquare2, label: "Renta Persona Natural", path: "/renta-persona-natural", adminOnly: true, restrictedToCedula: "5820262" },
   { icon: Users, label: "Colaboradores", path: "/colaboradores", adminOnly: true },
   { icon: Settings, label: "Configuración", path: "/configuracion", adminOnly: true },
 ];

@@ -9,7 +9,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { trpc } from "@/lib/trpc";
 import {
   Upload, FileSpreadsheet, Loader2, Download, CheckCircle2, XCircle, Clock, Plus,
-  Sparkles, LineChart, Landmark, Banknote, Receipt, UserSquare2, Construction,
+  Sparkles, LineChart, Landmark, Banknote, Receipt, Construction,
   BookOpen, Pencil, Check, X,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -154,7 +154,6 @@ export default function Informes() {
     xhr.send(file);
   }
 
-  const clienteSeleccionado = clientesQuery.data?.find((c: any) => c.id === clienteId);
   const tieneCentros = !!centrosQuery.data?.length;
   const cuentasPendientes = cuentasPendientesQuery.data || [];
 
@@ -164,8 +163,8 @@ export default function Informes() {
         <div>
           <h1 className="text-2xl font-semibold">Informes</h1>
           <p className="text-muted-foreground text-sm">
-            Herramientas contables por cliente: estado de resultados, comparación DIAN, conciliación bancaria,
-            apoyo de impuestos, y renta persona natural
+            Herramientas contables generales — el histórico se guarda por cliente, según cuál selecciones arriba:
+            estado de resultados, comparación DIAN, conciliación bancaria, y apoyo de impuestos
           </p>
         </div>
 
@@ -197,7 +196,6 @@ export default function Informes() {
               <TabsTrigger value="dian" className="gap-1.5"><Landmark className="w-3.5 h-3.5" /> Comparación DIAN</TabsTrigger>
               <TabsTrigger value="bancaria" className="gap-1.5"><Banknote className="w-3.5 h-3.5" /> Conciliación Bancaria</TabsTrigger>
               <TabsTrigger value="impuestos" className="gap-1.5"><Receipt className="w-3.5 h-3.5" /> Apoyo Impuestos</TabsTrigger>
-              <TabsTrigger value="renta" className="gap-1.5"><UserSquare2 className="w-3.5 h-3.5" /> Renta Persona Natural</TabsTrigger>
             </TabsList>
 
             <TabsContent value="resultados" className="space-y-6 mt-4">
@@ -209,7 +207,7 @@ export default function Informes() {
                 </CardHeader>
                 <CardContent className="space-y-3">
                   <p className="text-sm text-muted-foreground">
-                    Libro auxiliar / movimiento para {clienteSeleccionado?.razonSocial}. Puede traer un solo mes o
+                    Libro auxiliar / movimiento del cliente seleccionado arriba. Puede traer un solo mes o
                     varios (ej. un semestre completo) — el periodo de cada fila se detecta automáticamente por su
                     fecha, no hace falta indicarlo. <strong>Si ya cargaste alguno de esos meses antes, el nuevo
                     archivo reemplaza los valores anteriores de ese periodo</strong> — para actualizar un mes en
@@ -298,7 +296,7 @@ export default function Informes() {
                 </CardHeader>
                 <CardContent className="space-y-3">
                   <p className="text-sm text-muted-foreground">
-                    Todo el año {anio} de {clienteSeleccionado?.razonSocial}, un mes por columna más el acumulado.
+                    Todo el año {anio} del cliente seleccionado, un mes por columna más el acumulado.
                     Suma todos los centros de costo combinados — sirve igual para clientes con o sin centro de costo,
                     y es la base contra la que se validan los demás informes.
                   </p>
@@ -411,13 +409,6 @@ export default function Informes() {
                 icono={Receipt}
                 titulo="Apoyo de impuestos"
                 descripcion="Consumo, IVA y retención — herramientas de apoyo para la liquidación y revisión de estos impuestos."
-              />
-            </TabsContent>
-            <TabsContent value="renta" className="mt-4">
-              <ProximamenteCard
-                icono={UserSquare2}
-                titulo="Renta persona natural"
-                descripcion="Módulo especial para el apoyo en la declaración de renta de persona natural."
               />
             </TabsContent>
           </Tabs>
