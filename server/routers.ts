@@ -1668,6 +1668,22 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
         const resultado = await informesDb.clasificarCuentasNuevas(pendientes);
         return { intentadas: pendientes.length, clasificadas: resultado.clasificadas, exito: resultado.exito };
       }),
+      // Catálogo de nombres de cuenta propio de cada cliente — se siembra
+      // solo desde el archivo (si trae nombre) y se puede corregir/agregar
+      // a mano, útil para clientes cuyo archivo nunca trae nombre.
+      catalogoCliente: protectedProcedure
+        .input(z.object({ clienteId: z.number() }))
+        .query(async ({ input, ctx }) => {
+          assertInformesAccess(ctx.user.cedula);
+          return informesDb.listarCatalogoCliente(input.clienteId);
+        }),
+      actualizarNombreCliente: protectedProcedure
+        .input(z.object({ clienteId: z.number(), cuenta: z.string().min(1), nombre: z.string().min(1) }))
+        .mutation(async ({ input, ctx }) => {
+          assertInformesAccess(ctx.user.cedula);
+          await informesDb.actualizarNombreCuentaManual(input.clienteId, input.cuenta, input.nombre);
+          return { success: true };
+        }),
     }),
     centrosCosto: router({
       list: protectedProcedure

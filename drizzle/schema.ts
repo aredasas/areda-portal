@@ -454,6 +454,27 @@ export const informesCuentasPuc = mysqlTable("informesCuentasPuc", {
 export type InformeCuentaPuc = typeof informesCuentasPuc.$inferSelect;
 export type InsertInformeCuentaPuc = typeof informesCuentasPuc.$inferInsert;
 
+/** Catálogo de nombres de cuenta PROPIO de cada cliente — a diferencia de
+ * `informesCuentasPuc` (genérico, clasificado por IA, compartido entre
+ * todos los clientes), esto es el nombre real que ESE cliente le da a esa
+ * cuenta en su propia contabilidad. Se llena solo, automáticamente, cuando
+ * el libro auxiliar trae una columna de nombre de cuenta (ej. "Cuenta
+ * contable") — y el contador lo puede corregir o completar a mano para
+ * clientes cuyo archivo nunca trae nombre. Tiene prioridad sobre el
+ * catálogo genérico de IA al armar los reportes. */
+export const informesCuentasCliente = mysqlTable("informesCuentasCliente", {
+  id: int("id").autoincrement().primaryKey(),
+  clienteId: int("clienteId").notNull(),
+  cuenta: varchar("cuenta", { length: 12 }).notNull(),
+  nombre: varchar("nombre", { length: 255 }).notNull(),
+  origen: mysqlEnum("origen", ["archivo", "manual"]).default("archivo").notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+}, (table) => ({
+  clienteCuentaIdx: uniqueIndex("informesCuentasCliente_cliente_cuenta_idx").on(table.clienteId, table.cuenta),
+}));
+export type InformeCuentaCliente = typeof informesCuentasCliente.$inferSelect;
+export type InsertInformeCuentaCliente = typeof informesCuentasCliente.$inferInsert;
+
 /** Una fila por archivo de libro auxiliar/movimiento cargado (un
  * cliente + mes). */
 export const informesCargas = mysqlTable("informesCargas", {

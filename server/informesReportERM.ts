@@ -1,5 +1,5 @@
 import ExcelJS from "exceljs";
-import { getSaldosDelAnio, getCuentasPucConocidas, type TipoSaldo } from "./informesDb";
+import { getSaldosDelAnio, getCuentasPucConocidas, getCatalogoCliente, type TipoSaldo } from "./informesDb";
 import {
   MESES_CORTO, FONT_BOLD, FONT_TITLE, MONEY, PCT,
   styleHeaderRow, styleSubtotalRow, a4Digitos, colLetter, finalizarLibro,
@@ -22,6 +22,7 @@ export async function generarReporteERM(
 ): Promise<Buffer> {
   const saldos = await getSaldosDelAnio(clienteId, anio);
   const cuentasConocidas = await getCuentasPucConocidas();
+  const catalogoCliente = await getCatalogoCliente(clienteId);
 
   const mesesConDatos = Array.from(new Set(saldos.map(f => f.mes))).sort((a, b) => a - b);
 
@@ -34,7 +35,15 @@ export async function generarReporteERM(
     f.valores[fila.mes] = (f.valores[fila.mes] || 0) + fila.valor;
   }
 
+  // Prioridad: el catálogo propio de este cliente (más confiable — es el
+  // nombre que ese cliente le da en su propia contabilidad, sembrado desde
+  // el archivo o corregido a mano) antes que el catálogo genérico de IA.
   const descripcionPara = (codigo: string): string => {
+    const exactaCliente = catalogoCliente.get(codigo);
+    if (exactaCliente) return exactaCliente;
+    for (const [cta, nombre] of Array.from(catalogoCliente.entries())) {
+      if (cta.startsWith(codigo)) return nombre;
+    }
     const exacta = cuentasConocidas.get(codigo);
     if (exacta?.descripcion) return exacta.descripcion;
     for (const [cta, info] of Array.from(cuentasConocidas.entries())) {

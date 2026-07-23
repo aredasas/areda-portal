@@ -33,6 +33,9 @@ const SINONIMOS: Record<string, string[]> = {
   credito: ["CREDITO", "HABER"],
   centroCosto: ["CCOSTO", "CENTRO COSTO", "CENTRO DE COSTO", "CENTROCOSTO", "CC", "CCO"],
   anulado: ["ANULADO", "ANULADA", "ANULA", "ESTADO"],
+  // Columna de NOMBRE de cuenta (separada del código) — cuando el archivo
+  // la trae, se usa directo como descripción, sin necesitar IA.
+  nombreCuenta: ["CUENTA CONTABLE", "NOMBRE CUENTA", "NOMBRE DE LA CUENTA", "DESCRIPCION CUENTA", "DENOMINACION CUENTA"],
 };
 
 export type ColumnasResueltas = {
@@ -41,6 +44,9 @@ export type ColumnasResueltas = {
   anioCol: number | null; mesCol: number | null; // solo si modoFecha === "separada"
   cuenta: number; debito: number; credito: number;
   centroCosto: number | null; anulado: number | null;
+  /** Columna con el NOMBRE de la cuenta (separada del código), si el
+   * archivo la trae — permite mostrar el nombre real sin depender de IA. */
+  nombreCuenta: number | null;
   /** true si esta resolución vino del respaldo con IA (para registrar/avisar). */
   porIA?: boolean;
 };
@@ -90,12 +96,16 @@ function resolverColumnasHeuristico(headerRaw: any[]): ColumnasResueltas {
     );
   }
 
+  let nombreCuenta = buscarPorSinonimo(headers, "nombreCuenta");
+  if (nombreCuenta === cuenta) nombreCuenta = null; // evita usar la misma columna para código y nombre
+
   return {
     modoFecha: tieneFechaCombinada ? "combinada" : "separada",
     fecha, anioCol, mesCol,
     cuenta: cuenta!, debito: debito!, credito: credito!,
     centroCosto: buscarPorSinonimo(headers, "centroCosto"),
     anulado: buscarPorSinonimo(headers, "anulado"),
+    nombreCuenta,
   };
 }
 
@@ -125,8 +135,8 @@ async function resolverColumnasConIA(headerRaw: any[], muestras: any[][]): Promi
         {
           role: "system",
           content: `Eres un experto en libros auxiliares contables colombianos. Dado el encabezado de un Excel (con el índice de cada columna) y unas filas de muestra, identifica el ÍNDICE de columna (número) para cada campo. Responde ÚNICAMENTE un JSON con esta forma exacta, sin texto adicional ni markdown:
-{"fecha": <indice o null>, "anioCol": <indice o null>, "mesCol": <indice o null>, "cuenta": <indice>, "debito": <indice>, "credito": <indice>, "centroCosto": <indice o null>, "anulado": <indice o null>}
-"cuenta" es la columna con el CÓDIGO contable/PUC (numérico, ej. "11050501"), NUNCA la columna con el nombre/descripción de la cuenta. "fecha" es una columna de fecha combinada (día+mes+año en una celda); si en cambio el año y el mes vienen en columnas separadas, deja "fecha" en null y usa "anioCol"/"mesCol". "cuenta", "debito" y "credito" son obligatorios; si no logras identificar alguno de esos tres, responde {"error": "razón breve"}.`,
+{"fecha": <indice o null>, "anioCol": <indice o null>, "mesCol": <indice o null>, "cuenta": <indice>, "debito": <indice>, "credito": <indice>, "centroCosto": <indice o null>, "anulado": <indice o null>, "nombreCuenta": <indice o null>}
+"cuenta" es la columna con el CÓDIGO contable/PUC (numérico, ej. "11050501"). "nombreCuenta" es una columna SEPARADA con el nombre/descripción de esa cuenta (ej. "Caja general"), si el archivo la trae — si no existe, déjala en null; NUNCA la confundas con "cuenta". "fecha" es una columna de fecha combinada (día+mes+año en una celda); si en cambio el año y el mes vienen en columnas separadas, deja "fecha" en null y usa "anioCol"/"mesCol". "cuenta", "debito" y "credito" son obligatorios; si no logras identificar alguno de esos tres, responde {"error": "razón breve"}.`,
         },
         { role: "user", content: `Encabezados (índice: nombre):\n${headers}\n\nMuestra de filas:\n${filasTexto}` },
       ],
@@ -147,6 +157,7 @@ async function resolverColumnasConIA(headerRaw: any[], muestras: any[][]): Promi
       mesCol: parsed.mesCol ?? null,
       cuenta: parsed.cuenta, debito: parsed.debito, credito: parsed.credito,
       centroCosto: parsed.centroCosto ?? null, anulado: parsed.anulado ?? null,
+      nombreCuenta: parsed.nombreCuenta ?? null,
       porIA: true,
     };
   } catch (error) {

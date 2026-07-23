@@ -76,8 +76,17 @@ async function startServer() {
 
         const informesDb = await import("../informesDb");
         const cuentasConocidas = new Set((await informesDb.getCuentasPucConocidas()).keys());
-        const { porPeriodo, filasPorPeriodo, totalFilas, filasOmitidas, cuentasNuevas, columnasPorIA } =
+        const { porPeriodo, filasPorPeriodo, totalFilas, filasOmitidas, cuentasNuevas, nombresDeCuenta, columnasPorIA } =
           await informesDb.parseLibroAuxiliar(req.body as Buffer, cuentasConocidas);
+
+        // Si el archivo trae los nombres de cuenta (columna separada del
+        // código, ej. "Cuenta contable"), se siembra/actualiza el catálogo
+        // propio de este cliente — así los reportes muestran el nombre real
+        // sin depender de la IA, y sin pisar lo que el contador ya haya
+        // corregido a mano.
+        if (nombresDeCuenta.size > 0) {
+          await informesDb.actualizarCatalogoDesdeArchivo(clienteId, nombresDeCuenta);
+        }
 
         let clasificacionIA: { exito: boolean; clasificadas: number } = { exito: true, clasificadas: 0 };
         if (cuentasNuevas.size > 0) {
@@ -124,6 +133,7 @@ async function startServer() {
 
         return res.json({
           success: true, totalFilas, filasOmitidas, columnasPorIA, periodos,
+          nombresDeCuentaEncontrados: nombresDeCuenta.size,
           cuentasNuevas: Array.from(cuentasNuevas),
           cuentasNuevasClasificadas: clasificacionIA.clasificadas,
           clasificacionExitosa: clasificacionIA.exito,

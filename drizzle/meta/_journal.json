@@ -155,6 +155,13 @@
       "when": 1784670486652,
       "tag": "0021_informes_y_tablero",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "5",
+      "when": 1784818667750,
+      "tag": "0022_catalogo_cuentas_cliente",
+      "breakpoints": true
     }
   ]
 }

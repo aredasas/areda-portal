@@ -1,5 +1,5 @@
 import ExcelJS from "exceljs";
-import { getCentrosCosto, getSaldosDelAnio, getCuentasPucConocidas } from "./informesDb";
+import { getCentrosCosto, getSaldosDelAnio, getCuentasPucConocidas, getCatalogoCliente } from "./informesDb";
 import { invokeLLM } from "./_core/llm";
 import { MESES, FONT, FONT_BOLD, FONT_TITLE, MONEY, PCT, styleHeaderRow, a4Digitos, finalizarLibro } from "./informesReportUtils";
 
@@ -35,6 +35,7 @@ export async function generarReporteERI(clienteId: number, anio: number, mes: nu
   for (const c of centrosCatalogo) nombres[c.codigo] = c.nombre;
 
   const cuentasConocidas = await getCuentasPucConocidas();
+  const catalogoCliente = await getCatalogoCliente(clienteId);
   const saldosAnio = await getSaldosDelAnio(clienteId, anio);
 
   const serie: Record<string, { ingreso: number[]; costoBruto: number[]; descuentoPP: number[]; gasto: number[] }> = {};
@@ -159,7 +160,7 @@ export async function generarReporteERI(clienteId: number, anio: number, mes: nu
       const rTitulo = ws.addRow([titulo]); rTitulo.font = FONT_BOLD as any;
       const startRow = ws.rowCount + 1;
       for (const [cuenta, valor] of grupos[tipo]) {
-        ws.addRow([cuenta, cuentasConocidas.get(cuenta)?.descripcion || "", tipo, valor]);
+        ws.addRow([cuenta, catalogoCliente.get(cuenta) || cuentasConocidas.get(cuenta)?.descripcion || "", tipo, valor]);
       }
       const endRow = ws.rowCount;
       const rTot = ws.addRow([null, null, `Total ${titulo.toLowerCase()}`,

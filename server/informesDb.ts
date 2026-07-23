@@ -5,6 +5,7 @@ import { getDb } from "./db";
 import {
   informesCentrosCosto,
   informesCuentasPuc,
+  informesCuentasCliente,
   informesCargas,
   informesSaldosMensuales,
   informesReportes,
@@ -83,6 +84,10 @@ export type Agregado = {
   totalFilas: number;
   filasOmitidas: number; // filas de resumen/subtotal o sin fecha interpretable
   cuentasNuevas: Set<string>;
+  /** cuenta -> nombre, tal cual venía en una columna separada del archivo
+   * (ej. "Cuenta contable") — solo se llena si el archivo trae esa
+   * columna; se usa para sembrar/actualizar el catálogo del cliente. */
+  nombresDeCuenta: Map<string, string>;
   /** true si se tuvo que recurrir a IA para identificar las columnas
    * (para avisar en el resultado de la carga). */
   columnasPorIA: boolean;
@@ -103,7 +108,7 @@ function extraerCentroCodigo(valorCrudo: any): string {
 
 function procesarFila(
   values: any[], cols: ColumnasResueltas, porPeriodo: Record<string, DetallePeriodo>,
-  cuentasConocidas: Set<string>, cuentasNuevas: Set<string>,
+  cuentasConocidas: Set<string>, cuentasNuevas: Set<string>, nombresEncontrados: Map<string, string>,
 ): string | null {
   if (cols.anulado !== null && esAnulado(values[cols.anulado])) return null;
 
@@ -118,6 +123,12 @@ function procesarFila(
   const claveP = `${periodo.anio}-${String(periodo.mes).padStart(2, "0")}`;
 
   if (!cuentasConocidas.has(cuentaKey)) cuentasNuevas.add(cuentaKey);
+
+  if (cols.nombreCuenta !== null && !nombresEncontrados.has(cuentaKey)) {
+    const nombreRaw = values[cols.nombreCuenta];
+    const nombre = nombreRaw !== null && nombreRaw !== undefined ? String(nombreRaw).trim() : "";
+    if (nombre) nombresEncontrados.set(cuentaKey, nombre);
+  }
 
   const ccosto = extraerCentroCodigo(cols.centroCosto !== null ? values[cols.centroCosto] : null);
   const debito = Number(values[cols.debito]) || 0;
@@ -172,6 +183,7 @@ export async function parseLibroAuxiliar(
   const porPeriodo: Record<string, DetallePeriodo> = {};
   const filasPorPeriodo: Record<string, number> = {};
   const cuentasNuevas = new Set<string>();
+  const nombresDeCuenta = new Map<string, string>();
   let totalFilas = 0;
   let filasOmitidas = 0;
   let columnasPorIA = false;
@@ -191,7 +203,7 @@ export async function parseLibroAuxiliar(
 
   const procesarYContar = (values: any[]) => {
     totalFilas++;
-    const clave = procesarFila(values, cols!, porPeriodo, cuentasConocidas, cuentasNuevas);
+    const clave = procesarFila(values, cols!, porPeriodo, cuentasConocidas, cuentasNuevas, nombresDeCuenta);
     if (clave === null) filasOmitidas++;
     else filasPorPeriodo[clave] = (filasPorPeriodo[clave] || 0) + 1;
   };
@@ -223,7 +235,7 @@ export async function parseLibroAuxiliar(
     for (const filaBuffer of buffer) procesarYContar(filaBuffer);
   }
 
-  return { porPeriodo, filasPorPeriodo, totalFilas, filasOmitidas, cuentasNuevas, columnasPorIA };
+  return { porPeriodo, filasPorPeriodo, totalFilas, filasOmitidas, cuentasNuevas, nombresDeCuenta, columnasPorIA };
 }
 
 // ==================== CATÁLOGO DE CUENTAS PUC (con IA, compartido entre clientes) ====================
@@ -299,6 +311,60 @@ export async function getCuentasSinDescripcion(): Promise<string[]> {
     .from(informesCuentasPuc)
     .where(isNull(informesCuentasPuc.descripcion));
   return filas.map(f => f.cuenta);
+}
+
+// ==================== CATÁLOGO DE CUENTAS POR CLIENTE ====================
+// El nombre real que CADA cliente le da a sus cuentas — tiene prioridad
+// sobre el catálogo genérico de IA. Se siembra solo con lo que traiga el
+// archivo (columna de nombre de cuenta, si existe) y se puede editar a
+// mano para los clientes cuyo archivo nunca trae nombre.
+
+export async function getCatalogoCliente(clienteId: number): Promise<Map<string, string>> {
+  const db = await getDb();
+  const mapa = new Map<string, string>();
+  if (!db) return mapa;
+  const filas = await db.select().from(informesCuentasCliente)
+    .where(eq(informesCuentasCliente.clienteId, clienteId));
+  for (const f of filas) mapa.set(f.cuenta, f.nombre);
+  return mapa;
+}
+
+export async function listarCatalogoCliente(clienteId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(informesCuentasCliente)
+    .where(eq(informesCuentasCliente.clienteId, clienteId))
+    .orderBy(informesCuentasCliente.cuenta);
+}
+
+/** Siembra/actualiza el catálogo del cliente con los nombres encontrados
+ * en el archivo que se acaba de subir. Nunca pisa un nombre que el
+ * contador ya haya corregido a mano (origen="manual") — solo actualiza
+ * entradas que vinieron de un archivo anterior o que no existían. */
+export async function actualizarCatalogoDesdeArchivo(clienteId: number, nombres: Map<string, string>): Promise<void> {
+  const db = await getDb();
+  if (!db || nombres.size === 0) return;
+  const existentes = await db.select().from(informesCuentasCliente)
+    .where(eq(informesCuentasCliente.clienteId, clienteId));
+  const existentesPorCuenta = new Map(existentes.map(f => [f.cuenta, f]));
+
+  for (const [cuenta, nombre] of Array.from(nombres.entries())) {
+    const actual = existentesPorCuenta.get(cuenta);
+    if (actual?.origen === "manual") continue; // el contador ya lo corrigió a mano, no se pisa
+    await db.insert(informesCuentasCliente)
+      .values({ clienteId, cuenta, nombre, origen: "archivo" })
+      .onDuplicateKeyUpdate({ set: { nombre: sql`values(\`nombre\`)`, origen: sql`values(\`origen\`)`, updatedAt: sql`now()` } });
+  }
+}
+
+/** El contador corrige o agrega un nombre a mano — queda protegido de que
+ * una futura carga lo sobreescriba automáticamente. */
+export async function actualizarNombreCuentaManual(clienteId: number, cuenta: string, nombre: string): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.insert(informesCuentasCliente)
+    .values({ clienteId, cuenta, nombre, origen: "manual" })
+    .onDuplicateKeyUpdate({ set: { nombre: sql`values(\`nombre\`)`, origen: sql`values(\`origen\`)`, updatedAt: sql`now()` } });
 }
 
 // ==================== PERSISTENCIA DE CARGAS MENSUALES (por cliente) ====================

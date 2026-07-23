@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -9,6 +10,7 @@ import { trpc } from "@/lib/trpc";
 import {
   Upload, FileSpreadsheet, Loader2, Download, CheckCircle2, XCircle, Clock, Plus,
   Sparkles, LineChart, Landmark, Banknote, Receipt, UserSquare2, Construction,
+  BookOpen, Pencil, Check, X,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -126,6 +128,9 @@ export default function Informes() {
         if (data.columnasPorIA) {
           toast.info("Este archivo tenía un formato distinto al habitual — las columnas se identificaron con ayuda de IA.");
         }
+        if (data.nombresDeCuentaEncontrados > 0) {
+          toast.info(`Se detectaron los nombres de ${data.nombresDeCuentaEncontrados} cuenta(s) directamente en el archivo.`);
+        }
         if (data.cuentasNuevas?.length) {
           if (data.clasificacionExitosa) {
             toast.info(`${data.cuentasNuevas.length} cuenta(s) nueva(s) clasificada(s) por IA`);
@@ -135,6 +140,7 @@ export default function Informes() {
         }
         utils.informes.cargas.list.invalidate();
         utils.informes.cuentas.pendientesDeNombre.invalidate();
+        utils.informes.cuentas.catalogoCliente.invalidate({ clienteId });
       } else {
         try {
           const err = JSON.parse(xhr.responseText);
@@ -283,6 +289,8 @@ export default function Informes() {
                   </CardContent>
                 </Card>
               )}
+
+              <CatalogoClienteCard clienteId={clienteId} />
 
               <Card className="border-primary/30">
                 <CardHeader>
@@ -444,3 +452,122 @@ function ReporteDownloadLink({ fileKey }: { fileKey: string }) {
     </a>
   );
 }
+
+/** Catálogo de nombres de cuenta propio de este cliente — se siembra solo
+ * desde el archivo cuando trae nombre de cuenta (ej. "Cuenta contable"), y
+ * se puede corregir o agregar a mano para clientes cuyo archivo nunca trae
+ * nombre (ej. Colfamil). Tiene prioridad sobre la clasificación genérica de
+ * IA al armar los reportes. */
+function CatalogoClienteCard({ clienteId }: { clienteId: number }) {
+  const utils = trpc.useUtils();
+  const { data: catalogo, isLoading } = trpc.informes.cuentas.catalogoCliente.useQuery({ clienteId });
+  const actualizarMutation = trpc.informes.cuentas.actualizarNombreCliente.useMutation({
+    onSuccess: () => {
+      toast.success("Nombre actualizado");
+      utils.informes.cuentas.catalogoCliente.invalidate({ clienteId });
+    },
+    onError: (err) => toast.error(err.message || "No se pudo actualizar"),
+  });
+
+  const [editando, setEditando] = useState<string | null>(null);
+  const [nombreEdit, setNombreEdit] = useState("");
+  const [nuevaCuenta, setNuevaCuenta] = useState("");
+  const [nuevoNombre, setNuevoNombre] = useState("");
+
+  const guardarEdicion = (cuenta: string) => {
+    if (!nombreEdit.trim()) return;
+    actualizarMutation.mutate({ clienteId, cuenta, nombre: nombreEdit.trim() });
+    setEditando(null);
+  };
+
+  const agregarCuenta = () => {
+    if (!nuevaCuenta.trim() || !nuevoNombre.trim()) return;
+    actualizarMutation.mutate({ clienteId, cuenta: nuevaCuenta.trim(), nombre: nuevoNombre.trim() });
+    setNuevaCuenta("");
+    setNuevoNombre("");
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base flex items-center gap-2">
+          <BookOpen className="w-4 h-4" /> Catálogo de cuentas de este cliente
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <p className="text-sm text-muted-foreground">
+          El nombre real que este cliente le da a sus cuentas — se llena solo con lo que traiga el archivo
+          (columna de nombre de cuenta, si existe) y tiene prioridad sobre la clasificación genérica de IA.
+          Corrígelo o complétalo aquí para las cuentas que lo necesiten.
+        </p>
+
+        {isLoading ? (
+          <Loader2 className="w-4 h-4 animate-spin" />
+        ) : !catalogo?.length ? (
+          <p className="text-sm text-muted-foreground">
+            Todavía no hay nada en este catálogo — se llenará solo si el archivo trae nombres de cuenta,
+            o puedes agregar entradas manualmente abajo.
+          </p>
+        ) : (
+          <div className="space-y-1 max-h-64 overflow-y-auto">
+            {catalogo.map((c: any) => (
+              <div key={c.id} className="flex items-center gap-2 text-sm border-b py-1.5">
+                <span className="font-mono text-xs w-24 shrink-0">{c.cuenta}</span>
+                {editando === c.cuenta ? (
+                  <>
+                    <Input
+                      value={nombreEdit}
+                      onChange={(e) => setNombreEdit(e.target.value)}
+                      className="h-7 text-sm flex-1"
+                      autoFocus
+                      onKeyDown={(e) => { if (e.key === "Enter") guardarEdicion(c.cuenta); }}
+                    />
+                    <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => guardarEdicion(c.cuenta)}>
+                      <Check className="w-3.5 h-3.5" />
+                    </Button>
+                    <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => setEditando(null)}>
+                      <X className="w-3.5 h-3.5" />
+                    </Button>
+                  </>
+                ) : (
+                  <>
+                    <span className="flex-1 min-w-0 truncate">{c.nombre}</span>
+                    <Badge variant="outline" className="text-[10px]">
+                      {c.origen === "manual" ? "Manual" : "Del archivo"}
+                    </Badge>
+                    <Button
+                      size="icon" variant="ghost" className="h-7 w-7"
+                      onClick={() => { setEditando(c.cuenta); setNombreEdit(c.nombre); }}
+                    >
+                      <Pencil className="w-3.5 h-3.5" />
+                    </Button>
+                  </>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="flex items-center gap-2 pt-2 border-t">
+          <Input
+            value={nuevaCuenta}
+            onChange={(e) => setNuevaCuenta(e.target.value)}
+            placeholder="Código de cuenta"
+            className="h-8 w-36 font-mono text-sm"
+          />
+          <Input
+            value={nuevoNombre}
+            onChange={(e) => setNuevoNombre(e.target.value)}
+            placeholder="Nombre de la cuenta"
+            className="h-8 flex-1 text-sm"
+            onKeyDown={(e) => { if (e.key === "Enter") agregarCuenta(); }}
+          />
+          <Button size="sm" variant="outline" className="gap-1" onClick={agregarCuenta}>
+            <Plus className="w-3.5 h-3.5" /> Agregar
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
