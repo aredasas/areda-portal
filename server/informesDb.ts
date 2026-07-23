@@ -12,7 +12,7 @@ import {
 } from "../drizzle/schema";
 import { invokeLLM } from "./_core/llm";
 import {
-  resolverColumnasRobusto, esAnulado, periodoDeFila, pareceCodigoDeCuenta, type ColumnasResueltas,
+  resolverColumnasRobusto, resolverColumnasCatalogo, esAnulado, periodoDeFila, pareceCodigoDeCuenta, type ColumnasResueltas,
 } from "./informesParseUtils";
 
 // ==================== CATÁLOGO DE CENTROS DE COSTO (por cliente) ====================
@@ -388,6 +388,37 @@ export async function marcarCargaError(cargaId: number, mensaje: string) {
   const db = await getDb();
   if (!db) return;
   await db.update(informesCargas).set({ estado: "error", mensajeError: mensaje }).where(eq(informesCargas.id, cargaId));
+}
+
+/** Lee un archivo de CATÁLOGO de cuentas (plan de cuentas / PUC del
+ * cliente, código+nombre) y devuelve cuenta -> nombre. Formato flexible
+ * (las columnas se reconocen por sinónimo, igual que el libro auxiliar) —
+ * el archivo puede traer solo el nivel de detalle o toda la jerarquía
+ * (activo/grupo/cuenta/subcuenta), no importa, se toman todas las filas
+ * que tengan un código numérico y un nombre. */
+export async function parseCatalogoCuentas(filePathOrBuffer: string | Buffer): Promise<Map<string, string>> {
+  const nombres = new Map<string, string>();
+  const entrada = Buffer.isBuffer(filePathOrBuffer) ? Readable.from(filePathOrBuffer) : filePathOrBuffer;
+  const reader = new ExcelJS.stream.xlsx.WorkbookReader(entrada as any, {});
+  let header: any[] | null = null;
+  let cols: { cuenta: number; nombre: number } | null = null;
+
+  for await (const worksheetReader of reader) {
+    for await (const row of worksheetReader) {
+      const values = row.values as any[];
+      if (!header) {
+        header = values;
+        cols = resolverColumnasCatalogo(header);
+        continue;
+      }
+      const cuentaRaw = values[cols!.cuenta];
+      if (!pareceCodigoDeCuenta(cuentaRaw)) continue;
+      const nombreRaw = values[cols!.nombre];
+      const nombre = nombreRaw !== null && nombreRaw !== undefined ? String(nombreRaw).trim() : "";
+      if (nombre) nombres.set(String(cuentaRaw).trim(), nombre);
+    }
+  }
+  return nombres;
 }
 
 /** Reemplaza (upsert) los saldos agregados de un cliente/mes/centro/cuenta.

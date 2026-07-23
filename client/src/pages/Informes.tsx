@@ -473,6 +473,8 @@ function CatalogoClienteCard({ clienteId }: { clienteId: number }) {
   const [nombreEdit, setNombreEdit] = useState("");
   const [nuevaCuenta, setNuevaCuenta] = useState("");
   const [nuevoNombre, setNuevoNombre] = useState("");
+  const [subiendoCatalogo, setSubiendoCatalogo] = useState(false);
+  const fileInputCatalogoRef = useRef<HTMLInputElement>(null);
 
   const guardarEdicion = (cuenta: string) => {
     if (!nombreEdit.trim()) return;
@@ -487,18 +489,59 @@ function CatalogoClienteCard({ clienteId }: { clienteId: number }) {
     setNuevoNombre("");
   };
 
+  const subirCatalogo = (file: File) => {
+    setSubiendoCatalogo(true);
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `/api/informes/upload-catalogo?clienteId=${clienteId}`);
+    xhr.setRequestHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    xhr.onload = () => {
+      setSubiendoCatalogo(false);
+      if (xhr.status >= 200 && xhr.status < 300) {
+        const data = JSON.parse(xhr.responseText);
+        toast.success(`Catálogo cargado: ${data.cuentasSembradas} cuenta(s) sembradas/actualizadas`);
+        utils.informes.cuentas.catalogoCliente.invalidate({ clienteId });
+      } else {
+        try {
+          const err = JSON.parse(xhr.responseText);
+          toast.error(err.error || "Error al subir el catálogo");
+        } catch {
+          toast.error("Error al subir el catálogo");
+        }
+      }
+    };
+    xhr.onerror = () => { setSubiendoCatalogo(false); toast.error("Error de red al subir el catálogo"); };
+    xhr.send(file);
+  };
+
   return (
     <Card>
-      <CardHeader>
+      <CardHeader className="flex flex-row items-center justify-between space-y-0">
         <CardTitle className="text-base flex items-center gap-2">
           <BookOpen className="w-4 h-4" /> Catálogo de cuentas de este cliente
         </CardTitle>
+        <input
+          ref={fileInputCatalogoRef}
+          type="file"
+          accept=".xlsx"
+          className="hidden"
+          onChange={(e) => { const f = e.target.files?.[0]; if (f) subirCatalogo(f); }}
+        />
+        <Button
+          size="sm" variant="outline" className="gap-2"
+          onClick={() => fileInputCatalogoRef.current?.click()}
+          disabled={subiendoCatalogo}
+        >
+          {subiendoCatalogo ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
+          {subiendoCatalogo ? "Subiendo..." : "Subir catálogo (Excel)"}
+        </Button>
       </CardHeader>
       <CardContent className="space-y-3">
         <p className="text-sm text-muted-foreground">
-          El nombre real que este cliente le da a sus cuentas — se llena solo con lo que traiga el archivo
-          (columna de nombre de cuenta, si existe) y tiene prioridad sobre la clasificación genérica de IA.
-          Corrígelo o complétalo aquí para las cuentas que lo necesiten.
+          El nombre real que este cliente le da a sus cuentas — se llena solo con lo que traiga el libro
+          auxiliar (columna de nombre de cuenta, si existe) y tiene prioridad sobre la clasificación genérica de IA.
+          Si tienes el plan de cuentas completo del cliente, súbelo con el botón de arriba (cualquier formato,
+          siempre que tenga una columna de código y una de nombre) para sembrarlo todo de una vez. También puedes
+          corregir o agregar cuentas una por una abajo.
         </p>
 
         {isLoading ? (

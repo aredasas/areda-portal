@@ -36,6 +36,14 @@ const SINONIMOS: Record<string, string[]> = {
   // Columna de NOMBRE de cuenta (separada del código) — cuando el archivo
   // la trae, se usa directo como descripción, sin necesitar IA.
   nombreCuenta: ["CUENTA CONTABLE", "NOMBRE CUENTA", "NOMBRE DE LA CUENTA", "DESCRIPCION CUENTA", "DENOMINACION CUENTA"],
+  // Igual que nombreCuenta pero más permisivo (acepta "NOMBRE" o
+  // "DESCRIPCION" solos) — solo se usa para archivos de CATÁLOGO de
+  // cuentas dedicados (código+nombre, sin columna de tercero con la que
+  // pueda confundirse), nunca para el libro auxiliar.
+  nombreCatalogo: [
+    "CUENTA CONTABLE", "NOMBRE CUENTA", "NOMBRE DE LA CUENTA", "DESCRIPCION CUENTA",
+    "DENOMINACION CUENTA", "DENOMINACION", "NOMBRE", "DESCRIPCION",
+  ],
 };
 
 export type ColumnasResueltas = {
@@ -187,6 +195,30 @@ export async function resolverColumnasRobusto(headerRaw: any[], muestras: any[][
 
   if (heuristico) return heuristico; // sin confirmación de IA, pero es lo mejor que hay
   throw errorHeuristico || new Error("No se pudieron identificar las columnas del archivo.");
+}
+
+/** Resuelve las columnas de un archivo de CATÁLOGO de cuentas (plan de
+ * cuentas / PUC del cliente) — mucho más simple que el libro auxiliar: solo
+ * necesita una columna de código y una de nombre, sin fecha/débito/crédito.
+ * El formato puede variar entre softwares contables (ej. "Codigo Cuenta" +
+ * "Nombre Cuenta", o "PUC" + "Descripción"), así que se reconoce por
+ * sinónimo igual que el libro auxiliar. */
+export function resolverColumnasCatalogo(headerRaw: any[]): { cuenta: number; nombre: number } {
+  const headers = Array.from(headerRaw, h => (h ? normalizar(String(h)) : ""));
+  const cuenta = buscarPorSinonimo(headers, "cuenta");
+  let nombre = buscarPorSinonimo(headers, "nombreCatalogo");
+  if (nombre === cuenta) nombre = null;
+
+  const faltantes: string[] = [];
+  if (cuenta === null) faltantes.push("código de cuenta");
+  if (nombre === null) faltantes.push("nombre de cuenta");
+  if (faltantes.length > 0) {
+    throw new Error(
+      `No se pudo identificar la(s) columna(s) de ${faltantes.join(" y ")} en el archivo de catálogo. ` +
+      `Encabezados encontrados: ${headerRaw.filter(Boolean).map(String).join(", ")}`,
+    );
+  }
+  return { cuenta: cuenta!, nombre: nombre! };
 }
 
 /** true si el valor de la columna "anulado" representa un registro anulado,

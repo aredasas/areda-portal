@@ -147,6 +147,41 @@ async function startServer() {
     },
   );
 
+  // Módulo Informes: catálogo de cuentas del cliente (plan de cuentas /
+  // PUC, código+nombre) — formato mucho más simple que el libro auxiliar,
+  // pero igual de flexible al reconocer sus columnas. Siembra/actualiza
+  // informesCuentasCliente en bloque; nunca pisa nombres ya corregidos a
+  // mano (ver actualizarCatalogoDesdeArchivo).
+  app.post(
+    "/api/informes/upload-catalogo",
+    express.raw({ limit: "50mb", type: () => true }),
+    async (req, res) => {
+      try {
+        const { sdk } = await import("./sdk");
+        const user = await sdk.authenticateRequest(req);
+        const { INFORMES_AUTHORIZED_CEDULA } = await import("../routers");
+        if (!user || user.cedula !== INFORMES_AUTHORIZED_CEDULA) {
+          return res.status(403).json({ error: "No autorizado" });
+        }
+        const clienteId = parseInt(String(req.query.clienteId));
+        if (!clienteId) {
+          return res.status(400).json({ error: "clienteId es requerido" });
+        }
+
+        const informesDb = await import("../informesDb");
+        const nombres = await informesDb.parseCatalogoCuentas(req.body as Buffer);
+        if (nombres.size === 0) {
+          return res.status(400).json({ error: "No se encontró ninguna cuenta con nombre válida en el archivo." });
+        }
+        await informesDb.actualizarCatalogoDesdeArchivo(clienteId, nombres);
+        return res.json({ success: true, cuentasSembradas: nombres.size });
+      } catch (error: any) {
+        console.error("[Informes] Error al procesar catálogo de cuentas:", String(error?.message || error).slice(0, 500));
+        return res.status(500).json({ error: error?.message || "Error al procesar el archivo" });
+      }
+    },
+  );
+
   // Scheduled endpoint for deadline notifications AND auto-task generation
   app.post("/api/scheduled/deadline-alerts", async (req, res) => {
     try {
