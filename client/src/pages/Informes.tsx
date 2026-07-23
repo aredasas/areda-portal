@@ -423,7 +423,7 @@ export default function Informes() {
             </TabsContent>
 
             <TabsContent value="dian" className="mt-4">
-              <ComparacionDianCard clienteId={clienteId} anio={anio} mes={mes} setMes={setMes} />
+              <ComparacionDianCard clienteId={clienteId} anio={anio} mes={mes} setMes={setMes} reportes={reportesQuery.data} />
             </TabsContent>
             <TabsContent value="bancaria" className="mt-4">
               <ProximamenteCard
@@ -639,14 +639,13 @@ function CatalogoClienteCard({ clienteId }: { clienteId: number }) {
  * propias / documento soporte), y lo que no cruza así lo intenta por NIT
  * del tercero + valor (facturas de compra de terceros). Genera un Excel
  * con lo que queda sin contraparte en cada lado. */
-function ComparacionDianCard({ clienteId, anio, mes, setMes }: {
-  clienteId: number; anio: number; mes: number; setMes: (m: number) => void;
+function ComparacionDianCard({ clienteId, anio, mes, setMes, reportes }: {
+  clienteId: number; anio: number; mes: number; setMes: (m: number) => void; reportes: any[] | undefined;
 }) {
   const [archivoDian, setArchivoDian] = useState<File | null>(null);
-  const [archivoAuxiliar, setArchivoAuxiliar] = useState<File | null>(null);
   const [comparando, setComparando] = useState(false);
   const fileDianRef = useRef<HTMLInputElement>(null);
-  const fileAuxiliarRef = useRef<HTMLInputElement>(null);
+  const utils = trpc.useUtils();
 
   const auxiliarDisponibleQuery = trpc.informes.dian.auxiliarDisponible.useQuery({ clienteId, anio, mes });
 
@@ -657,7 +656,7 @@ function ComparacionDianCard({ clienteId, anio, mes, setMes }: {
       );
       window.open(data.signedUrl, "_blank");
       setArchivoDian(null);
-      setArchivoAuxiliar(null);
+      utils.informes.reportes.list.invalidate();
     },
     onError: (err) => toast.error(err.message || "No se pudo generar la comparación"),
   });
@@ -670,101 +669,106 @@ function ComparacionDianCard({ clienteId, anio, mes, setMes }: {
   });
 
   const hayAuxiliarCargado = !!auxiliarDisponibleQuery.data;
-  const puedeComparar = !!archivoDian && (hayAuxiliarCargado || !!archivoAuxiliar);
+  const puedeComparar = !!archivoDian && hayAuxiliarCargado;
+  const comparacionesGeneradas = (reportes || []).filter((r: any) => r.tipo === "DIAN");
 
   const handleComparar = async () => {
     if (!archivoDian || !puedeComparar) return;
     setComparando(true);
     try {
       const dianBase64 = await fileToBase64(archivoDian);
-      const auxiliarBase64 = archivoAuxiliar ? await fileToBase64(archivoAuxiliar) : undefined;
-      await compararMutation.mutateAsync({ clienteId, anio, mes, dianBase64, auxiliarBase64 });
+      await compararMutation.mutateAsync({ clienteId, anio, mes, dianBase64 });
     } catch (error: any) {
-      toast.error(error.message || "Error al leer los archivos");
+      toast.error(error.message || "Error al leer el archivo");
     } finally {
       setComparando(false);
     }
   };
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base flex items-center gap-2">
-          <Landmark className="w-4 h-4" /> Comparación mensual DIAN vs. contabilidad
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <p className="text-sm text-muted-foreground">
-          Sube el reporte de documentos electrónicos de la DIAN de un mes. Se compara contra el libro
-          auxiliar de ese mismo mes que ya cargaste en "Estado de Resultados" — un solo auxiliar sirve de
-          base para todo, no hace falta subirlo dos veces. Se cruza primero por número de documento, y lo
-          que no cruce así se intenta por NIT del tercero + valor. El resultado son dos listas: lo que está
-          en contabilidad sin documento electrónico (para verificar si son servicios públicos u otros pagos
-          que no lo requieren), y —de especial cuidado— lo que está en la DIAN sin registrar en contabilidad.
-        </p>
+    <div className="space-y-6">
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2">
+            <Landmark className="w-4 h-4" /> Comparación mensual DIAN vs. contabilidad
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            Sube el reporte de documentos electrónicos de la DIAN de un mes. Se compara contra el libro
+            auxiliar de ese mismo mes que ya cargaste en "Estado de Resultados" — un solo auxiliar sirve de
+            base para todo, aquí solo se sube el archivo de la DIAN. Se cruza primero por número de
+            documento, y lo que no cruce así se intenta por NIT del tercero + valor. El resultado son dos
+            listas: lo que está en contabilidad sin documento electrónico (para verificar si son servicios
+            públicos u otros pagos que no lo requieren), y —de especial cuidado— lo que está en la DIAN sin
+            registrar en contabilidad.
+          </p>
 
-        <div className="flex items-center gap-3">
-          <span className="text-sm text-muted-foreground w-16">Mes:</span>
-          <Select value={String(mes)} onValueChange={(v) => setMes(Number(v))}>
-            <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              {MESES.map((nombre, i) => (
-                <SelectItem key={i} value={String(i + 1)}>{nombre}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-
-        {auxiliarDisponibleQuery.isLoading ? (
-          <Loader2 className="w-4 h-4 animate-spin" />
-        ) : hayAuxiliarCargado ? (
-          <div className="flex items-center gap-2 text-sm bg-green-50 text-green-800 border border-green-200 rounded-md p-2">
-            <CheckCircle2 className="w-4 h-4 shrink-0" />
-            Usando el libro auxiliar ya cargado para {MESES[mes - 1]} {anio}: {auxiliarDisponibleQuery.data!.nombreArchivo}
-            {auxiliarDisponibleQuery.data!.totalFilas ? ` (${auxiliarDisponibleQuery.data!.totalFilas!.toLocaleString()} filas)` : ""}.
+          <div className="flex items-center gap-3">
+            <span className="text-sm text-muted-foreground w-16">Mes:</span>
+            <Select value={String(mes)} onValueChange={(v) => setMes(Number(v))}>
+              <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {MESES.map((nombre, i) => (
+                  <SelectItem key={i} value={String(i + 1)}>{nombre}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
-        ) : (
-          <div className="flex items-center gap-2 text-sm bg-orange-50 text-orange-800 border border-orange-200 rounded-md p-2">
-            <XCircle className="w-4 h-4 shrink-0" />
-            No hay un libro auxiliar cargado para {MESES[mes - 1]} {anio} en Estado de Resultados. Súbelo ahí
-            primero, o adjunta uno manualmente abajo solo para esta comparación.
-          </div>
-        )}
 
-        <div className="grid sm:grid-cols-2 gap-3">
+          {auxiliarDisponibleQuery.isLoading ? (
+            <Loader2 className="w-4 h-4 animate-spin" />
+          ) : hayAuxiliarCargado ? (
+            <div className="flex items-center gap-2 text-sm bg-green-50 text-green-800 border border-green-200 rounded-md p-2">
+              <CheckCircle2 className="w-4 h-4 shrink-0" />
+              Usando el libro auxiliar ya cargado para {MESES[mes - 1]} {anio}: {auxiliarDisponibleQuery.data!.nombreArchivo}
+              {auxiliarDisponibleQuery.data!.totalFilas ? ` (${auxiliarDisponibleQuery.data!.totalFilas!.toLocaleString()} filas)` : ""}.
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 text-sm bg-orange-50 text-orange-800 border border-orange-200 rounded-md p-2">
+              <XCircle className="w-4 h-4 shrink-0" />
+              No hay un libro auxiliar cargado para {MESES[mes - 1]} {anio}. Ve a "Estado de Resultados" y
+              súbelo ahí primero — esta pestaña solo necesita el archivo de la DIAN.
+            </div>
+          )}
+
           <div className="space-y-1.5">
             <span className="text-sm font-medium">Archivo de la DIAN</span>
             <input
               ref={fileDianRef} type="file" accept=".xlsx" className="hidden"
               onChange={(e) => { const f = e.target.files?.[0]; if (f) setArchivoDian(f); }}
             />
-            <Button variant="outline" size="sm" className="gap-2 w-full justify-start" onClick={() => fileDianRef.current?.click()}>
+            <Button variant="outline" size="sm" className="gap-2 w-full sm:w-auto justify-start" onClick={() => fileDianRef.current?.click()}>
               <Upload className="w-3.5 h-3.5" /> {archivoDian?.name || "Seleccionar archivo"}
             </Button>
           </div>
-          <div className="space-y-1.5">
-            <span className="text-sm font-medium">
-              {hayAuxiliarCargado ? "Libro auxiliar (opcional, para usar otro distinto)" : "Libro auxiliar del mismo mes"}
-            </span>
-            <input
-              ref={fileAuxiliarRef} type="file" accept=".xlsx" className="hidden"
-              onChange={(e) => { const f = e.target.files?.[0]; if (f) setArchivoAuxiliar(f); }}
-            />
-            <Button variant="outline" size="sm" className="gap-2 w-full justify-start" onClick={() => fileAuxiliarRef.current?.click()}>
-              <Upload className="w-3.5 h-3.5" /> {archivoAuxiliar?.name || "Seleccionar archivo"}
-            </Button>
-          </div>
-        </div>
 
-        <Button
-          onClick={handleComparar}
-          disabled={!puedeComparar || comparando || compararMutation.isPending}
-          className="gap-2"
-        >
-          {comparando || compararMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileSpreadsheet className="w-4 h-4" />}
-          Comparar y generar Excel
-        </Button>
-      </CardContent>
-    </Card>
+          <Button
+            onClick={handleComparar}
+            disabled={!puedeComparar || comparando || compararMutation.isPending}
+            className="gap-2"
+          >
+            {comparando || compararMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileSpreadsheet className="w-4 h-4" />}
+            Comparar y generar Excel
+          </Button>
+        </CardContent>
+      </Card>
+
+      {comparacionesGeneradas.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Comparaciones generadas en {anio}</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {comparacionesGeneradas.map((r: any) => (
+              <div key={r.id} className="flex items-center justify-between border rounded-md p-2 text-sm">
+                <span>Comparación DIAN {MESES[r.mes - 1]} {r.anio}</span>
+                <ReporteDownloadLink fileKey={r.fileKey} />
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+    </div>
   );
 }

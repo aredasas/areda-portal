@@ -411,11 +411,30 @@ export async function actualizarNombreCuentaManual(clienteId: number, cuenta: st
 
 // ==================== PERSISTENCIA DE CARGAS MENSUALES (por cliente) ====================
 
+/** Crea (o reemplaza) el registro de carga de un cliente+periodo. Si ya
+ * existía una carga para ese mismo mes, se actualiza esa misma fila en vez
+ * de insertar una nueva — así "Cargas de 2026" muestra un solo registro
+ * por mes, que se reemplaza al volver a subir, en vez de acumularse. */
 export async function crearCarga(data: {
   clienteId: number; anio: number; mes: number; nombreArchivo: string; fileKey?: string; cargadoPorId: number;
 }): Promise<number> {
   const db = await getDb();
   if (!db) throw new Error("Base de datos no disponible");
+  const existentes = await db.select({ id: informesCargas.id }).from(informesCargas)
+    .where(and(
+      eq(informesCargas.clienteId, data.clienteId), eq(informesCargas.anio, data.anio), eq(informesCargas.mes, data.mes),
+    ));
+  if (existentes.length > 0) {
+    const id = existentes[0].id;
+    await db.update(informesCargas)
+      .set({ nombreArchivo: data.nombreArchivo, fileKey: data.fileKey, cargadoPorId: data.cargadoPorId,
+        estado: "procesando", mensajeError: null, totalFilas: null })
+      .where(eq(informesCargas.id, id));
+    for (const extra of existentes.slice(1)) {
+      await db.delete(informesCargas).where(eq(informesCargas.id, extra.id));
+    }
+    return id;
+  }
   const result = await db.insert(informesCargas).values({ ...data, estado: "procesando" });
   return Number((result as any).insertId ?? (result as any)[0]?.insertId);
 }

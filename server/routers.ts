@@ -1805,34 +1805,27 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           return { nombreArchivo: carga.nombreArchivo, totalFilas: carga.totalFilas };
         }),
       // Compara el archivo de reporte de documentos de la DIAN contra el
-      // libro auxiliar del mismo mes. Por defecto reutiliza el libro
-      // auxiliar ya cargado en Estado de Resultados para ese cliente+mes
-      // (un solo auxiliar sirve de base para todo el módulo) — solo si no
-      // hay ninguno cargado, o si se manda uno explícitamente, se usa el
-      // que llegue en auxiliarBase64.
+      // libro auxiliar del mismo mes que ya se cargó en Estado de
+      // Resultados para ese cliente+mes — un solo auxiliar sirve de base
+      // para todo el módulo, aquí solo se sube el archivo de la DIAN.
       comparar: protectedProcedure
         .input(z.object({
           clienteId: z.number(), anio: z.number(), mes: z.number().min(1).max(12),
-          dianBase64: z.string(), auxiliarBase64: z.string().optional(),
+          dianBase64: z.string(),
         }))
         .mutation(async ({ input, ctx }) => {
           assertInformesAccess(ctx.user.cedula);
           const cliente = (await db.getAllClients()).find((c: any) => c.id === input.clienteId);
           const bufferDian = Buffer.from(input.dianBase64, "base64");
 
-          let bufferAuxiliar: Buffer;
-          if (input.auxiliarBase64) {
-            bufferAuxiliar = Buffer.from(input.auxiliarBase64, "base64");
-          } else {
-            const carga = await informesDb.getCargaConArchivo(input.clienteId, input.anio, input.mes);
-            if (!carga || !carga.fileKey) {
-              throw new Error(
-                "No hay un libro auxiliar cargado para este cliente y mes en Estado de Resultados. " +
-                "Súbelo ahí primero, o adjunta uno manualmente aquí.",
-              );
-            }
-            bufferAuxiliar = await storageGetBuffer(carga.fileKey);
+          const carga = await informesDb.getCargaConArchivo(input.clienteId, input.anio, input.mes);
+          if (!carga || !carga.fileKey) {
+            throw new Error(
+              "No hay un libro auxiliar cargado para este cliente y mes en Estado de Resultados. " +
+              "Súbelo ahí primero — esta pestaña solo necesita el archivo de la DIAN.",
+            );
           }
+          const bufferAuxiliar = await storageGetBuffer(carga.fileKey);
 
           const filasDian = await informesDian.parseArchivoDian(bufferDian);
           if (filasDian.length === 0) {
