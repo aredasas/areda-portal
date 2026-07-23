@@ -520,7 +520,7 @@ export async function getSaldosDelAnio(clienteId: number, anio: number) {
 }
 
 export async function guardarReporteGenerado(data: {
-  clienteId: number; anio: number; mes?: number | null; tipo: "ERM" | "ERI";
+  clienteId: number; anio: number; mes?: number | null; tipo: "ERM" | "ERI" | "DIAN";
   nivel: "resumen" | "detalle"; fileKey: string; generadoPorId: number;
 }): Promise<void> {
   const db = await getDb();

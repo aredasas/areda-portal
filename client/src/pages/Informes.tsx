@@ -408,7 +408,11 @@ export default function Informes() {
                     {reportesQuery.data.map((r: any) => (
                       <div key={r.id} className="flex items-center justify-between border rounded-md p-2 text-sm">
                         <span>
-                          {r.tipo === "ERM" ? `ERM ${r.anio} (${r.nivel})` : `ERI ${MESES[r.mes - 1]} ${r.anio}`}
+                          {r.tipo === "ERM"
+                            ? `ERM ${r.anio} (${r.nivel})`
+                            : r.tipo === "DIAN"
+                              ? `Comparación DIAN ${MESES[r.mes - 1]} ${r.anio}`
+                              : `ERI ${MESES[r.mes - 1]} ${r.anio}`}
                         </span>
                         <ReporteDownloadLink fileKey={r.fileKey} />
                       </div>
@@ -419,11 +423,7 @@ export default function Informes() {
             </TabsContent>
 
             <TabsContent value="dian" className="mt-4">
-              <ProximamenteCard
-                icono={Landmark}
-                titulo="Comparación mensual DIAN"
-                descripcion="Se sube un archivo de la DIAN y se compara contra el libro auxiliar contable del mismo mes, para detectar diferencias."
-              />
+              <ComparacionDianCard clienteId={clienteId} anio={anio} mes={mes} setMes={setMes} />
             </TabsContent>
             <TabsContent value="bancaria" className="mt-4">
               <ProximamenteCard
@@ -633,3 +633,115 @@ function CatalogoClienteCard({ clienteId }: { clienteId: number }) {
   );
 }
 
+
+/** Compara el archivo de reporte de documentos de la DIAN contra el libro
+ * auxiliar del mismo mes. Cruza primero por número de documento (facturas
+ * propias / documento soporte), y lo que no cruza así lo intenta por NIT
+ * del tercero + valor (facturas de compra de terceros). Genera un Excel
+ * con lo que queda sin contraparte en cada lado. */
+function ComparacionDianCard({ clienteId, anio, mes, setMes }: {
+  clienteId: number; anio: number; mes: number; setMes: (m: number) => void;
+}) {
+  const [archivoDian, setArchivoDian] = useState<File | null>(null);
+  const [archivoAuxiliar, setArchivoAuxiliar] = useState<File | null>(null);
+  const [comparando, setComparando] = useState(false);
+  const fileDianRef = useRef<HTMLInputElement>(null);
+  const fileAuxiliarRef = useRef<HTMLInputElement>(null);
+
+  const compararMutation = trpc.informes.dian.comparar.useMutation({
+    onSuccess: (data) => {
+      toast.success(
+        `Comparación lista: ${data.soloEnDian} en la DIAN sin registrar, ${data.soloEnContabilidad} en contabilidad sin documento electrónico.`,
+      );
+      window.open(data.signedUrl, "_blank");
+      setArchivoDian(null);
+      setArchivoAuxiliar(null);
+    },
+    onError: (err) => toast.error(err.message || "No se pudo generar la comparación"),
+  });
+
+  const fileToBase64 = (file: File): Promise<string> => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve((reader.result as string).split(",")[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+
+  const handleComparar = async () => {
+    if (!archivoDian || !archivoAuxiliar) return;
+    setComparando(true);
+    try {
+      const [dianBase64, auxiliarBase64] = await Promise.all([
+        fileToBase64(archivoDian), fileToBase64(archivoAuxiliar),
+      ]);
+      await compararMutation.mutateAsync({ clienteId, anio, mes, dianBase64, auxiliarBase64 });
+    } catch (error: any) {
+      toast.error(error.message || "Error al leer los archivos");
+    } finally {
+      setComparando(false);
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base flex items-center gap-2">
+          <Landmark className="w-4 h-4" /> Comparación mensual DIAN vs. contabilidad
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <p className="text-sm text-muted-foreground">
+          Sube el reporte de documentos electrónicos de la DIAN de un mes, junto con el libro auxiliar de
+          ese mismo mes. Se cruzan primero por número de documento, y lo que no cruce así se intenta por
+          NIT del tercero + valor. El resultado son dos listas: lo que está en contabilidad sin documento
+          electrónico (para verificar si son servicios públicos u otros pagos que no lo requieren), y —de
+          especial cuidado— lo que está en la DIAN sin registrar en contabilidad.
+        </p>
+
+        <div className="flex items-center gap-3">
+          <span className="text-sm text-muted-foreground w-16">Mes:</span>
+          <Select value={String(mes)} onValueChange={(v) => setMes(Number(v))}>
+            <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {MESES.map((nombre, i) => (
+                <SelectItem key={i} value={String(i + 1)}>{nombre}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="grid sm:grid-cols-2 gap-3">
+          <div className="space-y-1.5">
+            <span className="text-sm font-medium">Archivo de la DIAN</span>
+            <input
+              ref={fileDianRef} type="file" accept=".xlsx" className="hidden"
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) setArchivoDian(f); }}
+            />
+            <Button variant="outline" size="sm" className="gap-2 w-full justify-start" onClick={() => fileDianRef.current?.click()}>
+              <Upload className="w-3.5 h-3.5" /> {archivoDian?.name || "Seleccionar archivo"}
+            </Button>
+          </div>
+          <div className="space-y-1.5">
+            <span className="text-sm font-medium">Libro auxiliar del mismo mes</span>
+            <input
+              ref={fileAuxiliarRef} type="file" accept=".xlsx" className="hidden"
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) setArchivoAuxiliar(f); }}
+            />
+            <Button variant="outline" size="sm" className="gap-2 w-full justify-start" onClick={() => fileAuxiliarRef.current?.click()}>
+              <Upload className="w-3.5 h-3.5" /> {archivoAuxiliar?.name || "Seleccionar archivo"}
+            </Button>
+          </div>
+        </div>
+
+        <Button
+          onClick={handleComparar}
+          disabled={!archivoDian || !archivoAuxiliar || comparando || compararMutation.isPending}
+          className="gap-2"
+        >
+          {comparando || compararMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileSpreadsheet className="w-4 h-4" />}
+          Comparar y generar Excel
+        </Button>
+      </CardContent>
+    </Card>
+  );
+}

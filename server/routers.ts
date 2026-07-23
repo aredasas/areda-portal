@@ -74,6 +74,7 @@ import * as db from "./db";
 import * as informesDb from "./informesDb";
 import { generarReporteERI } from "./informesReportERI";
 import { generarReporteERM } from "./informesReportERM";
+import * as informesDian from "./informesDianDb";
 import { storagePut, storageGetSignedUrl } from "./storage";
 import { invokeLLM } from "./_core/llm";
 import { isDriveConfigured, extractFolderIdFromUrl, testFolderAccess, listSubfoldersRecursive, listAllFilesRecursive, uploadFileToDrive, resolveUploadFolder } from "./googleDrive";
@@ -1789,6 +1790,54 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
         .query(async ({ input, ctx }) => {
           assertInformesAccess(ctx.user.cedula);
           return { signedUrl: await storageGetSignedUrl(input.fileKey) };
+        }),
+    }),
+    dian: router({
+      // Compara el archivo de reporte de documentos de la DIAN contra el
+      // libro auxiliar del mismo mes y genera un Excel con lo que está en
+      // cada lado sin encontrar contraparte en el otro. Ambos archivos se
+      // mandan en base64 en una sola llamada — son de tamaño moderado
+      // (unos pocos MB), no requieren la ruta de subida binaria aparte.
+      comparar: protectedProcedure
+        .input(z.object({
+          clienteId: z.number(), anio: z.number(), mes: z.number().min(1).max(12),
+          dianBase64: z.string(), auxiliarBase64: z.string(),
+        }))
+        .mutation(async ({ input, ctx }) => {
+          assertInformesAccess(ctx.user.cedula);
+          const cliente = (await db.getAllClients()).find((c: any) => c.id === input.clienteId);
+          const bufferDian = Buffer.from(input.dianBase64, "base64");
+          const bufferAuxiliar = Buffer.from(input.auxiliarBase64, "base64");
+
+          const filasDian = await informesDian.parseArchivoDian(bufferDian);
+          if (filasDian.length === 0) {
+            throw new Error("No se encontró ningún documento válido en el archivo de la DIAN.");
+          }
+          const documentosAux = await informesDian.parseAuxiliarParaDian(bufferAuxiliar, input.anio, input.mes);
+          if (documentosAux.size === 0) {
+            throw new Error("No se encontró ningún documento válido en el libro auxiliar.");
+          }
+
+          const resultado = informesDian.compararDianVsAuxiliar(filasDian, documentosAux);
+          const buffer = await informesDian.generarReporteComparacionDian(
+            resultado, cliente?.razonSocial || "Cliente", input.anio, input.mes,
+          );
+
+          const key = `informes/DIAN_${input.clienteId}_${input.anio}_${String(input.mes).padStart(2, "0")}_${Date.now()}.xlsx`;
+          const { url, key: fileKey } = await storagePut(
+            key, buffer, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          );
+          await informesDb.guardarReporteGenerado({
+            clienteId: input.clienteId, anio: input.anio, mes: input.mes, tipo: "DIAN",
+            nivel: "detalle", fileKey, generadoPorId: ctx.user.id,
+          });
+          const signedUrl = await storageGetSignedUrl(fileKey);
+          return {
+            url, signedUrl, fileKey,
+            totalDian: resultado.totalDian, totalContabilidad: resultado.totalContabilidad,
+            emparejadosPorNumero: resultado.emparejadosPorNumero, emparejadosPorNitValor: resultado.emparejadosPorNitValor,
+            soloEnDian: resultado.soloEnDian.length, soloEnContabilidad: resultado.soloEnContabilidad.length,
+          };
         }),
     }),
   }),
