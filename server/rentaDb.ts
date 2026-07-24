@@ -397,14 +397,11 @@ export async function parseExogenaDian(filePathOrBuffer: string | Buffer): Promi
     if (!encabezadoEncontrado) {
       if (esFilaEncabezado(values)) {
         encabezadoEncontrado = true;
-        // El tercero que REPORTA la información (quien la DIAN llama
-        // "informante") es el que nos interesa mostrar — se busca primero
-        // por esa palabra específica, que es más confiable que adivinar
-        // por posición. Si el archivo no la trae explícita, se cae al
-        // heurístico anterior (dos columnas NIT/NOMBRE — la segunda es el
-        // tercero) como respaldo.
-        const nitInformanteIdx = values.findIndex(v => v && /NIT.*INFORMANTE|INFORMANTE.*NIT/i.test(String(v)));
-        const nombreInformanteIdx = values.findIndex(v => v && /(NOMBRE|RAZ[OÓ]N).*INFORMANTE|INFORMANTE.*(NOMBRE|RAZ[OÓ]N)/i.test(String(v)));
+        // Confirmado contra el archivo real: la columna B (índice 1) es
+        // siempre el nombre del tercero que reporta — se usa directo en
+        // vez de adivinar por palabra clave o posición relativa, que
+        // venía fallando (mostraba el declarante en vez del informante).
+        const nombreColumnaB = values.length > 1 && values[1] ? 1 : -1;
 
         const nitIdxs: number[] = [];
         values.forEach((v, i) => { if (v && String(v).toUpperCase().includes("NIT")) nitIdxs.push(i); });
@@ -415,8 +412,8 @@ export async function parseExogenaDian(filePathOrBuffer: string | Buffer): Promi
         const usoIdx = values.findIndex(v => v && String(v).toUpperCase().includes("USO"));
         const infoIdx = values.findIndex(v => v && String(v).toUpperCase().includes("INFORMACI"));
         idx = {
-          nitTercero: nitInformanteIdx >= 0 ? nitInformanteIdx : (nitIdxs[1] ?? nitIdxs[0] ?? -1),
-          nombreTercero: nombreInformanteIdx >= 0 ? nombreInformanteIdx : (nombreIdxs[1] ?? nombreIdxs[0] ?? -1),
+          nitTercero: nitIdxs[1] ?? nitIdxs[0] ?? -1,
+          nombreTercero: nombreColumnaB >= 0 ? nombreColumnaB : (nombreIdxs[1] ?? nombreIdxs[0] ?? -1),
           detalle: detalleIdx, valor: valorIdx, usoSugerido: usoIdx, infoAdicional: infoIdx,
         };
       }

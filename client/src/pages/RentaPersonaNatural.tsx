@@ -418,6 +418,7 @@ function LiquidacionTab({ anioGravable }: { anioGravable: number }) {
           <SeccionItemsCard rentaClienteId={rentaClienteId} seccion="activo" titulo="Activos" puedeImportar />
           <SeccionItemsCard rentaClienteId={rentaClienteId} seccion="pasivo" titulo="Pasivos" puedeImportar />
           <IngresosDeduccionesPorCedulaCard rentaClienteId={rentaClienteId} />
+          <ResumenPendiente210Card rentaClienteId={rentaClienteId} />
           <Borrador210Card rentaClienteId={rentaClienteId} anioGravable={anioGravable} />
 
           <Card className="border-dashed">
@@ -488,7 +489,7 @@ function DeclaracionAnteriorCard({ rentaClienteId }: { rentaClienteId: number })
   }, [query.data, editado]);
 
   const guardarMutation = trpc.renta.declaracionAnterior.guardar.useMutation({
-    onSuccess: () => { toast.success("Guardado"); utils.renta.declaracionAnterior.get.invalidate({ rentaClienteId }); },
+    onSuccess: () => { toast.success("Guardado"); utils.renta.declaracionAnterior.get.invalidate({ rentaClienteId }); utils.renta.reportes.resumenActual.invalidate({ rentaClienteId }); },
     onError: (err) => toast.error(err.message || "No se pudo guardar"),
   });
 
@@ -521,7 +522,7 @@ function DeclaracionAnteriorCard({ rentaClienteId }: { rentaClienteId: number })
           <Input type="number" value={saldoAFavor} onChange={(e) => { setSaldoAFavor(e.target.value); setEditado(true); }} />
         </div>
         <div className="space-y-1.5">
-          <Label className="text-xs">Anticipo ya liquidado para este año</Label>
+          <Label className="text-xs">Anticipo anterior</Label>
           <Input type="number" value={anticipoActual} onChange={(e) => { setAnticipoActual(e.target.value); setEditado(true); }} />
         </div>
       </div>
@@ -609,20 +610,15 @@ function SeccionItemsCard({ rentaClienteId, seccion, titulo, puedeImportar }: {
   const [concepto, setConcepto] = useState("");
   const [valor, setValor] = useState("");
   const [cedula, setCedula] = useState("");
+  const [showImportarDialog, setShowImportarDialog] = useState(false);
   const requiereCedula = seccion === "ingreso";
 
   const crearMutation = trpc.renta.liquidacion.crear.useMutation({
-    onSuccess: () => { setConcepto(""); setValor(""); setCedula(""); utils.renta.liquidacion.list.invalidate({ rentaClienteId, seccion }); },
+    onSuccess: () => { setConcepto(""); setValor(""); setCedula(""); utils.renta.liquidacion.list.invalidate({ rentaClienteId, seccion }); utils.renta.reportes.resumenActual.invalidate({ rentaClienteId }); },
     onError: (err) => toast.error(err.message || "No se pudo agregar"),
   });
   const eliminarMutation = trpc.renta.liquidacion.eliminar.useMutation({
-    onSuccess: () => utils.renta.liquidacion.list.invalidate({ rentaClienteId, seccion }),
-  });
-  const importarMutation = trpc.renta.liquidacion.importarDesdeExogena.useMutation({
-    onSuccess: (data) => {
-      toast.success(data.importados > 0 ? `${data.importados} ítem(s) importado(s) de la exógena` : "No hay ítems nuevos para importar");
-      utils.renta.liquidacion.list.invalidate({ rentaClienteId, seccion });
-    },
+    onSuccess: () => { utils.renta.liquidacion.list.invalidate({ rentaClienteId, seccion }); utils.renta.reportes.resumenActual.invalidate({ rentaClienteId }); },
   });
 
   const items = query.data || [];
@@ -650,12 +646,8 @@ function SeccionItemsCard({ rentaClienteId, seccion, titulo, puedeImportar }: {
     <ColapsableCard
       titulo={titulo}
       extra={puedeImportar && (
-        <Button
-          size="sm" variant="outline" className="gap-1.5"
-          onClick={() => importarMutation.mutate({ rentaClienteId, seccion: seccion as any })}
-          disabled={importarMutation.isPending}
-        >
-          {importarMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileSpreadsheet className="w-3.5 h-3.5" />}
+        <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setShowImportarDialog(true)}>
+          <FileSpreadsheet className="w-3.5 h-3.5" />
           Importar desde exógena
         </Button>
       )}
@@ -713,6 +705,13 @@ function SeccionItemsCard({ rentaClienteId, seccion, titulo, puedeImportar }: {
           <Plus className="w-3.5 h-3.5" /> Agregar
         </Button>
       </div>
+      {puedeImportar && (
+        <ImportarExogenaDialog
+          rentaClienteId={rentaClienteId} seccion={seccion as "activo" | "pasivo"}
+          open={showImportarDialog} onOpenChange={setShowImportarDialog}
+          onImportado={() => { utils.renta.liquidacion.list.invalidate({ rentaClienteId, seccion }); utils.renta.reportes.resumenActual.invalidate({ rentaClienteId }); }}
+        />
+      )}
     </ColapsableCard>
   );
 }
@@ -720,18 +719,19 @@ function SeccionItemsCard({ rentaClienteId, seccion, titulo, puedeImportar }: {
 /** Diálogo para elegir manualmente cuáles ítems de la exógena se importan
  * a la cédula actualmente seleccionada — los que no se marquen quedan
  * disponibles para importarse después bajo otra cédula. */
-function ImportarExogenaDialog({ rentaClienteId, cedula, open, onOpenChange, onImportado }: {
-  rentaClienteId: number; cedula: string; open: boolean; onOpenChange: (open: boolean) => void; onImportado: () => void;
+function ImportarExogenaDialog({ rentaClienteId, seccion, cedula, open, onOpenChange, onImportado }: {
+  rentaClienteId: number; seccion: "activo" | "pasivo" | "ingreso"; cedula?: string; open: boolean; onOpenChange: (open: boolean) => void; onImportado: () => void;
 }) {
   const disponiblesQuery = trpc.renta.liquidacion.exogenaDisponibles.useQuery(
-    { rentaClienteId, seccion: "ingreso" }, { enabled: open },
+    { rentaClienteId, seccion }, { enabled: open },
   );
   const [seleccionados, setSeleccionados] = useState<Set<number>>(new Set());
   const fmt = (n: number) => `$${n.toLocaleString("es-CO")}`;
+  const nombreSeccion = seccion === "activo" ? "activos" : seccion === "pasivo" ? "pasivos" : "ingresos";
 
   const importarMutation = trpc.renta.liquidacion.importarSeleccionDesdeExogena.useMutation({
     onSuccess: (data) => {
-      toast.success(`${data.importados} ítem(s) importado(s) a esta cédula`);
+      toast.success(`${data.importados} ítem(s) importado(s)${cedula ? " a esta cédula" : ""}`);
       setSeleccionados(new Set());
       onImportado();
       onOpenChange(false);
@@ -749,18 +749,18 @@ function ImportarExogenaDialog({ rentaClienteId, cedula, open, onOpenChange, onI
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg max-h-[80vh] overflow-y-auto overflow-x-hidden min-w-0">
+      <DialogContent className="sm:max-w-2xl max-h-[80vh] overflow-y-auto overflow-x-hidden min-w-0">
         <DialogHeader>
-          <DialogTitle>Elegir ingresos a importar en esta cédula</DialogTitle>
+          <DialogTitle>Elegir {nombreSeccion} a importar{cedula ? " en esta cédula" : ""}</DialogTitle>
         </DialogHeader>
         <div className="space-y-2 py-2 min-w-0">
           <p className="text-sm text-muted-foreground">
-            Los que no marques quedan disponibles para importarlos después bajo otra cédula.
+            Los que no marques quedan disponibles para importarlos después{cedula ? " bajo otra cédula" : ""}.
           </p>
           {disponiblesQuery.isLoading ? (
             <Loader2 className="w-5 h-5 animate-spin" />
           ) : !disponiblesQuery.data?.length ? (
-            <p className="text-sm text-muted-foreground">No hay ingresos de la exógena pendientes por importar.</p>
+            <p className="text-sm text-muted-foreground">No hay {nombreSeccion} de la exógena pendientes por importar.</p>
           ) : (
             <div className="space-y-1 min-w-0">
               {disponiblesQuery.data.map((item: any) => (
@@ -779,7 +779,7 @@ function ImportarExogenaDialog({ rentaClienteId, cedula, open, onOpenChange, onI
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>Cancelar</Button>
           <Button
-            onClick={() => importarMutation.mutate({ rentaClienteId, seccion: "ingreso", exogenaItemIds: Array.from(seleccionados), cedula: cedula as any })}
+            onClick={() => importarMutation.mutate({ rentaClienteId, seccion, exogenaItemIds: Array.from(seleccionados), cedula: cedula as any })}
             disabled={seleccionados.size === 0 || importarMutation.isPending}
             className="bg-[#EDA011] hover:bg-[#d48f0f] text-white"
           >
@@ -817,7 +817,10 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId }: { rentaClienteId: 
   const [valorRetencion, setValorRetencion] = useState("");
   const [eliminarId, setEliminarId] = useState<number | null>(null);
 
-  const invalidarTodo = () => utils.renta.liquidacion.list.invalidate({ rentaClienteId, seccion: "cedula" });
+  const invalidarTodo = () => {
+    utils.renta.liquidacion.list.invalidate({ rentaClienteId, seccion: "cedula" });
+    utils.renta.reportes.resumenActual.invalidate({ rentaClienteId });
+  };
 
   const crearMutation = trpc.renta.liquidacion.crear.useMutation({
     onSuccess: (data) => {
@@ -1161,10 +1164,78 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId }: { rentaClienteId: 
       )}
 
       <ImportarExogenaDialog
-        rentaClienteId={rentaClienteId} cedula={cedulaSeleccionada}
+        rentaClienteId={rentaClienteId} seccion="ingreso" cedula={cedulaSeleccionada}
         open={showImportarDialog} onOpenChange={setShowImportarDialog}
         onImportado={invalidarTodo}
       />
+    </ColapsableCard>
+  );
+}
+
+const NOMBRE_SUBRENTA: Record<string, string> = {
+  trabajo: "Trabajo (relación laboral)", trabajo_honorarios: "Trabajo por honorarios",
+  capital: "Capital", no_laboral: "No laborales",
+};
+
+/** Resumen de seguimiento — se actualiza con lo que haya cargado hasta el
+ * momento, sin necesidad de generar el Excel cada vez. Se ubica después de
+ * la captura de retenciones porque ahí ya están todos los insumos para
+ * mostrar el anticipo. */
+function ResumenPendiente210Card({ rentaClienteId }: { rentaClienteId: number }) {
+  const query = trpc.renta.reportes.resumenActual.useQuery({ rentaClienteId });
+  const fmt = (n: number | null | undefined) => n == null ? "—" : `$${n.toLocaleString("es-CO")}`;
+  const r = query.data;
+
+  return (
+    <ColapsableCard
+      titulo="Resumen pendiente del Formulario 210"
+      extra={
+        <Button size="sm" variant="ghost" className="h-7 gap-1.5 text-xs" onClick={() => query.refetch()} disabled={query.isFetching}>
+          {query.isFetching ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Calculator className="w-3.5 h-3.5" />}
+          Actualizar
+        </Button>
+      }
+    >
+      {!r ? (
+        <p className="text-sm text-muted-foreground">Sin información cargada todavía.</p>
+      ) : (
+        <div className="space-y-3 text-sm">
+          <div className="grid sm:grid-cols-3 gap-2">
+            <div className="border rounded-md p-2.5"><div className="text-xs text-muted-foreground">Patrimonio líquido</div><div className="font-semibold">{fmt(r.patrimonioLiquido)}</div></div>
+            <div className="border rounded-md p-2.5"><div className="text-xs text-muted-foreground">Renta líquida gravable total</div><div className="font-semibold">{fmt(r.rentaLiquidaGravableTotal)}</div></div>
+            <div className="border rounded-md p-2.5"><div className="text-xs text-muted-foreground">Impuesto de renta ({(r.impuestoRenta.tarifaMarginal * 100).toFixed(0)}%)</div><div className="font-semibold">{fmt(r.impuestoRenta.impuesto)}</div></div>
+          </div>
+
+          <div>
+            <p className="text-xs font-medium text-muted-foreground mb-1">Renta líquida ordinaria por sub-renta (Cédula General)</p>
+            <div className="space-y-1">
+              {Object.entries(r.subRentas).map(([k, sr]: any) => (
+                <div key={k} className="flex items-center justify-between border-b py-1">
+                  <span>{NOMBRE_SUBRENTA[k] || k}</span>
+                  <span className="text-xs text-muted-foreground">bruto {fmt(sr.ingresoBruto)} · exentas/ded. asignadas {fmt(sr.rentaExentaDeduccionAsignada)}</span>
+                  <span className="font-medium">{fmt(sr.rentaLiquidaOrdinaria)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {(r.ingresoBrutoPensiones > 0 || r.ingresoBrutoDividendos > 0) && (
+            <div className="flex flex-wrap gap-4 text-xs text-muted-foreground">
+              {r.ingresoBrutoPensiones > 0 && <span>Pensiones — renta líquida gravable: {fmt(r.rentaLiquidaGravablePensiones)}</span>}
+              {r.ingresoBrutoDividendos > 0 && <span>Dividendos (referencia, tarifa aparte): {fmt(r.ingresoBrutoDividendos)}</span>}
+            </div>
+          )}
+
+          <div className="border-t pt-2 grid sm:grid-cols-3 gap-2">
+            <div className="border rounded-md p-2.5"><div className="text-xs text-muted-foreground">Total retenciones</div><div className="font-semibold">{fmt(r.totalRetenciones)}</div></div>
+            <div className="border rounded-md p-2.5"><div className="text-xs text-muted-foreground">Anticipo — Método 1 (actual × 75% − ret.)</div><div className="font-semibold">{fmt(r.anticipoMetodo1)}</div></div>
+            <div className="border rounded-md p-2.5"><div className="text-xs text-muted-foreground">Anticipo — Método 2 (promedio × 75% − ret.)</div><div className="font-semibold">{fmt(r.anticipoMetodo2)}</div></div>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Resumen de seguimiento — para el documento formal, usa "Generar borrador" más abajo.
+          </p>
+        </div>
+      )}
     </ColapsableCard>
   );
 }

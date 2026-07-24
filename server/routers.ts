@@ -2185,6 +2185,17 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
         }),
       // Reúne activos/pasivos/ingresos/deducciones/declaración anterior ya
       // cargados, calcula la liquidación (patrimonio líquido, renta líquida
+      // Calcula la liquidación en vivo con lo que haya cargado hasta el
+      // momento — sin generar Excel ni guardar historial, para mostrar un
+      // resumen de seguimiento mientras se va cargando información.
+      resumenActual: protectedProcedure
+        .input(z.object({ rentaClienteId: z.number() }))
+        .query(async ({ input, ctx }) => {
+          assertInformesAccess(ctx.user.cedula);
+          const datos = await db.getDatosLiquidacion(input.rentaClienteId);
+          if (!datos) return null;
+          return rentaDb.armarLiquidacion(datos);
+        }),
       // gravable por cédula con el tope aplicado, impuesto según Art. 241,
       // anticipo de referencia), y genera el Excel del borrador.
       generarBorrador210: protectedProcedure
