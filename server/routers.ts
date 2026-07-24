@@ -2082,6 +2082,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           patrimonioLiquidoAnioAnterior: z.number().optional(),
           impuestoNetoAnioAnterior: z.number().optional(),
           saldoAFavorAnterior: z.number().optional(),
+          anticipoAnioActual: z.number().optional(),
         }))
         .mutation(async ({ input, ctx }) => {
           assertInformesAccess(ctx.user.cedula);
@@ -2107,7 +2108,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
         .input(z.object({
           rentaClienteId: z.number(), seccion: z.enum(["activo", "pasivo", "cedula"]),
           cedula: z.enum(["trabajo", "trabajo_honorarios", "capital", "no_laboral", "pensiones", "dividendos"]).optional(),
-          tipoValor: z.enum(["ingreso_bruto", "ingreso_no_constitutivo", "costo_deduccion_procedente", "renta_exenta", "deduccion"]).optional(),
+          tipoValor: z.enum(["ingreso_bruto", "ingreso_no_constitutivo", "costo_deduccion_procedente", "renta_exenta", "deduccion", "retencion"]).optional(),
           tipoDeduccion: z.string().optional(), concepto: z.string().min(1), valor: z.number(),
         }))
         .mutation(async ({ input, ctx }) => {
@@ -2161,7 +2162,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
       importarSeleccionDesdeExogena: protectedProcedure
         .input(z.object({
           rentaClienteId: z.number(), seccion: z.enum(["activo", "pasivo", "ingreso"]),
-          exogenaItemIds: z.array(z.number()), cedula: z.enum(["trabajo", "capital", "no_laboral", "pensiones", "dividendos"]).optional(),
+          exogenaItemIds: z.array(z.number()), cedula: z.enum(["trabajo", "trabajo_honorarios", "capital", "no_laboral", "pensiones", "dividendos"]).optional(),
         }))
         .mutation(async ({ input, ctx }) => {
           assertInformesAccess(ctx.user.cedula);

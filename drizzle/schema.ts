@@ -664,6 +664,11 @@ export const rentaDeclaracionAnterior = mysqlTable("rentaDeclaracionAnterior", {
   patrimonioLiquidoAnioAnterior: double("patrimonioLiquidoAnioAnterior"),
   impuestoNetoAnioAnterior: double("impuestoNetoAnioAnterior"),
   saldoAFavorAnterior: double("saldoAFavorAnterior"),
+  /** Anticipo de renta que la declaración del año anterior ya liquidó
+   * PARA el año que se está trabajando ahora (ej. en la declaración de
+   * 2024 se liquidó un anticipo "para 2025") — se resta al calcular el
+   * impuesto a pagar/saldo a favor de este año. */
+  anticipoAnioActual: double("anticipoAnioActual"),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 }, (table) => ({
   rentaClienteIdx: uniqueIndex("rentaDeclaracionAnterior_rentaCliente_idx").on(table.rentaClienteId),
@@ -695,7 +700,7 @@ export const rentaLiquidacionItems = mysqlTable("rentaLiquidacionItems", {
    * cédula — determina en qué renglón del borrador se suma. Null para
    * activos/pasivos. */
   tipoValor: mysqlEnum("tipoValor", [
-    "ingreso_bruto", "ingreso_no_constitutivo", "costo_deduccion_procedente", "renta_exenta", "deduccion",
+    "ingreso_bruto", "ingreso_no_constitutivo", "costo_deduccion_procedente", "renta_exenta", "deduccion", "retencion",
   ]),
   /** Para renta_exenta/deduccion: el tipo específico del catálogo (para
    * validar contra su tope individual 2025) — ej. "renta_exenta_25_laboral",

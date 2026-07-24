@@ -204,6 +204,13 @@
       "when": 1784867142047,
       "tag": "0028_liquidacion_granular",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "5",
+      "when": 1784914724488,
+      "tag": "0029_retencion_anticipo",
+      "breakpoints": true
     }
   ]
 }

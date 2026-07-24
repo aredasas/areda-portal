@@ -191,6 +191,10 @@ export type DatosCedula = {
   costoDeduccionProcedente: ItemValor[];
   rentaExenta: ItemValor[];
   deduccion: ItemValor[];
+  /** Retenciones en la fuente practicadas sobre esta cédula — no entran
+   * al cálculo de renta líquida gravable, se usan para el anticipo y como
+   * referencia de lo ya recaudado. */
+  retencion: ItemValor[];
 };
 
 function sumaItems(items: ItemValor[]): number {
@@ -204,6 +208,9 @@ export type DatosLiquidacion = {
   patrimonioLiquidoAnioAnterior: number | null;
   impuestoNetoAnioAnterior: number | null;
   saldoAFavorAnterior: number | null;
+  /** Anticipo que la declaración anterior ya liquidó para el año que se
+   * está trabajando ahora — se resta del total a pagar/favor. */
+  anticipoAnioActual: number | null;
 };
 
 /** Numeración oficial de las casillas principales del Formulario 210
@@ -246,10 +253,18 @@ export type ResultadoLiquidacion = {
   ingresoBrutoDividendos: number;
   rentaLiquidaGravableTotal: number;
   impuestoRenta: { impuesto: number; tarifaMarginal: number; rangoUVT: string };
+  totalRetenciones: number;
   patrimonioLiquidoAnioAnterior: number | null;
   impuestoNetoAnioAnterior: number | null;
   saldoAFavorAnterior: number | null;
-  anticipoEstimado: number | null;
+  anticipoAnioActual: number | null;
+  /** Dos métodos del Art. 807 E.T. para el anticipo del año siguiente —
+   * se calculan ambos para que el contador elija cuál aplica (además de
+   * verificar si es la primera o segunda declaración, casos especiales
+   * que no se calculan aquí). Ambos ya restan las retenciones y quedan en
+   * 0 si el resultado da negativo. */
+  anticipoMetodo1: number;
+  anticipoMetodo2: number;
 };
 
 /** Reúne los datos crudos por cédula (ya obtenidos de la base de datos) y
@@ -270,7 +285,7 @@ export function armarLiquidacion(datos: DatosLiquidacion): ResultadoLiquidacion 
   const deudas = datos.pasivos.reduce((a, it) => a + it.valor, 0);
   const patrimonioLiquido = Math.max(0, patrimonioBruto - deudas);
 
-  const vacio: DatosCedula = { ingresoBruto: [], ingresoNoConstitutivo: [], costoDeduccionProcedente: [], rentaExenta: [], deduccion: [] };
+  const vacio: DatosCedula = { ingresoBruto: [], ingresoNoConstitutivo: [], costoDeduccionProcedente: [], rentaExenta: [], deduccion: [], retencion: [] };
   const subRentasBase: Record<string, ResultadoSubRenta> = {};
   for (const nombre of SUBRENTAS_GENERAL) {
     const c = datos.cedulas[nombre] || vacio;
@@ -326,9 +341,24 @@ export function armarLiquidacion(datos: DatosLiquidacion): ResultadoLiquidacion 
   const rentaLiquidaGravableTotal = rentaLiquidaCedulaGeneral + rentaLiquidaGravablePensiones;
   const impuestoRenta = calcularImpuestoRenta(rentaLiquidaGravableTotal);
 
-  let anticipoEstimado: number | null = null;
+  // Retenciones practicadas — de todas las cédulas (Cédula General +
+  // pensiones + dividendos), se restan por igual en cualquiera de los dos
+  // métodos de anticipo.
+  const todasLasCedulas = [...SUBRENTAS_GENERAL, "pensiones", "dividendos"];
+  const totalRetenciones = todasLasCedulas.reduce((a, n) => a + sumaItems((datos.cedulas[n] || vacio).retencion), 0);
+
+  // Anticipo de renta (Art. 807 E.T.) — dos métodos posibles, el
+  // contador elige cuál aplica según el caso (primera/segunda/siguiente
+  // declaración, o cuál da un valor más razonable):
+  // Método 1: impuesto neto de este año × 75% − retenciones.
+  // Método 2: promedio(impuesto neto año anterior, impuesto neto de este
+  // año) × 75% − retenciones.
+  // Ambos quedan en 0 si el resultado da negativo.
+  const anticipoMetodo1 = Math.max(0, Math.round(impuestoRenta.impuesto * 0.75 - totalRetenciones));
+  let anticipoMetodo2 = 0;
   if (datos.impuestoNetoAnioAnterior !== null && datos.impuestoNetoAnioAnterior !== undefined) {
-    anticipoEstimado = Math.round(((impuestoRenta.impuesto + datos.impuestoNetoAnioAnterior) / 2) * 0.25);
+    const promedio = (impuestoRenta.impuesto + datos.impuestoNetoAnioAnterior) / 2;
+    anticipoMetodo2 = Math.max(0, Math.round(promedio * 0.75 - totalRetenciones));
   }
 
   return {
@@ -337,11 +367,12 @@ export function armarLiquidacion(datos: DatosLiquidacion): ResultadoLiquidacion 
     rentaLiquidaCedulaGeneral,
     ingresoBrutoPensiones, rentaLiquidaPensiones, rentaExentaPensiones, rentaLiquidaGravablePensiones,
     ingresoBrutoDividendos,
-    rentaLiquidaGravableTotal, impuestoRenta,
+    rentaLiquidaGravableTotal, impuestoRenta, totalRetenciones,
     patrimonioLiquidoAnioAnterior: datos.patrimonioLiquidoAnioAnterior ?? null,
     impuestoNetoAnioAnterior: datos.impuestoNetoAnioAnterior ?? null,
     saldoAFavorAnterior: datos.saldoAFavorAnterior ?? null,
-    anticipoEstimado,
+    anticipoAnioActual: datos.anticipoAnioActual ?? null,
+    anticipoMetodo1, anticipoMetodo2,
   };
 }
 
@@ -366,8 +397,15 @@ export async function parseExogenaDian(filePathOrBuffer: string | Buffer): Promi
     if (!encabezadoEncontrado) {
       if (esFilaEncabezado(values)) {
         encabezadoEncontrado = true;
-        // Hay dos columnas "NIT" (quien reporta, y el tercero reportado) —
-        // la segunda ocurrencia de "NIT" es el NIT del tercero real.
+        // El tercero que REPORTA la información (quien la DIAN llama
+        // "informante") es el que nos interesa mostrar — se busca primero
+        // por esa palabra específica, que es más confiable que adivinar
+        // por posición. Si el archivo no la trae explícita, se cae al
+        // heurístico anterior (dos columnas NIT/NOMBRE — la segunda es el
+        // tercero) como respaldo.
+        const nitInformanteIdx = values.findIndex(v => v && /NIT.*INFORMANTE|INFORMANTE.*NIT/i.test(String(v)));
+        const nombreInformanteIdx = values.findIndex(v => v && /(NOMBRE|RAZ[OÓ]N).*INFORMANTE|INFORMANTE.*(NOMBRE|RAZ[OÓ]N)/i.test(String(v)));
+
         const nitIdxs: number[] = [];
         values.forEach((v, i) => { if (v && String(v).toUpperCase().includes("NIT")) nitIdxs.push(i); });
         const nombreIdxs: number[] = [];
@@ -377,8 +415,8 @@ export async function parseExogenaDian(filePathOrBuffer: string | Buffer): Promi
         const usoIdx = values.findIndex(v => v && String(v).toUpperCase().includes("USO"));
         const infoIdx = values.findIndex(v => v && String(v).toUpperCase().includes("INFORMACI"));
         idx = {
-          nitTercero: nitIdxs[1] ?? nitIdxs[0] ?? -1,
-          nombreTercero: nombreIdxs[1] ?? nombreIdxs[0] ?? -1,
+          nitTercero: nitInformanteIdx >= 0 ? nitInformanteIdx : (nitIdxs[1] ?? nitIdxs[0] ?? -1),
+          nombreTercero: nombreInformanteIdx >= 0 ? nombreInformanteIdx : (nombreIdxs[1] ?? nombreIdxs[0] ?? -1),
           detalle: detalleIdx, valor: valorIdx, usoSugerido: usoIdx, infoAdicional: infoIdx,
         };
       }
@@ -554,10 +592,15 @@ export async function generarBorrador210(
   ws.addRow(["ANTICIPO Y SALDOS"]).font = FONT_BOLD as any;
   filaCasilla(ws, CASILLAS_210.saldoAFavorAnterior, "Saldo a favor año anterior", resultado.saldoAFavorAnterior ?? "—");
   ws.addRow(["Impuesto neto de renta año anterior (referencia)", resultado.impuestoNetoAnioAnterior ?? "—"]);
-  const rAnticipo = filaCasilla(ws, CASILLAS_210.anticipoProximoAnio, "Anticipo estimado para el próximo año (referencia)", resultado.anticipoEstimado ?? "—", true);
+  ws.addRow(["Total retenciones practicadas (todas las cédulas)", resultado.totalRetenciones]);
+  filaCasilla(ws, CASILLAS_210.anticipoAnioAnterior, "Anticipo ya liquidado el año anterior para este año", resultado.anticipoAnioActual ?? "—");
+  ws.addRow([]);
+  ws.addRow(["Anticipo para el próximo año — dos métodos (Art. 807 E.T.), verificar cuál aplica:"]).font = FONT_BOLD as any;
+  filaCasilla(ws, CASILLAS_210.anticipoProximoAnio, "Método 1: impuesto neto de este año × 75% − retenciones", resultado.anticipoMetodo1);
+  filaCasilla(ws, CASILLAS_210.anticipoProximoAnio, "Método 2: promedio(impuesto año anterior, este año) × 75% − retenciones", resultado.anticipoMetodo2);
   ws.addRow([
-    "Nota: fórmula simple de referencia (promedio entre impuesto actual y anterior, al 25%) — el Art. 807 E.T. define",
-    "porcentajes distintos según sea la primera, segunda, o siguientes declaraciones; verificar antes de usar como definitivo.",
+    "Nota: el Art. 807 E.T. define además si corresponde 0% (primera declaración), 25% o 50% en vez de 75% según el",
+    "caso — verificar antes de usar como definitivo. Ambos métodos ya quedan en 0 si el resultado da negativo.",
   ]).eachCell(c => { c.fill = NOTA_FILL; c.font = { name: "Arial", size: 9 } as any; });
 
   ws.getColumn(1).width = 10;

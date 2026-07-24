@@ -1,0 +1,2 @@
+ALTER TABLE `rentaLiquidacionItems` MODIFY COLUMN `tipoValor` enum('ingreso_bruto','ingreso_no_constitutivo','costo_deduccion_procedente','renta_exenta','deduccion','retencion');--> statement-breakpoint
+ALTER TABLE `rentaDeclaracionAnterior` ADD `anticipoAnioActual` double;

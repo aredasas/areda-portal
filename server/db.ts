@@ -2310,19 +2310,19 @@ export async function getDatosLiquidacion(rentaClienteId: number) {
     getDeclaracionAnterior(rentaClienteId),
   ]);
 
-  const cedulas: Record<string, { ingresoBruto: any[]; ingresoNoConstitutivo: any[]; costoDeduccionProcedente: any[]; rentaExenta: any[]; deduccion: any[] }> = {};
-  for (const nombre of CEDULAS_TODAS) {
-    cedulas[nombre] = { ingresoBruto: [], ingresoNoConstitutivo: [], costoDeduccionProcedente: [], rentaExenta: [], deduccion: [] };
-  }
+  const cedulaVacia = () => ({ ingresoBruto: [] as any[], ingresoNoConstitutivo: [] as any[], costoDeduccionProcedente: [] as any[], rentaExenta: [] as any[], deduccion: [] as any[], retencion: [] as any[] });
+  const cedulas: Record<string, ReturnType<typeof cedulaVacia>> = {};
+  for (const nombre of CEDULAS_TODAS) cedulas[nombre] = cedulaVacia();
   for (const it of itemsCedula) {
     const cedula = it.cedula || "trabajo";
-    if (!cedulas[cedula]) cedulas[cedula] = { ingresoBruto: [], ingresoNoConstitutivo: [], costoDeduccionProcedente: [], rentaExenta: [], deduccion: [] };
+    if (!cedulas[cedula]) cedulas[cedula] = cedulaVacia();
     const item = { concepto: it.concepto, valor: it.valor, tipoDeduccion: it.tipoDeduccion };
     if (it.tipoValor === "ingreso_bruto") cedulas[cedula].ingresoBruto.push(item);
     else if (it.tipoValor === "ingreso_no_constitutivo") cedulas[cedula].ingresoNoConstitutivo.push(item);
     else if (it.tipoValor === "costo_deduccion_procedente") cedulas[cedula].costoDeduccionProcedente.push(item);
     else if (it.tipoValor === "renta_exenta") cedulas[cedula].rentaExenta.push(item);
     else if (it.tipoValor === "deduccion") cedulas[cedula].deduccion.push(item);
+    else if (it.tipoValor === "retencion") cedulas[cedula].retencion.push(item);
   }
 
   return {
@@ -2332,6 +2332,7 @@ export async function getDatosLiquidacion(rentaClienteId: number) {
     patrimonioLiquidoAnioAnterior: declaracionAnterior?.patrimonioLiquidoAnioAnterior ?? null,
     impuestoNetoAnioAnterior: declaracionAnterior?.impuestoNetoAnioAnterior ?? null,
     saldoAFavorAnterior: declaracionAnterior?.saldoAFavorAnterior ?? null,
+    anticipoAnioActual: declaracionAnterior?.anticipoAnioActual ?? null,
   };
 }
 

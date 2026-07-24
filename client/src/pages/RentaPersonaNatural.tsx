@@ -13,7 +13,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { trpc } from "@/lib/trpc";
 import {
   UserSquare2, Construction, Plus, Loader2, Pencil, Trash2, CheckCircle2, Clock, Users, FileSpreadsheet,
-  Upload, AlertTriangle, Wallet, ChevronDown, Download, Calculator,
+  Upload, AlertTriangle, Wallet, ChevronDown, Download, Calculator, Eye,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -224,6 +224,7 @@ function LiquidacionTab({ anioGravable }: { anioGravable: number }) {
   const [subiendo, setSubiendo] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const utils = trpc.useUtils();
+  const [renglonDetalle, setRenglonDetalle] = useState<string | null>(null);
 
   const exogenaQuery = trpc.renta.exogena.get.useQuery(
     { rentaClienteId: rentaClienteId as number },
@@ -348,6 +349,7 @@ function LiquidacionTab({ anioGravable }: { anioGravable: number }) {
                         <th className="p-3 font-medium">Categoría</th>
                         <th className="p-3 font-medium">Ítems</th>
                         <th className="p-3 font-medium text-right">Valor</th>
+                        <th className="p-3 font-medium"></th>
                       </tr>
                     </thead>
                     <tbody>
@@ -364,6 +366,11 @@ function LiquidacionTab({ anioGravable }: { anioGravable: number }) {
                           </td>
                           <td className="p-3">{r.cantidadItems}</td>
                           <td className="p-3 text-right font-medium">{fmt(r.valor)}</td>
+                          <td className="p-3">
+                            <Button variant="ghost" size="sm" className="h-7 gap-1 text-xs" onClick={() => setRenglonDetalle(r.renglon)}>
+                              <Eye className="w-3.5 h-3.5" /> Ver
+                            </Button>
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -378,6 +385,27 @@ function LiquidacionTab({ anioGravable }: { anioGravable: number }) {
                   )}
                 </CardContent>
               </Card>
+
+              <Dialog open={!!renglonDetalle} onOpenChange={(o) => !o && setRenglonDetalle(null)}>
+                <DialogContent className="sm:max-w-xl max-h-[80vh] overflow-y-auto overflow-x-hidden min-w-0">
+                  <DialogHeader>
+                    <DialogTitle>Detalle del renglón {renglonDetalle}</DialogTitle>
+                  </DialogHeader>
+                  <div className="space-y-1 min-w-0">
+                    {exogenaQuery.data.items
+                      .filter((it: any) => (it.renglon || "(sin renglón)") === renglonDetalle)
+                      .map((it: any, i: number) => (
+                        <div key={i} className="flex items-start justify-between gap-2 text-sm border-b py-1.5 min-w-0">
+                          <div className="flex-1 min-w-0">
+                            <div className="font-medium truncate">{it.nombreTercero || "(tercero sin nombre en el archivo)"}</div>
+                            <div className="text-xs text-muted-foreground truncate">{it.nitTercero} · {it.detalle}</div>
+                          </div>
+                          <span className="font-medium shrink-0 whitespace-nowrap">{fmt(it.valor)}</span>
+                        </div>
+                      ))}
+                  </div>
+                </DialogContent>
+              </Dialog>
             </>
           ) : (
             <p className="text-sm text-muted-foreground">
@@ -447,6 +475,7 @@ function DeclaracionAnteriorCard({ rentaClienteId }: { rentaClienteId: number })
   const [patrimonio, setPatrimonio] = useState("");
   const [impuestoNeto, setImpuestoNeto] = useState("");
   const [saldoAFavor, setSaldoAFavor] = useState("");
+  const [anticipoActual, setAnticipoActual] = useState("");
   const [editado, setEditado] = useState(false);
 
   useEffect(() => {
@@ -454,6 +483,7 @@ function DeclaracionAnteriorCard({ rentaClienteId }: { rentaClienteId: number })
       setPatrimonio(query.data.patrimonioLiquidoAnioAnterior != null ? String(query.data.patrimonioLiquidoAnioAnterior) : "");
       setImpuestoNeto(query.data.impuestoNetoAnioAnterior != null ? String(query.data.impuestoNetoAnioAnterior) : "");
       setSaldoAFavor(query.data.saldoAFavorAnterior != null ? String(query.data.saldoAFavorAnterior) : "");
+      setAnticipoActual(query.data.anticipoAnioActual != null ? String(query.data.anticipoAnioActual) : "");
     }
   }, [query.data, editado]);
 
@@ -468,6 +498,7 @@ function DeclaracionAnteriorCard({ rentaClienteId }: { rentaClienteId: number })
       patrimonioLiquidoAnioAnterior: patrimonio ? Number(patrimonio) : undefined,
       impuestoNetoAnioAnterior: impuestoNeto ? Number(impuestoNeto) : undefined,
       saldoAFavorAnterior: saldoAFavor ? Number(saldoAFavor) : undefined,
+      anticipoAnioActual: anticipoActual ? Number(anticipoActual) : undefined,
     });
   };
 
@@ -476,7 +507,7 @@ function DeclaracionAnteriorCard({ rentaClienteId }: { rentaClienteId: number })
       <p className="text-sm text-muted-foreground">
         El impuesto neto de renta del año anterior es necesario para calcular el nuevo anticipo de renta.
       </p>
-      <div className="grid sm:grid-cols-3 gap-3">
+      <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
         <div className="space-y-1.5">
           <Label className="text-xs">Patrimonio líquido año anterior</Label>
           <Input type="number" value={patrimonio} onChange={(e) => { setPatrimonio(e.target.value); setEditado(true); }} />
@@ -488,6 +519,10 @@ function DeclaracionAnteriorCard({ rentaClienteId }: { rentaClienteId: number })
         <div className="space-y-1.5">
           <Label className="text-xs">Saldo a favor anterior</Label>
           <Input type="number" value={saldoAFavor} onChange={(e) => { setSaldoAFavor(e.target.value); setEditado(true); }} />
+        </div>
+        <div className="space-y-1.5">
+          <Label className="text-xs">Anticipo ya liquidado para este año</Label>
+          <Input type="number" value={anticipoActual} onChange={(e) => { setAnticipoActual(e.target.value); setEditado(true); }} />
         </div>
       </div>
       <Button size="sm" onClick={handleGuardar} disabled={guardarMutation.isPending} className="bg-[#EDA011] hover:bg-[#d48f0f] text-white">
@@ -714,11 +749,11 @@ function ImportarExogenaDialog({ rentaClienteId, cedula, open, onOpenChange, onI
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg max-h-[80vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-lg max-h-[80vh] overflow-y-auto overflow-x-hidden min-w-0">
         <DialogHeader>
           <DialogTitle>Elegir ingresos a importar en esta cédula</DialogTitle>
         </DialogHeader>
-        <div className="space-y-2 py-2">
+        <div className="space-y-2 py-2 min-w-0">
           <p className="text-sm text-muted-foreground">
             Los que no marques quedan disponibles para importarlos después bajo otra cédula.
           </p>
@@ -727,14 +762,15 @@ function ImportarExogenaDialog({ rentaClienteId, cedula, open, onOpenChange, onI
           ) : !disponiblesQuery.data?.length ? (
             <p className="text-sm text-muted-foreground">No hay ingresos de la exógena pendientes por importar.</p>
           ) : (
-            <div className="space-y-1">
+            <div className="space-y-1 min-w-0">
               {disponiblesQuery.data.map((item: any) => (
-                <label key={item.id} className="flex items-center gap-2 text-sm border-b py-1.5 cursor-pointer">
-                  <Checkbox checked={seleccionados.has(item.id)} onCheckedChange={() => toggle(item.id)} />
+                <label key={item.id} className="flex items-start gap-2 text-sm border-b py-1.5 cursor-pointer min-w-0">
+                  <Checkbox checked={seleccionados.has(item.id)} onCheckedChange={() => toggle(item.id)} className="mt-0.5 shrink-0" />
                   <span className="flex-1 min-w-0">
-                    <span className="truncate block">{item.nombreTercero ? `${item.nombreTercero} — ` : ""}{item.detalle}</span>
+                    <span className="block font-medium truncate">{item.nombreTercero || "(tercero sin nombre en el archivo)"}</span>
+                    <span className="block text-xs text-muted-foreground truncate">{item.detalle}</span>
                   </span>
-                  <span className="font-medium shrink-0">{fmt(item.valor)}</span>
+                  <span className="font-medium shrink-0 whitespace-nowrap">{fmt(item.valor)}</span>
                 </label>
               ))}
             </div>
@@ -761,9 +797,11 @@ function ImportarExogenaDialog({ rentaClienteId, cedula, open, onOpenChange, onI
  * registro individual. El tope combinado de 1.340 UVT se calcula siempre
  * sobre TODAS las cédulas de la Cédula General juntas (trabajo + capital +
  * no laboral), no solo la que esté seleccionada en pantalla. */
+
 function IngresosDeduccionesPorCedulaCard({ rentaClienteId }: { rentaClienteId: number }) {
   const utils = trpc.useUtils();
   const catalogoQuery = trpc.renta.liquidacion.catalogoTopes.useQuery();
+  const dependientesQuery = trpc.renta.dependientes.list.useQuery({ rentaClienteId });
   const [cedulaSeleccionada, setCedulaSeleccionada] = useState("trabajo");
   const [showImportarDialog, setShowImportarDialog] = useState(false);
 
@@ -775,17 +813,15 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId }: { rentaClienteId: 
   const [tipoDeduccion, setTipoDeduccion] = useState("");
   const [conceptoDeduccion, setConceptoDeduccion] = useState("");
   const [valorDeduccion, setValorDeduccion] = useState("");
+  const [conceptoRetencion, setConceptoRetencion] = useState("");
+  const [valorRetencion, setValorRetencion] = useState("");
+  const [eliminarId, setEliminarId] = useState<number | null>(null);
 
   const invalidarTodo = () => utils.renta.liquidacion.list.invalidate({ rentaClienteId, seccion: "cedula" });
 
-  const crearIngresoMutation = trpc.renta.liquidacion.crear.useMutation({
-    onSuccess: () => { setConceptoIngreso(""); setValorIngreso(""); invalidarTodo(); },
-    onError: (err) => toast.error(err.message || "No se pudo agregar"),
-  });
-  const crearDeduccionMutation = trpc.renta.liquidacion.crear.useMutation({
+  const crearMutation = trpc.renta.liquidacion.crear.useMutation({
     onSuccess: (data) => {
-      if (data.alerta) toast.warning(data.alerta); else toast.success("Agregado");
-      setConceptoDeduccion(""); setValorDeduccion(""); setTipoDeduccion("");
+      if (data.alerta) toast.warning(data.alerta);
       invalidarTodo();
     },
     onError: (err) => toast.error(err.message || "No se pudo agregar"),
@@ -799,11 +835,16 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId }: { rentaClienteId: 
   const tieneCostos = cedulaInfo?.tieneCostos ?? false;
 
   const itemsDeEstaCedula = todosItems.filter((it: any) => (it.cedula || "trabajo") === cedulaSeleccionada);
-  const ingresosDeEstaCedula = itemsDeEstaCedula.filter((it: any) => ["ingreso_bruto", "ingreso_no_constitutivo", "costo_deduccion_procedente"].includes(it.tipoValor));
-  const deduccionesDeEstaCedula = itemsDeEstaCedula.filter((it: any) => ["renta_exenta", "deduccion"].includes(it.tipoValor));
+  const porTipo = (tipo: string) => itemsDeEstaCedula.filter((it: any) => it.tipoValor === tipo);
+  const totalPorTipo = (tipo: string) => porTipo(tipo).reduce((a: number, it: any) => a + it.valor, 0);
 
-  const totalPorTipo = (tipo: string) => ingresosDeEstaCedula.filter((it: any) => it.tipoValor === tipo).reduce((a: number, it: any) => a + it.valor, 0);
-  const rentaLiquidaEstimadaCedula = totalPorTipo("ingreso_bruto") - totalPorTipo("ingreso_no_constitutivo") - totalPorTipo("costo_deduccion_procedente");
+  const totalIngresoBruto = totalPorTipo("ingreso_bruto");
+  const totalIncrngo = totalPorTipo("ingreso_no_constitutivo");
+  const totalCostos = totalPorTipo("costo_deduccion_procedente");
+  const totalDeducciones = totalPorTipo("deduccion");
+  const totalRentasExentas = totalPorTipo("renta_exenta");
+  const totalRetenciones = totalPorTipo("retencion");
+  const rentaLiquidaEstimadaCedula = totalIngresoBruto - totalIncrngo - totalCostos;
 
   const totalGeneral = todosItems
     .filter((it: any) => ["renta_exenta", "deduccion"].includes(it.tipoValor) && CEDULAS_GENERAL.includes(it.cedula || "trabajo"))
@@ -811,19 +852,35 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId }: { rentaClienteId: 
   const totalOtrasCedulas = todosItems
     .filter((it: any) => ["renta_exenta", "deduccion"].includes(it.tipoValor) && !CEDULAS_GENERAL.includes(it.cedula || "trabajo"))
     .reduce((a: number, it: any) => a + it.valor, 0);
+  const totalRetencionesGeneral = todosItems.filter((it: any) => it.tipoValor === "retencion").reduce((a: number, it: any) => a + it.valor, 0);
   const topeGlobal = catalogoQuery.data ? catalogoQuery.data.topeGlobalUVT * catalogoQuery.data.uvt : 0;
   const excedeGlobal = topeGlobal > 0 && totalGeneral > topeGlobal;
 
-  const nombreTipoValor = (t: string) => ({
-    ingreso_bruto: "Ingreso bruto", ingreso_no_constitutivo: "Ingreso no constitutivo de renta", costo_deduccion_procedente: "Costo/deducción procedente",
-  } as Record<string, string>)[t] || t;
+  // Costos/deducciones imputables como % de los ingresos brutos de la
+  // cédula — la alerta que pidió Arlex para trabajo_honorarios (Art. 336
+  // par. 5, referencia usual del 60% en el Ayuda Renta).
+  const porcentajeCostos = totalIngresoBruto > 0 ? (totalCostos / totalIngresoBruto) * 100 : 0;
+  const excedeCostos60 = cedulaSeleccionada === "trabajo_honorarios" && porcentajeCostos > 60;
+
+  // Sugerencia de deducción por dependientes: 10% de los ingresos brutos
+  // de esta cédula, limitado al tope de 384 UVT/año — solo se sugiere si
+  // hay al menos un dependiente registrado y todavía no se ha agregado
+  // esta deducción específica en esta cédula.
+  const yaTieneDependientes = porTipo("deduccion").some((it: any) => it.tipoDeduccion === "dependientes_economicos");
+  const topeDependientesUVT = catalogoQuery.data?.tipos.find((t: any) => t.tipo === "dependientes_economicos")?.topeUVT;
+  const topeDependientes = topeDependientesUVT && catalogoQuery.data ? topeDependientesUVT * catalogoQuery.data.uvt : 0;
+  const sugerenciaDependientes = Math.min(totalIngresoBruto * 0.10, topeDependientes);
+  const mostrarSugerenciaDependientes = (dependientesQuery.data?.length || 0) > 0 && !yaTieneDependientes
+    && ["trabajo", "trabajo_honorarios"].includes(cedulaSeleccionada) && sugerenciaDependientes > 0;
+
+  const nombreCatalogo = (tipoDed: string | null | undefined) => catalogoQuery.data?.tipos.find((t: any) => t.tipo === tipoDed)?.nombre || tipoDed || "";
 
   const handleAgregarIngreso = () => {
     if (!conceptoIngreso.trim() || !valorIngreso) return;
-    crearIngresoMutation.mutate({
+    crearMutation.mutate({
       rentaClienteId, seccion: "cedula", cedula: cedulaSeleccionada as any,
       tipoValor: tipoValorIngreso as any, concepto: conceptoIngreso.trim(), valor: Number(valorIngreso),
-    });
+    }, { onSuccess: () => { setConceptoIngreso(""); setValorIngreso(""); } });
   };
   const handleAgregarDeduccion = () => {
     if (!conceptoDeduccion.trim() || !valorDeduccion || !tipoDeduccion) {
@@ -831,11 +888,26 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId }: { rentaClienteId: 
       return;
     }
     const tipoInfo = catalogoQuery.data?.tipos.find((t: any) => t.tipo === tipoDeduccion);
-    crearDeduccionMutation.mutate({
+    crearMutation.mutate({
       rentaClienteId, seccion: "cedula", cedula: cedulaSeleccionada as any,
       tipoValor: (tipoInfo?.tipoValor || "deduccion") as any,
       tipoDeduccion, concepto: conceptoDeduccion.trim(), valor: Number(valorDeduccion),
+    }, { onSuccess: () => { setConceptoDeduccion(""); setValorDeduccion(""); setTipoDeduccion(""); } });
+  };
+  const handleAgregarDependientes = () => {
+    crearMutation.mutate({
+      rentaClienteId, seccion: "cedula", cedula: cedulaSeleccionada as any, tipoValor: "deduccion",
+      tipoDeduccion: "dependientes_economicos",
+      concepto: `Deducción por dependientes económicos (10% ingresos, ${dependientesQuery.data?.length} dependiente(s))`,
+      valor: Math.round(sugerenciaDependientes),
     });
+  };
+  const handleAgregarRetencion = () => {
+    if (!conceptoRetencion.trim() || !valorRetencion) return;
+    crearMutation.mutate({
+      rentaClienteId, seccion: "cedula", cedula: cedulaSeleccionada as any,
+      tipoValor: "retencion", concepto: conceptoRetencion.trim(), valor: Number(valorRetencion),
+    }, { onSuccess: () => { setConceptoRetencion(""); setValorRetencion(""); } });
   };
 
   return (
@@ -852,83 +924,142 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId }: { rentaClienteId: 
         </Select>
       </div>
 
-      {/* Ingresos de la cédula seleccionada — bruto / no constitutivo / costo (si aplica) */}
-      <div className="border rounded-md p-3 space-y-2">
+      {/* Ingresos */}
+      <div className="border-2 border-green-200 rounded-md p-3 space-y-2 bg-green-50/30">
         <div className="flex items-center justify-between">
-          <span className="text-sm font-medium">Ingresos</span>
-          <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setShowImportarDialog(true)}>
+          <span className="text-sm font-semibold text-green-800">Ingresos</span>
+          <Button size="sm" variant="outline" className="gap-1.5 h-7 text-xs" onClick={() => setShowImportarDialog(true)}>
             <FileSpreadsheet className="w-3.5 h-3.5" /> Importar desde exógena
           </Button>
         </div>
-        {!!ingresosDeEstaCedula.length && (
-          <div className="space-y-1 max-h-56 overflow-y-auto">
-            {ingresosDeEstaCedula.map((it: any) => (
-              <div key={it.id} className="flex items-center justify-between text-sm border-b py-1.5 gap-2">
-                <div className="flex-1 min-w-0">
-                  <div className="truncate">{it.concepto}</div>
-                  <div className="text-xs text-muted-foreground">{nombreTipoValor(it.tipoValor)}</div>
-                </div>
+        {!!porTipo("ingreso_bruto").length && (
+          <div className="space-y-1 max-h-40 overflow-y-auto">
+            {porTipo("ingreso_bruto").map((it: any) => (
+              <div key={it.id} className="flex items-center justify-between text-sm border-b py-1 gap-2">
+                <span className="flex-1 min-w-0 truncate">{it.concepto}</span>
                 {it.origen === "exogena" && <Badge variant="outline" className="text-[10px] shrink-0">Exógena</Badge>}
-                <span className="font-medium shrink-0">{fmt(it.valor)}</span>
-                <Button variant="ghost" size="icon" className="h-7 w-7 text-red-600 shrink-0" onClick={() => eliminarMutation.mutate({ id: it.id })}>
-                  <Trash2 className="w-3.5 h-3.5" />
-                </Button>
+                <span className="shrink-0">{fmt(it.valor)}</span>
+                <Button variant="ghost" size="icon" className="h-6 w-6 text-red-600 shrink-0" onClick={() => eliminarMutation.mutate({ id: it.id })}><Trash2 className="w-3.5 h-3.5" /></Button>
               </div>
             ))}
           </div>
         )}
-        <div className="flex items-center justify-between text-sm font-medium border-t pt-2">
-          <span>Renta líquida estimada de esta cédula (bruto − no constitutivo{tieneCostos ? " − costos" : ""})</span>
-          <span>{fmt(rentaLiquidaEstimadaCedula)}</span>
-        </div>
-        <div className={`grid gap-2 items-end ${tieneCostos ? "sm:grid-cols-[1fr_1fr_140px_auto]" : "sm:grid-cols-[1fr_1fr_140px_auto]"}`}>
-          <div className="space-y-1">
-            <Label className="text-xs">Tipo</Label>
-            <Select value={tipoValorIngreso} onValueChange={setTipoValorIngreso}>
-              <SelectTrigger className="h-8"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="ingreso_bruto">Ingreso bruto</SelectItem>
-                <SelectItem value="ingreso_no_constitutivo">Ingreso no constitutivo de renta</SelectItem>
-                {tieneCostos && <SelectItem value="costo_deduccion_procedente">Costo/deducción procedente</SelectItem>}
-              </SelectContent>
-            </Select>
-          </div>
-          <Input value={conceptoIngreso} onChange={(e) => setConceptoIngreso(e.target.value)} placeholder="Concepto" className="h-8" />
-          <Input value={valorIngreso} onChange={(e) => setValorIngreso(e.target.value)} placeholder="Valor" type="number" className="h-8" />
-          <Button size="sm" variant="outline" className="gap-1" onClick={handleAgregarIngreso} disabled={crearIngresoMutation.isPending}>
-            <Plus className="w-3.5 h-3.5" /> Agregar
-          </Button>
+        <div className="flex items-center justify-between text-base font-bold text-green-800 pt-1.5 border-t border-green-200">
+          <span>Total ingresos brutos</span><span>{fmt(totalIngresoBruto)}</span>
         </div>
       </div>
 
-      {/* Deducciones y rentas exentas de la cédula seleccionada */}
-      <div className="border rounded-md p-3 space-y-2">
-        <span className="text-sm font-medium">Deducciones y Rentas Exentas</span>
-        {!!deduccionesDeEstaCedula.length && (
-          <div className="space-y-1 max-h-56 overflow-y-auto">
-            {deduccionesDeEstaCedula.map((it: any) => (
-              <div key={it.id} className="flex items-center justify-between text-sm border-b py-1.5 gap-2">
-                <div className="flex-1 min-w-0">
-                  <div className="truncate">{it.concepto}</div>
-                  <div className="text-xs text-muted-foreground">
-                    {catalogoQuery.data?.tipos.find((t: any) => t.tipo === it.tipoDeduccion)?.nombre || it.tipoDeduccion}
-                  </div>
-                </div>
-                <span className="font-medium shrink-0">{fmt(it.valor)}</span>
-                <Button variant="ghost" size="icon" className="h-7 w-7 text-red-600 shrink-0" onClick={() => eliminarMutation.mutate({ id: it.id })}>
-                  <Trash2 className="w-3.5 h-3.5" />
-                </Button>
+      {/* INCRNGO */}
+      <div className="border-2 border-blue-200 rounded-md p-3 space-y-2 bg-blue-50/30">
+        <span className="text-sm font-semibold text-blue-800">INCRNGO — Ingresos no constitutivos de renta ni ganancia ocasional</span>
+        {!!porTipo("ingreso_no_constitutivo").length && (
+          <div className="space-y-1 max-h-40 overflow-y-auto">
+            {porTipo("ingreso_no_constitutivo").map((it: any) => (
+              <div key={it.id} className="flex items-center justify-between text-sm border-b py-1 gap-2">
+                <span className="flex-1 min-w-0 truncate">{it.concepto}</span>
+                <span className="shrink-0">{fmt(it.valor)}</span>
+                <Button variant="ghost" size="icon" className="h-6 w-6 text-red-600 shrink-0" onClick={() => eliminarMutation.mutate({ id: it.id })}><Trash2 className="w-3.5 h-3.5" /></Button>
               </div>
             ))}
           </div>
         )}
-        <div className="grid sm:grid-cols-[1fr_1fr_140px_auto] gap-2 items-end">
+        <div className="flex items-center justify-between text-base font-bold text-blue-800 pt-1.5 border-t border-blue-200">
+          <span>Total INCRNGO</span><span>{fmt(totalIncrngo)}</span>
+        </div>
+      </div>
+
+      {/* Costos y deducciones imputables (solo cédulas con costos) */}
+      {tieneCostos && (
+        <div className={`border-2 rounded-md p-3 space-y-2 ${excedeCostos60 ? "border-red-300 bg-red-50/40" : "border-orange-200 bg-orange-50/30"}`}>
+          <span className={`text-sm font-semibold ${excedeCostos60 ? "text-red-800" : "text-orange-800"}`}>Costos y deducciones imputables/procedentes</span>
+          {!!porTipo("costo_deduccion_procedente").length && (
+            <div className="space-y-1 max-h-40 overflow-y-auto">
+              {porTipo("costo_deduccion_procedente").map((it: any) => (
+                <div key={it.id} className="flex items-center justify-between text-sm border-b py-1 gap-2">
+                  <span className="flex-1 min-w-0 truncate">{it.concepto}</span>
+                  <span className="shrink-0">{fmt(it.valor)}</span>
+                  <Button variant="ghost" size="icon" className="h-6 w-6 text-red-600 shrink-0" onClick={() => eliminarMutation.mutate({ id: it.id })}><Trash2 className="w-3.5 h-3.5" /></Button>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className={`flex items-center justify-between text-base font-bold pt-1.5 border-t ${excedeCostos60 ? "text-red-800 border-red-200" : "text-orange-800 border-orange-200"}`}>
+            <span className="flex items-center gap-1.5">
+              {excedeCostos60 && <AlertTriangle className="w-4 h-4" />}
+              Total costos/deducciones imputables {totalIngresoBruto > 0 && `(${porcentajeCostos.toFixed(1)}% de los ingresos)`}
+            </span>
+            <span>{fmt(totalCostos)}</span>
+          </div>
+          {excedeCostos60 && (
+            <p className="text-xs text-red-700 flex items-start gap-1.5">
+              <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+              Supera el 60% de los ingresos brutos en rentas de trabajo por honorarios — revisar si procede
+              (referencia usual del Ayuda Renta, verificar caso a caso).
+            </p>
+          )}
+        </div>
+      )}
+
+      <div className="flex items-center justify-between text-sm font-medium bg-muted/50 rounded-md px-3 py-2">
+        <span>Renta líquida estimada de esta cédula (ingresos − INCRNGO{tieneCostos ? " − costos" : ""})</span>
+        <span className="font-bold">{fmt(rentaLiquidaEstimadaCedula)}</span>
+      </div>
+
+      {/* Formulario para agregar ingreso/incrngo/costo */}
+      <div className={`grid gap-2 items-end sm:grid-cols-[1fr_1fr_140px_auto]`}>
+        <div className="space-y-1">
+          <Label className="text-xs">Tipo</Label>
+          <Select value={tipoValorIngreso} onValueChange={setTipoValorIngreso}>
+            <SelectTrigger className="h-8"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="ingreso_bruto">Ingreso bruto</SelectItem>
+              <SelectItem value="ingreso_no_constitutivo">INCRNGO</SelectItem>
+              {tieneCostos && <SelectItem value="costo_deduccion_procedente">Costo/deducción imputable</SelectItem>}
+            </SelectContent>
+          </Select>
+        </div>
+        <Input value={conceptoIngreso} onChange={(e) => setConceptoIngreso(e.target.value)} placeholder="Concepto" className="h-8" />
+        <Input value={valorIngreso} onChange={(e) => setValorIngreso(e.target.value)} placeholder="Valor" type="number" className="h-8" />
+        <Button size="sm" variant="outline" className="gap-1" onClick={handleAgregarIngreso} disabled={crearMutation.isPending}>
+          <Plus className="w-3.5 h-3.5" /> Agregar
+        </Button>
+      </div>
+
+      {/* Deducciones */}
+      <div className="border-2 border-purple-200 rounded-md p-3 space-y-2 bg-purple-50/30">
+        <span className="text-sm font-semibold text-purple-800">Deducciones</span>
+        {!!porTipo("deduccion").length && (
+          <div className="space-y-1 max-h-40 overflow-y-auto">
+            {porTipo("deduccion").map((it: any) => (
+              <div key={it.id} className="flex items-center justify-between text-sm border-b py-1 gap-2">
+                <div className="flex-1 min-w-0">
+                  <div className="truncate">{it.concepto}</div>
+                  <div className="text-xs text-muted-foreground">{nombreCatalogo(it.tipoDeduccion)}</div>
+                </div>
+                <span className="shrink-0">{fmt(it.valor)}</span>
+                <Button variant="ghost" size="icon" className="h-6 w-6 text-red-600 shrink-0" onClick={() => eliminarMutation.mutate({ id: it.id })}><Trash2 className="w-3.5 h-3.5" /></Button>
+              </div>
+            ))}
+          </div>
+        )}
+        {mostrarSugerenciaDependientes && (
+          <div className="flex items-center justify-between gap-2 bg-purple-100 rounded px-2.5 py-1.5 text-xs">
+            <span>Sugerencia: 10% de ingresos por {dependientesQuery.data?.length} dependiente(s), tope aplicado → {fmt(sugerenciaDependientes)}</span>
+            <Button size="sm" variant="outline" className="h-6 text-xs shrink-0" onClick={handleAgregarDependientes} disabled={crearMutation.isPending}>
+              <Plus className="w-3 h-3 mr-1" /> Agregar
+            </Button>
+          </div>
+        )}
+        <div className="flex items-center justify-between text-base font-bold text-purple-800 pt-1.5 border-t border-purple-200">
+          <span>Total deducciones</span><span>{fmt(totalDeducciones)}</span>
+        </div>
+        <div className="grid sm:grid-cols-[1fr_1fr_140px_auto] gap-2 items-end pt-1">
           <div className="space-y-1">
             <Label className="text-xs">Tipo</Label>
             <Select value={tipoDeduccion} onValueChange={setTipoDeduccion}>
               <SelectTrigger className="h-8"><SelectValue placeholder="Selecciona..." /></SelectTrigger>
               <SelectContent>
-                {catalogoQuery.data?.tipos.map((t: any) => (
+                {catalogoQuery.data?.tipos.filter((t: any) => t.tipoValor === "deduccion").map((t: any) => (
                   <SelectItem key={t.tipo} value={t.tipo}>{t.nombre}{t.topeUVT ? ` (tope ${t.topeUVT} UVT)` : ""}</SelectItem>
                 ))}
               </SelectContent>
@@ -936,7 +1067,73 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId }: { rentaClienteId: 
           </div>
           <Input value={conceptoDeduccion} onChange={(e) => setConceptoDeduccion(e.target.value)} placeholder="Concepto" className="h-8" />
           <Input value={valorDeduccion} onChange={(e) => setValorDeduccion(e.target.value)} placeholder="Valor" type="number" className="h-8" />
-          <Button size="sm" variant="outline" className="gap-1" onClick={handleAgregarDeduccion} disabled={crearDeduccionMutation.isPending}>
+          <Button size="sm" variant="outline" className="gap-1" onClick={handleAgregarDeduccion} disabled={crearMutation.isPending}>
+            <Plus className="w-3.5 h-3.5" /> Agregar
+          </Button>
+        </div>
+      </div>
+
+      {/* Rentas Exentas */}
+      <div className="border-2 border-teal-200 rounded-md p-3 space-y-2 bg-teal-50/30">
+        <span className="text-sm font-semibold text-teal-800">Rentas Exentas</span>
+        {!!porTipo("renta_exenta").length && (
+          <div className="space-y-1 max-h-40 overflow-y-auto">
+            {porTipo("renta_exenta").map((it: any) => (
+              <div key={it.id} className="flex items-center justify-between text-sm border-b py-1 gap-2">
+                <div className="flex-1 min-w-0">
+                  <div className="truncate">{it.concepto}</div>
+                  <div className="text-xs text-muted-foreground">{nombreCatalogo(it.tipoDeduccion)}</div>
+                </div>
+                <span className="shrink-0">{fmt(it.valor)}</span>
+                <Button variant="ghost" size="icon" className="h-6 w-6 text-red-600 shrink-0" onClick={() => eliminarMutation.mutate({ id: it.id })}><Trash2 className="w-3.5 h-3.5" /></Button>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="flex items-center justify-between text-base font-bold text-teal-800 pt-1.5 border-t border-teal-200">
+          <span>Total rentas exentas</span><span>{fmt(totalRentasExentas)}</span>
+        </div>
+        <div className="grid sm:grid-cols-[1fr_1fr_140px_auto] gap-2 items-end pt-1">
+          <div className="space-y-1">
+            <Label className="text-xs">Tipo</Label>
+            <Select value={tipoDeduccion} onValueChange={setTipoDeduccion}>
+              <SelectTrigger className="h-8"><SelectValue placeholder="Selecciona..." /></SelectTrigger>
+              <SelectContent>
+                {catalogoQuery.data?.tipos.filter((t: any) => t.tipoValor === "renta_exenta").map((t: any) => (
+                  <SelectItem key={t.tipo} value={t.tipo}>{t.nombre}{t.topeUVT ? ` (tope ${t.topeUVT} UVT)` : ""}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <Input value={conceptoDeduccion} onChange={(e) => setConceptoDeduccion(e.target.value)} placeholder="Concepto" className="h-8" />
+          <Input value={valorDeduccion} onChange={(e) => setValorDeduccion(e.target.value)} placeholder="Valor" type="number" className="h-8" />
+          <Button size="sm" variant="outline" className="gap-1" onClick={handleAgregarDeduccion} disabled={crearMutation.isPending}>
+            <Plus className="w-3.5 h-3.5" /> Agregar
+          </Button>
+        </div>
+      </div>
+
+      {/* Retenciones Practicadas */}
+      <div className="border-2 border-gray-300 rounded-md p-3 space-y-2 bg-gray-50">
+        <span className="text-sm font-semibold text-gray-800">Retenciones Practicadas</span>
+        {!!porTipo("retencion").length && (
+          <div className="space-y-1 max-h-40 overflow-y-auto">
+            {porTipo("retencion").map((it: any) => (
+              <div key={it.id} className="flex items-center justify-between text-sm border-b py-1 gap-2">
+                <span className="flex-1 min-w-0 truncate">{it.concepto}</span>
+                <span className="shrink-0">{fmt(it.valor)}</span>
+                <Button variant="ghost" size="icon" className="h-6 w-6 text-red-600 shrink-0" onClick={() => eliminarMutation.mutate({ id: it.id })}><Trash2 className="w-3.5 h-3.5" /></Button>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="flex items-center justify-between text-base font-bold text-gray-800 pt-1.5 border-t border-gray-300">
+          <span>Total retenciones de esta cédula</span><span>{fmt(totalRetenciones)}</span>
+        </div>
+        <div className="grid sm:grid-cols-[1fr_140px_auto] gap-2 items-end pt-1">
+          <Input value={conceptoRetencion} onChange={(e) => setConceptoRetencion(e.target.value)} placeholder="Concepto" className="h-8" />
+          <Input value={valorRetencion} onChange={(e) => setValorRetencion(e.target.value)} placeholder="Valor" type="number" className="h-8" />
+          <Button size="sm" variant="outline" className="gap-1" onClick={handleAgregarRetencion} disabled={crearMutation.isPending}>
             <Plus className="w-3.5 h-3.5" /> Agregar
           </Button>
         </div>
@@ -946,7 +1143,7 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId }: { rentaClienteId: 
       <div className={`flex items-center justify-between text-sm font-medium border-t pt-2 ${excedeGlobal ? "text-red-600" : ""}`}>
         <span className="flex items-center gap-1.5">
           {excedeGlobal && <AlertTriangle className="w-3.5 h-3.5" />}
-          Total Cédula General — trabajo + honorarios + capital + no laboral (tope {catalogoQuery.data?.topeGlobalUVT} UVT / {fmt(topeGlobal)})
+          Total Cédula General — deducciones+rentas exentas (tope {catalogoQuery.data?.topeGlobalUVT} UVT / {fmt(topeGlobal)})
         </span>
         <span>{fmt(totalGeneral)}</span>
       </div>
@@ -954,6 +1151,12 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId }: { rentaClienteId: 
         <div className="flex items-center justify-between text-xs text-muted-foreground">
           <span>Total pensiones / dividendos (aparte, no aplica este tope)</span>
           <span>{fmt(totalOtrasCedulas)}</span>
+        </div>
+      )}
+      {totalRetencionesGeneral > 0 && (
+        <div className="flex items-center justify-between text-xs text-muted-foreground">
+          <span>Total retenciones practicadas (todas las cédulas)</span>
+          <span>{fmt(totalRetencionesGeneral)}</span>
         </div>
       )}
 
@@ -1009,11 +1212,19 @@ function Borrador210Card({ rentaClienteId, anioGravable }: { rentaClienteId: num
             <span>Impuesto de renta ({(ultimoResultado.impuestoRenta.tarifaMarginal * 100).toFixed(0)}%)</span>
             <span>{fmt(ultimoResultado.impuestoRenta.impuesto)}</span>
           </div>
-          {ultimoResultado.anticipoEstimado != null && (
-            <div className="flex items-center justify-between text-muted-foreground">
-              <span>Anticipo estimado (referencia)</span><span>{fmt(ultimoResultado.anticipoEstimado)}</span>
+          <div className="flex items-center justify-between text-muted-foreground">
+            <span>Total retenciones practicadas</span><span>{fmt(ultimoResultado.totalRetenciones)}</span>
+          </div>
+          <div className="border-t pt-1.5 space-y-1">
+            <p className="text-xs text-muted-foreground">Anticipo próximo año — dos métodos, elige cuál aplica:</p>
+            <div className="flex items-center justify-between">
+              <span>Método 1 (impuesto actual × 75% − retenciones)</span><span className="font-medium">{fmt(ultimoResultado.anticipoMetodo1)}</span>
             </div>
-          )}
+            <div className="flex items-center justify-between">
+              <span>Método 2 (promedio actual/anterior × 75% − retenciones)</span><span className="font-medium">{fmt(ultimoResultado.anticipoMetodo2)}</span>
+            </div>
+          </div>
+
         </div>
       )}
 
