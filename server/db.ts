@@ -1,7 +1,7 @@
 import { eq, and, desc, asc, like, sql, inArray, gte, lte, or, ne, isNull } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { alias } from "drizzle-orm/mysql-core";
-import { InsertUser, users, clients, InsertClient, taxObligations, InsertTaxObligation, clientObligations, InsertClientObligation, taxDeadlines, InsertTaxDeadline, tasks, InsertTask, taskAttachments, InsertTaskAttachment, deadlineAttachments, InsertDeadlineAttachment, appSettings, InsertAppSetting, dianCalendar, InsertDianCalendar, clientDriveSubfolders, timeEntries, InsertTimeEntry, comments, InsertComment, historyEvents, notifications, workLocationEntries, taskRecurrences, InsertTaskRecurrence, boardPosts, boardAttachments, rentaClientes, InsertRentaCliente, rentaExogena, InsertRentaExogena, rentaExogenaItems, InsertRentaExogenaItem } from "../drizzle/schema";
+import { InsertUser, users, clients, InsertClient, taxObligations, InsertTaxObligation, clientObligations, InsertClientObligation, taxDeadlines, InsertTaxDeadline, tasks, InsertTask, taskAttachments, InsertTaskAttachment, deadlineAttachments, InsertDeadlineAttachment, appSettings, InsertAppSetting, dianCalendar, InsertDianCalendar, clientDriveSubfolders, timeEntries, InsertTimeEntry, comments, InsertComment, historyEvents, notifications, workLocationEntries, taskRecurrences, InsertTaskRecurrence, boardPosts, boardAttachments, rentaClientes, InsertRentaCliente, rentaExogena, InsertRentaExogena, rentaExogenaItems, InsertRentaExogenaItem, rentaDeclaracionAnterior, InsertRentaDeclaracionAnterior, rentaLiquidacionItems, InsertRentaLiquidacionItem, rentaDependientes, InsertRentaDependiente } from "../drizzle/schema";
 import { ENV } from './_core/env';
 import { bogotaTodayUTCMidnight } from "./dateUtils";
 
@@ -2126,6 +2126,103 @@ export async function getExogenaRenta(rentaClienteId: number) {
   const items = await db.select().from(rentaExogenaItems).where(eq(rentaExogenaItems.rentaExogenaId, filas[0].id));
   return { ...filas[0], items };
 }
+
+// ---- Declaración anterior (para el anticipo) ----
+
+export async function getDeclaracionAnterior(rentaClienteId: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const filas = await db.select().from(rentaDeclaracionAnterior).where(eq(rentaDeclaracionAnterior.rentaClienteId, rentaClienteId)).limit(1);
+  return filas[0] || null;
+}
+
+export async function guardarDeclaracionAnterior(rentaClienteId: number, data: Omit<InsertRentaDeclaracionAnterior, "rentaClienteId">) {
+  const db = await getDb();
+  if (!db) return;
+  await db.insert(rentaDeclaracionAnterior)
+    .values({ ...data, rentaClienteId })
+    .onDuplicateKeyUpdate({ set: data });
+}
+
+// ---- Ítems de liquidación (activos/pasivos/ingresos/deducciones/rentas exentas) ----
+
+export async function getLiquidacionItems(rentaClienteId: number, seccion?: string) {
+  const db = await getDb();
+  if (!db) return [];
+  const condiciones = [eq(rentaLiquidacionItems.rentaClienteId, rentaClienteId)];
+  if (seccion) condiciones.push(eq(rentaLiquidacionItems.seccion, seccion as any));
+  return db.select().from(rentaLiquidacionItems).where(and(...condiciones));
+}
+
+export async function crearLiquidacionItem(data: InsertRentaLiquidacionItem): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new Error("Base de datos no disponible");
+  const result = await db.insert(rentaLiquidacionItems).values(data);
+  return Number((result as any).insertId ?? (result as any)[0]?.insertId);
+}
+
+export async function actualizarLiquidacionItem(id: number, data: Partial<InsertRentaLiquidacionItem>) {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(rentaLiquidacionItems).set(data).where(eq(rentaLiquidacionItems.id, id));
+}
+
+export async function eliminarLiquidacionItem(id: number) {
+  const db = await getDb();
+  if (!db) return;
+  await db.delete(rentaLiquidacionItems).where(eq(rentaLiquidacionItems.id, id));
+}
+
+/** Importa como ítems de liquidación los que ya vinieron clasificados en
+ * la exógena para una sección (activo/pasivo/ingreso) — no duplica los que
+ * ya se hayan importado antes (se identifican por exogenaItemId). */
+export async function importarDesdeExogena(rentaClienteId: number, seccion: "activo" | "pasivo" | "ingreso"): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const exogena = await getExogenaRenta(rentaClienteId);
+  if (!exogena) return 0;
+  const categoriaOrigen = seccion === "activo" ? "patrimonio" : seccion === "pasivo" ? "deuda" : "ingreso";
+  const candidatos = exogena.items.filter(it => it.categoria === categoriaOrigen);
+  if (candidatos.length === 0) return 0;
+
+  const yaImportados = await db.select({ exogenaItemId: rentaLiquidacionItems.exogenaItemId }).from(rentaLiquidacionItems)
+    .where(and(eq(rentaLiquidacionItems.rentaClienteId, rentaClienteId), eq(rentaLiquidacionItems.seccion, seccion)));
+  const idsImportados = new Set(yaImportados.map(f => f.exogenaItemId));
+
+  let importados = 0;
+  for (const item of candidatos) {
+    if (idsImportados.has(item.id)) continue;
+    await db.insert(rentaLiquidacionItems).values({
+      rentaClienteId, seccion,
+      concepto: `${item.nombreTercero ? item.nombreTercero + " — " : ""}${item.detalle}`,
+      valor: item.valor, origen: "exogena", exogenaItemId: item.id,
+    });
+    importados++;
+  }
+  return importados;
+}
+
+// ---- Dependientes económicos ----
+
+export async function getDependientes(rentaClienteId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(rentaDependientes).where(eq(rentaDependientes.rentaClienteId, rentaClienteId));
+}
+
+export async function agregarDependiente(rentaClienteId: number, nombre: string): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new Error("Base de datos no disponible");
+  const result = await db.insert(rentaDependientes).values({ rentaClienteId, nombre });
+  return Number((result as any).insertId ?? (result as any)[0]?.insertId);
+}
+
+export async function eliminarDependiente(id: number) {
+  const db = await getDb();
+  if (!db) return;
+  await db.delete(rentaDependientes).where(eq(rentaDependientes.id, id));
+}
+
 
 
 

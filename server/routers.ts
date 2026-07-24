@@ -2069,6 +2069,107 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           };
         }),
     }),
+    declaracionAnterior: router({
+      get: protectedProcedure
+        .input(z.object({ rentaClienteId: z.number() }))
+        .query(async ({ input, ctx }) => {
+          assertInformesAccess(ctx.user.cedula);
+          return db.getDeclaracionAnterior(input.rentaClienteId);
+        }),
+      guardar: protectedProcedure
+        .input(z.object({
+          rentaClienteId: z.number(),
+          patrimonioLiquidoAnioAnterior: z.number().optional(),
+          impuestoNetoAnioAnterior: z.number().optional(),
+          saldoAFavorAnterior: z.number().optional(),
+        }))
+        .mutation(async ({ input, ctx }) => {
+          assertInformesAccess(ctx.user.cedula);
+          const { rentaClienteId, ...data } = input;
+          await db.guardarDeclaracionAnterior(rentaClienteId, data);
+          return { success: true };
+        }),
+    }),
+    liquidacion: router({
+      // Los topes/catálogo de deducciones se exponen para que el frontend
+      // muestre el tope de cada tipo sin duplicar esos números ahí.
+      catalogoTopes: protectedProcedure.query(async ({ ctx }) => {
+        assertInformesAccess(ctx.user.cedula);
+        return { uvt: rentaDb.UVT_2025, tipos: rentaDb.TIPOS_DEDUCCION_RENTA_EXENTA, topeGlobalUVT: rentaDb.TOPES_DEDUCCION_2025.limiteGlobalDeduccionesRentasExentas };
+      }),
+      list: protectedProcedure
+        .input(z.object({ rentaClienteId: z.number(), seccion: z.string().optional() }))
+        .query(async ({ input, ctx }) => {
+          assertInformesAccess(ctx.user.cedula);
+          return db.getLiquidacionItems(input.rentaClienteId, input.seccion);
+        }),
+      crear: protectedProcedure
+        .input(z.object({
+          rentaClienteId: z.number(), seccion: z.enum(["activo", "pasivo", "ingreso", "deduccion", "rentaExenta"]),
+          tipoDeduccion: z.string().optional(), concepto: z.string().min(1), valor: z.number(),
+        }))
+        .mutation(async ({ input, ctx }) => {
+          assertInformesAccess(ctx.user.cedula);
+          let alerta: string | null = null;
+          if (input.tipoDeduccion) {
+            const { excedeTope, tope, topeUVT } = rentaDb.validarTopeDeduccion(input.tipoDeduccion, input.valor);
+            if (excedeTope) {
+              alerta = `El valor supera el tope 2025 de ${topeUVT} UVT ($${tope!.toLocaleString("es-CO")}) para este tipo — revisar antes de continuar.`;
+            }
+          }
+          const id = await db.crearLiquidacionItem({
+            rentaClienteId: input.rentaClienteId, seccion: input.seccion,
+            tipoDeduccion: input.tipoDeduccion || null, concepto: input.concepto, valor: input.valor,
+          });
+          return { id, alerta };
+        }),
+      actualizar: protectedProcedure
+        .input(z.object({ id: z.number(), concepto: z.string().optional(), valor: z.number().optional() }))
+        .mutation(async ({ input, ctx }) => {
+          assertInformesAccess(ctx.user.cedula);
+          const { id, ...data } = input;
+          await db.actualizarLiquidacionItem(id, data);
+          return { success: true };
+        }),
+      eliminar: protectedProcedure
+        .input(z.object({ id: z.number() }))
+        .mutation(async ({ input, ctx }) => {
+          assertInformesAccess(ctx.user.cedula);
+          await db.eliminarLiquidacionItem(input.id);
+          return { success: true };
+        }),
+      // Trae al listado de activos/pasivos/ingresos los ítems ya
+      // clasificados en la exógena que aún no se hayan importado.
+      importarDesdeExogena: protectedProcedure
+        .input(z.object({ rentaClienteId: z.number(), seccion: z.enum(["activo", "pasivo", "ingreso"]) }))
+        .mutation(async ({ input, ctx }) => {
+          assertInformesAccess(ctx.user.cedula);
+          const importados = await db.importarDesdeExogena(input.rentaClienteId, input.seccion);
+          return { importados };
+        }),
+    }),
+    dependientes: router({
+      list: protectedProcedure
+        .input(z.object({ rentaClienteId: z.number() }))
+        .query(async ({ input, ctx }) => {
+          assertInformesAccess(ctx.user.cedula);
+          return db.getDependientes(input.rentaClienteId);
+        }),
+      agregar: protectedProcedure
+        .input(z.object({ rentaClienteId: z.number(), nombre: z.string().min(1) }))
+        .mutation(async ({ input, ctx }) => {
+          assertInformesAccess(ctx.user.cedula);
+          const id = await db.agregarDependiente(input.rentaClienteId, input.nombre);
+          return { id };
+        }),
+      eliminar: protectedProcedure
+        .input(z.object({ id: z.number() }))
+        .mutation(async ({ input, ctx }) => {
+          assertInformesAccess(ctx.user.cedula);
+          await db.eliminarDependiente(input.id);
+          return { success: true };
+        }),
+    }),
   }),
 });
 

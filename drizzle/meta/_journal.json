@@ -176,6 +176,13 @@
       "when": 1784859886849,
       "tag": "0024_renta_exogena",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "5",
+      "when": 1784861653243,
+      "tag": "0025_renta_liquidacion",
+      "breakpoints": true
     }
   ]
 }

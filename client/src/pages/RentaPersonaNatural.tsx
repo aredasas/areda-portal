@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -384,6 +384,13 @@ function LiquidacionTab({ anioGravable }: { anioGravable: number }) {
             </p>
           )}
 
+          <DeclaracionAnteriorCard rentaClienteId={rentaClienteId} />
+          <DependientesCard rentaClienteId={rentaClienteId} />
+          <SeccionItemsCard rentaClienteId={rentaClienteId} seccion="activo" titulo="Activos" puedeImportar />
+          <SeccionItemsCard rentaClienteId={rentaClienteId} seccion="pasivo" titulo="Pasivos" puedeImportar />
+          <SeccionItemsCard rentaClienteId={rentaClienteId} seccion="ingreso" titulo="Ingresos por cédula" puedeImportar />
+          <DeduccionesCard rentaClienteId={rentaClienteId} />
+
           <Card className="border-dashed">
             <CardContent className="py-10 flex flex-col items-center text-center gap-3">
               <div className="flex items-center gap-2 text-muted-foreground">
@@ -392,9 +399,8 @@ function LiquidacionTab({ anioGravable }: { anioGravable: number }) {
               </div>
               <h3 className="font-medium">En construcción</h3>
               <p className="text-sm text-muted-foreground max-w-md">
-                Declaración anterior + impuesto neto 2024 (para el anticipo), detalle de
-                activos/pasivos/ingresos/deducciones/rentas exentas con topes 2025, dependientes económicos,
-                validaciones, y generación del borrador del Formulario 210 con su anexo ejecutivo.
+                Validación del 60% de costos en rentas de trabajo, generación del borrador del
+                Formulario 210 con su anexo ejecutivo, carpeta de Drive para soportes, y finalización.
               </p>
               <Badge variant="outline" className="text-xs">Próxima entrega</Badge>
             </CardContent>
@@ -402,5 +408,303 @@ function LiquidacionTab({ anioGravable }: { anioGravable: number }) {
         </>
       )}
     </div>
+  );
+}
+
+function DeclaracionAnteriorCard({ rentaClienteId }: { rentaClienteId: number }) {
+  const utils = trpc.useUtils();
+  const query = trpc.renta.declaracionAnterior.get.useQuery({ rentaClienteId });
+  const [patrimonio, setPatrimonio] = useState("");
+  const [impuestoNeto, setImpuestoNeto] = useState("");
+  const [saldoAFavor, setSaldoAFavor] = useState("");
+  const [editado, setEditado] = useState(false);
+
+  useEffect(() => {
+    if (query.data && !editado) {
+      setPatrimonio(query.data.patrimonioLiquidoAnioAnterior != null ? String(query.data.patrimonioLiquidoAnioAnterior) : "");
+      setImpuestoNeto(query.data.impuestoNetoAnioAnterior != null ? String(query.data.impuestoNetoAnioAnterior) : "");
+      setSaldoAFavor(query.data.saldoAFavorAnterior != null ? String(query.data.saldoAFavorAnterior) : "");
+    }
+  }, [query.data, editado]);
+
+  const guardarMutation = trpc.renta.declaracionAnterior.guardar.useMutation({
+    onSuccess: () => { toast.success("Guardado"); utils.renta.declaracionAnterior.get.invalidate({ rentaClienteId }); },
+    onError: (err) => toast.error(err.message || "No se pudo guardar"),
+  });
+
+  const handleGuardar = () => {
+    guardarMutation.mutate({
+      rentaClienteId,
+      patrimonioLiquidoAnioAnterior: patrimonio ? Number(patrimonio) : undefined,
+      impuestoNetoAnioAnterior: impuestoNeto ? Number(impuestoNeto) : undefined,
+      saldoAFavorAnterior: saldoAFavor ? Number(saldoAFavor) : undefined,
+    });
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Declaración anterior</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <p className="text-sm text-muted-foreground">
+          El impuesto neto de renta del año anterior es necesario para calcular el nuevo anticipo de renta.
+        </p>
+        <div className="grid sm:grid-cols-3 gap-3">
+          <div className="space-y-1.5">
+            <Label className="text-xs">Patrimonio líquido año anterior</Label>
+            <Input type="number" value={patrimonio} onChange={(e) => { setPatrimonio(e.target.value); setEditado(true); }} />
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs">Impuesto neto de renta año anterior</Label>
+            <Input type="number" value={impuestoNeto} onChange={(e) => { setImpuestoNeto(e.target.value); setEditado(true); }} />
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs">Saldo a favor anterior</Label>
+            <Input type="number" value={saldoAFavor} onChange={(e) => { setSaldoAFavor(e.target.value); setEditado(true); }} />
+          </div>
+        </div>
+        <Button size="sm" onClick={handleGuardar} disabled={guardarMutation.isPending} className="bg-[#EDA011] hover:bg-[#d48f0f] text-white">
+          {guardarMutation.isPending && <Loader2 className="w-3.5 h-3.5 animate-spin mr-2" />}
+          Guardar
+        </Button>
+      </CardContent>
+    </Card>
+  );
+}
+
+function DependientesCard({ rentaClienteId }: { rentaClienteId: number }) {
+  const utils = trpc.useUtils();
+  const query = trpc.renta.dependientes.list.useQuery({ rentaClienteId });
+  const [nombre, setNombre] = useState("");
+
+  const agregarMutation = trpc.renta.dependientes.agregar.useMutation({
+    onSuccess: () => { setNombre(""); utils.renta.dependientes.list.invalidate({ rentaClienteId }); },
+    onError: (err) => toast.error(err.message || "No se pudo agregar"),
+  });
+  const eliminarMutation = trpc.renta.dependientes.eliminar.useMutation({
+    onSuccess: () => utils.renta.dependientes.list.invalidate({ rentaClienteId }),
+  });
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Dependientes económicos ({query.data?.length || 0})</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {!!query.data?.length && (
+          <div className="space-y-1">
+            {query.data.map((d: any) => (
+              <div key={d.id} className="flex items-center justify-between text-sm border-b py-1.5">
+                <span>{d.nombre}</span>
+                <Button variant="ghost" size="icon" className="h-7 w-7 text-red-600" onClick={() => eliminarMutation.mutate({ id: d.id })}>
+                  <Trash2 className="w-3.5 h-3.5" />
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="flex items-center gap-2">
+          <Input
+            value={nombre} onChange={(e) => setNombre(e.target.value)} placeholder="Nombre del dependiente"
+            className="h-8" onKeyDown={(e) => { if (e.key === "Enter" && nombre.trim()) agregarMutation.mutate({ rentaClienteId, nombre: nombre.trim() }); }}
+          />
+          <Button
+            size="sm" variant="outline" className="gap-1"
+            onClick={() => nombre.trim() && agregarMutation.mutate({ rentaClienteId, nombre: nombre.trim() })}
+          >
+            <Plus className="w-3.5 h-3.5" /> Agregar
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function SeccionItemsCard({ rentaClienteId, seccion, titulo, puedeImportar }: {
+  rentaClienteId: number; seccion: string; titulo: string; puedeImportar?: boolean;
+}) {
+  const utils = trpc.useUtils();
+  const query = trpc.renta.liquidacion.list.useQuery({ rentaClienteId, seccion });
+  const [concepto, setConcepto] = useState("");
+  const [valor, setValor] = useState("");
+
+  const crearMutation = trpc.renta.liquidacion.crear.useMutation({
+    onSuccess: () => { setConcepto(""); setValor(""); utils.renta.liquidacion.list.invalidate({ rentaClienteId, seccion }); },
+    onError: (err) => toast.error(err.message || "No se pudo agregar"),
+  });
+  const eliminarMutation = trpc.renta.liquidacion.eliminar.useMutation({
+    onSuccess: () => utils.renta.liquidacion.list.invalidate({ rentaClienteId, seccion }),
+  });
+  const importarMutation = trpc.renta.liquidacion.importarDesdeExogena.useMutation({
+    onSuccess: (data) => {
+      toast.success(data.importados > 0 ? `${data.importados} ítem(s) importado(s) de la exógena` : "No hay ítems nuevos para importar");
+      utils.renta.liquidacion.list.invalidate({ rentaClienteId, seccion });
+    },
+  });
+
+  const total = (query.data || []).reduce((acc: number, it: any) => acc + it.valor, 0);
+  const fmt = (n: number) => `$${n.toLocaleString("es-CO")}`;
+
+  const handleAgregar = () => {
+    if (!concepto.trim() || !valor) return;
+    crearMutation.mutate({ rentaClienteId, seccion: seccion as any, concepto: concepto.trim(), valor: Number(valor) });
+  };
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between space-y-0">
+        <CardTitle className="text-base">{titulo}</CardTitle>
+        {puedeImportar && (
+          <Button
+            size="sm" variant="outline" className="gap-1.5"
+            onClick={() => importarMutation.mutate({ rentaClienteId, seccion: seccion as any })}
+            disabled={importarMutation.isPending}
+          >
+            {importarMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileSpreadsheet className="w-3.5 h-3.5" />}
+            Importar desde exógena
+          </Button>
+        )}
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {!!query.data?.length && (
+          <div className="space-y-1 max-h-56 overflow-y-auto">
+            {query.data.map((it: any) => (
+              <div key={it.id} className="flex items-center justify-between text-sm border-b py-1.5 gap-2">
+                <span className="flex-1 min-w-0 truncate">{it.concepto}</span>
+                {it.origen === "exogena" && <Badge variant="outline" className="text-[10px] shrink-0">Exógena</Badge>}
+                <span className="font-medium shrink-0">{fmt(it.valor)}</span>
+                <Button variant="ghost" size="icon" className="h-7 w-7 text-red-600 shrink-0" onClick={() => eliminarMutation.mutate({ id: it.id })}>
+                  <Trash2 className="w-3.5 h-3.5" />
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="flex items-center justify-between text-sm font-medium border-t pt-2">
+          <span>Total {titulo.toLowerCase()}</span>
+          <span>{fmt(total)}</span>
+        </div>
+        <div className="flex items-center gap-2 pt-2 border-t">
+          <Input value={concepto} onChange={(e) => setConcepto(e.target.value)} placeholder="Concepto" className="h-8 flex-1" />
+          <Input value={valor} onChange={(e) => setValor(e.target.value)} placeholder="Valor" type="number" className="h-8 w-36" />
+          <Button size="sm" variant="outline" className="gap-1" onClick={handleAgregar} disabled={crearMutation.isPending}>
+            <Plus className="w-3.5 h-3.5" /> Agregar
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function DeduccionesCard({ rentaClienteId }: { rentaClienteId: number }) {
+  const utils = trpc.useUtils();
+  const catalogoQuery = trpc.renta.liquidacion.catalogoTopes.useQuery();
+  const deduccionesQuery = trpc.renta.liquidacion.list.useQuery({ rentaClienteId, seccion: "deduccion" });
+  const rentasExentasQuery = trpc.renta.liquidacion.list.useQuery({ rentaClienteId, seccion: "rentaExenta" });
+  const [tipoDeduccion, setTipoDeduccion] = useState("");
+  const [concepto, setConcepto] = useState("");
+  const [valor, setValor] = useState("");
+
+  const crearMutation = trpc.renta.liquidacion.crear.useMutation({
+    onSuccess: (data) => {
+      if (data.alerta) toast.warning(data.alerta);
+      else toast.success("Agregado");
+      setConcepto(""); setValor(""); setTipoDeduccion("");
+      utils.renta.liquidacion.list.invalidate({ rentaClienteId, seccion: "deduccion" });
+      utils.renta.liquidacion.list.invalidate({ rentaClienteId, seccion: "rentaExenta" });
+    },
+    onError: (err) => toast.error(err.message || "No se pudo agregar"),
+  });
+  const eliminarMutation = trpc.renta.liquidacion.eliminar.useMutation({
+    onSuccess: () => {
+      utils.renta.liquidacion.list.invalidate({ rentaClienteId, seccion: "deduccion" });
+      utils.renta.liquidacion.list.invalidate({ rentaClienteId, seccion: "rentaExenta" });
+    },
+  });
+
+  const fmt = (n: number) => `$${n.toLocaleString("es-CO")}`;
+  const todos = [...(deduccionesQuery.data || []), ...(rentasExentasQuery.data || [])];
+  const total = todos.reduce((acc: number, it: any) => acc + it.valor, 0);
+  const topeGlobal = catalogoQuery.data ? catalogoQuery.data.topeGlobalUVT * catalogoQuery.data.uvt : 0;
+  const excedeGlobal = topeGlobal > 0 && total > topeGlobal;
+
+  const handleAgregar = () => {
+    if (!concepto.trim() || !valor || !tipoDeduccion) {
+      toast.error("Selecciona el tipo, y digita concepto y valor");
+      return;
+    }
+    const tipoInfo = catalogoQuery.data?.tipos.find((t: any) => t.tipo === tipoDeduccion);
+    crearMutation.mutate({
+      rentaClienteId, seccion: (tipoInfo?.seccion || "deduccion") as any,
+      tipoDeduccion, concepto: concepto.trim(), valor: Number(valor),
+    });
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Deducciones y Rentas Exentas</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <p className="text-sm text-muted-foreground">
+          Cada tipo se valida contra su tope individual 2025. El total combinado no puede superar{" "}
+          {catalogoQuery.data && `${catalogoQuery.data.topeGlobalUVT} UVT (${fmt(topeGlobal)})`} — o el 40% de la
+          renta líquida, lo que sea menor (verificar una vez estén completos los ingresos).
+        </p>
+
+        {!!todos.length && (
+          <div className="space-y-1 max-h-56 overflow-y-auto">
+            {todos.map((it: any) => (
+              <div key={it.id} className="flex items-center justify-between text-sm border-b py-1.5 gap-2">
+                <div className="flex-1 min-w-0">
+                  <div className="truncate">{it.concepto}</div>
+                  <div className="text-xs text-muted-foreground">
+                    {catalogoQuery.data?.tipos.find((t: any) => t.tipo === it.tipoDeduccion)?.nombre || it.tipoDeduccion}
+                  </div>
+                </div>
+                <span className="font-medium shrink-0">{fmt(it.valor)}</span>
+                <Button variant="ghost" size="icon" className="h-7 w-7 text-red-600 shrink-0" onClick={() => eliminarMutation.mutate({ id: it.id })}>
+                  <Trash2 className="w-3.5 h-3.5" />
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className={`flex items-center justify-between text-sm font-medium border-t pt-2 ${excedeGlobal ? "text-red-600" : ""}`}>
+          <span className="flex items-center gap-1.5">
+            {excedeGlobal && <AlertTriangle className="w-3.5 h-3.5" />}
+            Total deducciones + rentas exentas
+          </span>
+          <span>{fmt(total)}</span>
+        </div>
+
+        <div className="grid sm:grid-cols-[1fr_1fr_140px_auto] gap-2 pt-2 border-t items-end">
+          <div className="space-y-1">
+            <Label className="text-xs">Tipo</Label>
+            <Select value={tipoDeduccion} onValueChange={setTipoDeduccion}>
+              <SelectTrigger className="h-8"><SelectValue placeholder="Selecciona..." /></SelectTrigger>
+              <SelectContent>
+                {catalogoQuery.data?.tipos.map((t: any) => (
+                  <SelectItem key={t.tipo} value={t.tipo}>{t.nombre}{t.topeUVT ? ` (tope ${t.topeUVT} UVT)` : ""}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">Concepto</Label>
+            <Input value={concepto} onChange={(e) => setConcepto(e.target.value)} className="h-8" />
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">Valor</Label>
+            <Input value={valor} onChange={(e) => setValor(e.target.value)} type="number" className="h-8" />
+          </div>
+          <Button size="sm" variant="outline" className="gap-1" onClick={handleAgregar} disabled={crearMutation.isPending}>
+            <Plus className="w-3.5 h-3.5" /> Agregar
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
   );
 }

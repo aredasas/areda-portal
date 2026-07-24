@@ -86,6 +86,50 @@ function esFilaEncabezado(valores: any[]): boolean {
   return texto.includes("NIT") && texto.includes("DETALLE") && texto.includes("VALOR");
 }
 
+/** UVT y topes del año gravable 2025 (Resolución DIAN, UVT = $49.799).
+ * Valores confirmados por varias fuentes tributarias — si cambian para
+ * otro año gravable, este es el único lugar que hay que actualizar. */
+export const UVT_2025 = 49799;
+
+export const TOPES_DEDUCCION_2025 = {
+  ingresos: 1400, // tope de ingresos brutos para obligación de declarar (referencia)
+  patrimonio: 4500,
+  consumoTC: 1400,
+  compras: 1400,
+  rentaExentaLaboral25: 790, // Art. 206 num. 10 E.T. — 25% rentas de trabajo
+  aportesVoluntariosPensionAFC: 3800, // renta exenta, hasta 30% del ingreso
+  saludPrepagada: 192, // 16 UVT/mes
+  dependientes: 384, // 32 UVT/mes, 10% del ingreso
+  interesesVivienda: 1200, // Art. 119 E.T.
+  limiteGlobalDeduccionesRentasExentas: 1340, // 40% de la renta líquida, o este tope, el que sea menor
+};
+
+/** Catálogo de tipos de deducción/renta exenta con su tope individual 2025
+ * — al elegir uno de estos tipos, el valor digitado se valida contra su
+ * propio límite, además del límite global combinado de 1.340 UVT. "Otro"
+ * queda sin tope automático para conceptos que no encajan en el catálogo
+ * (el contador debe verificarlo manualmente). */
+export const TIPOS_DEDUCCION_RENTA_EXENTA: {
+  tipo: string; nombre: string; seccion: "deduccion" | "rentaExenta"; topeUVT: number | null;
+}[] = [
+  { tipo: "renta_exenta_25_laboral", nombre: "25% renta exenta de rentas de trabajo", seccion: "rentaExenta", topeUVT: TOPES_DEDUCCION_2025.rentaExentaLaboral25 },
+  { tipo: "aportes_voluntarios_pension_afc", nombre: "Aportes voluntarios pensión / cuentas AFC", seccion: "rentaExenta", topeUVT: TOPES_DEDUCCION_2025.aportesVoluntariosPensionAFC },
+  { tipo: "salud_prepagada", nombre: "Medicina prepagada / seguros de salud", seccion: "deduccion", topeUVT: TOPES_DEDUCCION_2025.saludPrepagada },
+  { tipo: "dependientes_economicos", nombre: "Dependientes económicos", seccion: "deduccion", topeUVT: TOPES_DEDUCCION_2025.dependientes },
+  { tipo: "intereses_vivienda", nombre: "Intereses de vivienda (crédito hipotecario/leasing)", seccion: "deduccion", topeUVT: TOPES_DEDUCCION_2025.interesesVivienda },
+  { tipo: "otro", nombre: "Otra deducción/renta exenta (verificar manualmente)", seccion: "deduccion", topeUVT: null },
+];
+
+/** Valida un valor digitado contra el tope individual de su tipo de
+ * deducción/renta exenta — no reemplaza el criterio del contador, es una
+ * alerta cuando el valor supera lo permitido por la norma. */
+export function validarTopeDeduccion(tipoDeduccion: string, valor: number): { excedeTope: boolean; tope: number | null; topeUVT: number | null } {
+  const catalogo = TIPOS_DEDUCCION_RENTA_EXENTA.find(t => t.tipo === tipoDeduccion);
+  if (!catalogo || catalogo.topeUVT === null) return { excedeTope: false, tope: null, topeUVT: null };
+  const tope = catalogo.topeUVT * UVT_2025;
+  return { excedeTope: valor > tope, tope, topeUVT: catalogo.topeUVT };
+}
+
 export async function parseExogenaDian(filePathOrBuffer: string | Buffer): Promise<ResultadoExogena> {
   const buffer = Buffer.isBuffer(filePathOrBuffer) ? filePathOrBuffer : require("fs").readFileSync(filePathOrBuffer);
   const wb = XLSX.read(buffer, { type: "buffer", cellDates: false });

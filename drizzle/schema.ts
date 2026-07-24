@@ -654,3 +654,58 @@ export const rentaExogenaItems = mysqlTable("rentaExogenaItems", {
 export type RentaExogenaItem = typeof rentaExogenaItems.$inferSelect;
 export type InsertRentaExogenaItem = typeof rentaExogenaItems.$inferInsert;
 
+/** Datos de la declaración del año anterior — necesarios para el cálculo
+ * del anticipo de renta del año que se está liquidando. Se guardan en una
+ * tabla aparte (no directo en rentaClientes) para no seguir agregando
+ * columnas ahí cada vez que se necesite un dato más de este tipo. */
+export const rentaDeclaracionAnterior = mysqlTable("rentaDeclaracionAnterior", {
+  id: int("id").autoincrement().primaryKey(),
+  rentaClienteId: int("rentaClienteId").notNull(),
+  patrimonioLiquidoAnioAnterior: double("patrimonioLiquidoAnioAnterior"),
+  impuestoNetoAnioAnterior: double("impuestoNetoAnioAnterior"),
+  saldoAFavorAnterior: double("saldoAFavorAnterior"),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (table) => ({
+  rentaClienteIdx: uniqueIndex("rentaDeclaracionAnterior_rentaCliente_idx").on(table.rentaClienteId),
+}));
+export type RentaDeclaracionAnterior = typeof rentaDeclaracionAnterior.$inferSelect;
+export type InsertRentaDeclaracionAnterior = typeof rentaDeclaracionAnterior.$inferInsert;
+
+/** Ítems de la liquidación de un cliente de renta — activos, pasivos,
+ * ingresos por cédula, deducciones, y rentas exentas. Una sola tabla para
+ * las 4 secciones (en vez de 4 tablas separadas), diferenciadas por
+ * `seccion`. `origen` distingue lo importado automáticamente desde la
+ * exógena de lo digitado a mano; `exogenaItemId` conserva la trazabilidad
+ * hacia el ítem original cuando aplica. */
+export const rentaLiquidacionItems = mysqlTable("rentaLiquidacionItems", {
+  id: int("id").autoincrement().primaryKey(),
+  rentaClienteId: int("rentaClienteId").notNull(),
+  seccion: mysqlEnum("seccion", ["activo", "pasivo", "ingreso", "deduccion", "rentaExenta"]).notNull(),
+  /** Para deducciones/rentas exentas: el tipo específico (para poder
+   * validar contra su tope individual 2025) — null para activos, pasivos
+   * e ingresos, que no tienen un catálogo de tipos con tope. */
+  tipoDeduccion: varchar("tipoDeduccion", { length: 60 }),
+  concepto: varchar("concepto", { length: 255 }).notNull(),
+  valor: double("valor").notNull(),
+  origen: mysqlEnum("origen", ["exogena", "manual"]).default("manual").notNull(),
+  exogenaItemId: int("exogenaItemId"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (table) => ({
+  rentaClienteIdx: index("rentaLiquidacionItems_rentaCliente_idx").on(table.rentaClienteId),
+}));
+export type RentaLiquidacionItem = typeof rentaLiquidacionItems.$inferSelect;
+export type InsertRentaLiquidacionItem = typeof rentaLiquidacionItems.$inferInsert;
+
+/** Dependientes económicos del cliente de renta — solo nombre, para el
+ * registro y el anexo ejecutivo (la deducción por dependientes es un
+ * valor fijo si hay al menos uno, no aumenta por cada dependiente
+ * adicional). */
+export const rentaDependientes = mysqlTable("rentaDependientes", {
+  id: int("id").autoincrement().primaryKey(),
+  rentaClienteId: int("rentaClienteId").notNull(),
+  nombre: varchar("nombre", { length: 255 }).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+export type RentaDependiente = typeof rentaDependientes.$inferSelect;
+export type InsertRentaDependiente = typeof rentaDependientes.$inferInsert;
+
