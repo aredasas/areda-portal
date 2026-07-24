@@ -94,12 +94,13 @@ function esFilaEncabezado(valores: any[]): boolean {
  * rentas exentas (1.340 UVT) solo aplica dentro de la Cédula General
  * (trabajo/capital/no_laboral); pensiones y dividendos tienen su propio
  * tratamiento y no se mezclan en ese límite. */
-export const CEDULAS: { valor: string; nombre: string; esGeneral: boolean }[] = [
-  { valor: "trabajo", nombre: "General — Rentas de trabajo", esGeneral: true },
-  { valor: "capital", nombre: "General — Rentas de capital", esGeneral: true },
-  { valor: "no_laboral", nombre: "General — Rentas no laborales", esGeneral: true },
-  { valor: "pensiones", nombre: "Cédula de Pensiones", esGeneral: false },
-  { valor: "dividendos", nombre: "Cédula de Dividendos y Participaciones", esGeneral: false },
+export const CEDULAS: { valor: string; nombre: string; esGeneral: boolean; tieneCostos: boolean }[] = [
+  { valor: "trabajo", nombre: "General — Rentas de trabajo (relación laboral)", esGeneral: true, tieneCostos: false },
+  { valor: "trabajo_honorarios", nombre: "General — Rentas de trabajo por honorarios/compensación (sin relación laboral)", esGeneral: true, tieneCostos: true },
+  { valor: "capital", nombre: "General — Rentas de capital", esGeneral: true, tieneCostos: true },
+  { valor: "no_laboral", nombre: "General — Rentas no laborales", esGeneral: true, tieneCostos: true },
+  { valor: "pensiones", nombre: "Cédula de Pensiones", esGeneral: false, tieneCostos: false },
+  { valor: "dividendos", nombre: "Cédula de Dividendos y Participaciones", esGeneral: false, tieneCostos: false },
 ];
 
 export function esCedulaGeneral(cedula: string | null | undefined): boolean {
@@ -156,14 +157,14 @@ export const TOPES_DEDUCCION_2025 = {
  * queda sin tope automático para conceptos que no encajan en el catálogo
  * (el contador debe verificarlo manualmente). */
 export const TIPOS_DEDUCCION_RENTA_EXENTA: {
-  tipo: string; nombre: string; seccion: "deduccion" | "rentaExenta"; topeUVT: number | null;
+  tipo: string; nombre: string; tipoValor: "deduccion" | "renta_exenta"; topeUVT: number | null;
 }[] = [
-  { tipo: "renta_exenta_25_laboral", nombre: "25% renta exenta de rentas de trabajo", seccion: "rentaExenta", topeUVT: TOPES_DEDUCCION_2025.rentaExentaLaboral25 },
-  { tipo: "aportes_voluntarios_pension_afc", nombre: "Aportes voluntarios pensión / cuentas AFC", seccion: "rentaExenta", topeUVT: TOPES_DEDUCCION_2025.aportesVoluntariosPensionAFC },
-  { tipo: "salud_prepagada", nombre: "Medicina prepagada / seguros de salud", seccion: "deduccion", topeUVT: TOPES_DEDUCCION_2025.saludPrepagada },
-  { tipo: "dependientes_economicos", nombre: "Dependientes económicos", seccion: "deduccion", topeUVT: TOPES_DEDUCCION_2025.dependientes },
-  { tipo: "intereses_vivienda", nombre: "Intereses de vivienda (crédito hipotecario/leasing)", seccion: "deduccion", topeUVT: TOPES_DEDUCCION_2025.interesesVivienda },
-  { tipo: "otro", nombre: "Otra deducción/renta exenta (verificar manualmente)", seccion: "deduccion", topeUVT: null },
+  { tipo: "renta_exenta_25_laboral", nombre: "25% renta exenta de rentas de trabajo", tipoValor: "renta_exenta", topeUVT: TOPES_DEDUCCION_2025.rentaExentaLaboral25 },
+  { tipo: "aportes_voluntarios_pension_afc", nombre: "Aportes voluntarios pensión / cuentas AFC", tipoValor: "renta_exenta", topeUVT: TOPES_DEDUCCION_2025.aportesVoluntariosPensionAFC },
+  { tipo: "salud_prepagada", nombre: "Medicina prepagada / seguros de salud", tipoValor: "deduccion", topeUVT: TOPES_DEDUCCION_2025.saludPrepagada },
+  { tipo: "dependientes_economicos", nombre: "Dependientes económicos", tipoValor: "deduccion", topeUVT: TOPES_DEDUCCION_2025.dependientes },
+  { tipo: "intereses_vivienda", nombre: "Intereses de vivienda (crédito hipotecario/leasing)", tipoValor: "deduccion", topeUVT: TOPES_DEDUCCION_2025.interesesVivienda },
+  { tipo: "otro", nombre: "Otra deducción/renta exenta (verificar manualmente)", tipoValor: "deduccion", topeUVT: null },
 ];
 
 /** Valida un valor digitado contra el tope individual de su tipo de
@@ -176,26 +177,73 @@ export function validarTopeDeduccion(tipoDeduccion: string, valor: number): { ex
   return { excedeTope: valor > tope, tope, topeUVT: catalogo.topeUVT };
 }
 
+export type ItemValor = { concepto: string; valor: number; tipoDeduccion?: string | null };
+
+/** Los datos crudos de UNA de las 4 sub-rentas de la Cédula General, o de
+ * Pensiones/Dividendos — cada casilla del Formulario 210 corresponde a uno
+ * de estos 5 tipos de valor. */
+export type DatosCedula = {
+  ingresoBruto: ItemValor[];
+  ingresoNoConstitutivo: ItemValor[];
+  /** Solo aplica a trabajo_honorarios/capital/no_laboral — "trabajo" (con
+   * relación laboral) no tiene costos, es renta líquida = ingreso bruto -
+   * no constitutivo directamente. */
+  costoDeduccionProcedente: ItemValor[];
+  rentaExenta: ItemValor[];
+  deduccion: ItemValor[];
+};
+
+function sumaItems(items: ItemValor[]): number {
+  return items.reduce((a, it) => a + it.valor, 0);
+}
+
 export type DatosLiquidacion = {
   activos: { concepto: string; valor: number }[];
   pasivos: { concepto: string; valor: number }[];
-  ingresosPorCedula: Record<string, { concepto: string; valor: number }[]>;
-  deduccionesRentasExentasPorCedula: Record<string, { concepto: string; valor: number; tipoDeduccion: string | null }[]>;
+  cedulas: Record<string, DatosCedula>; // trabajo, trabajo_honorarios, capital, no_laboral, pensiones, dividendos
   patrimonioLiquidoAnioAnterior: number | null;
   impuestoNetoAnioAnterior: number | null;
   saldoAFavorAnterior: number | null;
 };
 
+/** Numeración oficial de las casillas principales del Formulario 210
+ * (Resolución 000044 de 2024, modificada por la 000120 de 2024 — vigente
+ * para AG2023 y siguientes), confirmada directamente contra el
+ * instructivo publicado por la DIAN. Se usa para que el borrador muestre
+ * el número real de casilla junto a cada valor, no una numeración
+ * inventada. */
+export const CASILLAS_210 = {
+  patrimonioBruto: 29, deudas: 30, patrimonioLiquido: 31,
+  trabajo: { ingresoBruto: 32, incrngo: 33, rentaLiquida: 34, rentaExentaAportes: 35, rentaExentaOtras: 36, totalRentaExenta: 37, deduccionVivienda: 38, deduccionOtras: 39, totalDeduccion: 40, limitadas: 41, rentaLiquidaOrdinaria: 42 },
+  trabajoHonorarios: { ingresoBruto: 43, incrngo: 44, costos: 45, rentaLiquida: 46, rentaExentaAportes: 47, rentaExentaOtras: 48, totalRentaExenta: 49, deduccionVivienda: 50, deduccionOtras: 51, totalDeduccion: 52, limitadas: 53, rentaLiquidaOrdinaria: 54 },
+  capital: { ingresoBruto: 58, incrngo: 59, costos: 60, rentaLiquida: 61, rentaExentaAportes: 63, rentaExentaOtras: 64, totalRentaExenta: 65, deduccionVivienda: 66, deduccionOtras: 67, totalDeduccion: 68, limitadas: 69, rentaLiquidaOrdinaria: 70 },
+  noLaboral: { ingresoBruto: 74, incrngo: 76, costos: 77, rentaLiquida: 78, rentaExentaAportes: 80, rentaExentaOtras: 81, totalRentaExenta: 82, deduccionVivienda: 83, deduccionOtras: 84, totalDeduccion: 85, limitadas: 86, rentaLiquidaOrdinaria: 87 },
+  rentaLiquidaCedulaGeneral: 88,
+  pensiones: { ingresoBruto: 99, incrngo: 100, rentaLiquida: 101, rentaExenta: 102, rentaLiquidaGravable: 103 },
+  dividendos: { ingresoBruto: 106 }, // tarifa especial Art. 242, no se suma al 241 — solo referencia
+  rentaLiquidaGravableTotal: 111, impuesto: 116, totalImpuestoACargo: 130,
+  saldoAFavorAnterior: 132, anticipoAnioAnterior: 131, anticipoProximoAnio: 134,
+  totalSaldoAPagar: 137, totalSaldoAFavor: 138,
+} as const;
+
+const SUBRENTAS_GENERAL = ["trabajo", "trabajo_honorarios", "capital", "no_laboral"] as const;
+
+export type ResultadoSubRenta = {
+  ingresoBruto: number; ingresoNoConstitutivo: number; costoDeduccionProcedente: number;
+  rentaLiquida: number; rentaExentaDisponible: number; deduccionDisponible: number;
+  rentaExentaDeduccionAsignada: number; rentaLiquidaOrdinaria: number;
+};
+
 export type ResultadoLiquidacion = {
-  patrimonioBruto: number;
-  deudas: number;
-  patrimonioLiquido: number;
-  ingresosPorCedula: Record<string, number>;
-  totalDeduccionesRentasExentasPorCedula: Record<string, number>;
-  totalDeduccionesRentasExentasGeneral: number;
-  totalDeduccionesRentasExentasGeneralCapeado: number;
+  patrimonioBruto: number; deudas: number; patrimonioLiquido: number;
+  subRentas: Record<string, ResultadoSubRenta>; // trabajo, trabajo_honorarios, capital, no_laboral
+  baseCalculoLimite: number;
+  limite40PorcientoOMil340UVT: number;
+  totalDisponibleGeneral: number;
+  valorDistribuido: number;
   rentaLiquidaCedulaGeneral: number;
-  rentaLiquidaPensiones: number;
+  ingresoBrutoPensiones: number; rentaLiquidaPensiones: number; rentaExentaPensiones: number; rentaLiquidaGravablePensiones: number;
+  ingresoBrutoDividendos: number;
   rentaLiquidaGravableTotal: number;
   impuestoRenta: { impuesto: number; tarifaMarginal: number; rangoUVT: string };
   patrimonioLiquidoAnioAnterior: number | null;
@@ -204,44 +252,78 @@ export type ResultadoLiquidacion = {
   anticipoEstimado: number | null;
 };
 
-const CEDULAS_GENERAL_CALC = ["trabajo", "capital", "no_laboral"];
-
-/** Reúne los totales de activos/pasivos/ingresos/deducciones ya obtenidos
- * de la base de datos y calcula la liquidación — patrimonio líquido,
- * renta líquida gravable por cédula (con el tope de deducciones/rentas
- * exentas de 1.340 UVT aplicado solo a la Cédula General), el impuesto
- * según la tabla del Art. 241, y un anticipo estimado (fórmula simple de
- * referencia — el Art. 807 tiene reglas adicionales según si es la
- * primera declaración o hubo cambios grandes en el impuesto, que el
- * contador debe verificar antes de usar esta cifra como definitiva). */
+/** Reúne los datos crudos por cédula (ya obtenidos de la base de datos) y
+ * calcula la liquidación completa — replica el algoritmo real que el
+ * instructivo del Formulario 210 describe para repartir el tope de
+ * rentas exentas + deducciones (40% de la base, limitado a 1.340 UVT)
+ * entre las 4 sub-rentas de la Cédula General, en el orden que indica la
+ * DIAN: primero trabajo, luego trabajo por honorarios, después capital, y
+ * por último no laboral — hasta agotar el valor disponible.
+ *
+ * Simplificaciones conscientes (documentadas también en el borrador):
+ * no se manejan pérdidas ni compensaciones de pérdidas de años anteriores
+ * por cédula, ni las rentas exentas/ECE que quedan fuera del límite del
+ * 40% por convenios de doble tributación — casos especiales que el
+ * contador debe ajustar manualmente si aplican. */
 export function armarLiquidacion(datos: DatosLiquidacion): ResultadoLiquidacion {
   const patrimonioBruto = datos.activos.reduce((a, it) => a + it.valor, 0);
   const deudas = datos.pasivos.reduce((a, it) => a + it.valor, 0);
   const patrimonioLiquido = Math.max(0, patrimonioBruto - deudas);
 
-  const ingresosPorCedula: Record<string, number> = {};
-  for (const [cedula, items] of Object.entries(datos.ingresosPorCedula)) {
-    ingresosPorCedula[cedula] = items.reduce((a, it) => a + it.valor, 0);
+  const vacio: DatosCedula = { ingresoBruto: [], ingresoNoConstitutivo: [], costoDeduccionProcedente: [], rentaExenta: [], deduccion: [] };
+  const subRentasBase: Record<string, ResultadoSubRenta> = {};
+  for (const nombre of SUBRENTAS_GENERAL) {
+    const c = datos.cedulas[nombre] || vacio;
+    const ingresoBruto = sumaItems(c.ingresoBruto);
+    const ingresoNoConstitutivo = sumaItems(c.ingresoNoConstitutivo);
+    const costoDeduccionProcedente = nombre === "trabajo" ? 0 : sumaItems(c.costoDeduccionProcedente);
+    const rentaLiquida = Math.max(0, ingresoBruto - ingresoNoConstitutivo - costoDeduccionProcedente);
+    const rentaExentaDisponible = sumaItems(c.rentaExenta);
+    const deduccionDisponible = sumaItems(c.deduccion);
+    subRentasBase[nombre] = {
+      ingresoBruto, ingresoNoConstitutivo, costoDeduccionProcedente, rentaLiquida,
+      rentaExentaDisponible, deduccionDisponible, rentaExentaDeduccionAsignada: 0, rentaLiquidaOrdinaria: rentaLiquida,
+    };
   }
 
-  const totalDeduccionesRentasExentasPorCedula: Record<string, number> = {};
-  for (const [cedula, items] of Object.entries(datos.deduccionesRentasExentasPorCedula)) {
-    totalDeduccionesRentasExentasPorCedula[cedula] = items.reduce((a, it) => a + it.valor, 0);
+  // Base para el límite del 40%/1.340 UVT: suma de ingresos brutos menos
+  // ingresos no constitutivos de las 4 sub-rentas (el instructivo no resta
+  // costos en este paso — solo se restan al calcular la renta líquida de
+  // cada sub-renta por separado).
+  const baseCalculoLimite = SUBRENTAS_GENERAL.reduce(
+    (a, n) => a + subRentasBase[n].ingresoBruto - subRentasBase[n].ingresoNoConstitutivo, 0,
+  );
+  const topeUVT = TOPES_DEDUCCION_2025.limiteGlobalDeduccionesRentasExentas * UVT_2025;
+  const limite40PorcientoOMil340UVT = Math.min(baseCalculoLimite * 0.4, topeUVT);
+  const totalDisponibleGeneral = SUBRENTAS_GENERAL.reduce(
+    (a, n) => a + subRentasBase[n].rentaExentaDisponible + subRentasBase[n].deduccionDisponible, 0,
+  );
+  const valorDistribuido = Math.min(limite40PorcientoOMil340UVT, totalDisponibleGeneral);
+
+  // Reparto en el orden oficial: trabajo → trabajo_honorarios → capital → no_laboral.
+  let restante = valorDistribuido;
+  for (const nombre of SUBRENTAS_GENERAL) {
+    const sr = subRentasBase[nombre];
+    const topeIndividual = Math.min(sr.rentaLiquida, sr.rentaExentaDisponible + sr.deduccionDisponible);
+    const asignado = Math.max(0, Math.min(restante, topeIndividual));
+    sr.rentaExentaDeduccionAsignada = asignado;
+    sr.rentaLiquidaOrdinaria = Math.max(0, sr.rentaLiquida - asignado);
+    restante -= asignado;
   }
 
-  const totalDeduccionesRentasExentasGeneral = CEDULAS_GENERAL_CALC
-    .reduce((a, c) => a + (totalDeduccionesRentasExentasPorCedula[c] || 0), 0);
-  const topeGlobal = TOPES_DEDUCCION_2025.limiteGlobalDeduccionesRentasExentas * UVT_2025;
-  const totalDeduccionesRentasExentasGeneralCapeado = Math.min(totalDeduccionesRentasExentasGeneral, topeGlobal);
+  const rentaLiquidaCedulaGeneral = SUBRENTAS_GENERAL.reduce((a, n) => a + subRentasBase[n].rentaLiquidaOrdinaria, 0);
 
-  const ingresosGeneral = CEDULAS_GENERAL_CALC.reduce((a, c) => a + (ingresosPorCedula[c] || 0), 0);
-  const rentaLiquidaCedulaGeneral = Math.max(0, ingresosGeneral - totalDeduccionesRentasExentasGeneralCapeado);
+  const cPensiones = datos.cedulas["pensiones"] || vacio;
+  const ingresoBrutoPensiones = sumaItems(cPensiones.ingresoBruto);
+  const incrngoPensiones = sumaItems(cPensiones.ingresoNoConstitutivo);
+  const rentaLiquidaPensiones = Math.max(0, ingresoBrutoPensiones - incrngoPensiones);
+  const rentaExentaPensiones = sumaItems(cPensiones.rentaExenta);
+  const rentaLiquidaGravablePensiones = Math.max(0, rentaLiquidaPensiones - rentaExentaPensiones);
 
-  const ingresosPensiones = ingresosPorCedula["pensiones"] || 0;
-  const rentasExentasPensiones = totalDeduccionesRentasExentasPorCedula["pensiones"] || 0;
-  const rentaLiquidaPensiones = Math.max(0, ingresosPensiones - rentasExentasPensiones);
+  const cDividendos = datos.cedulas["dividendos"] || vacio;
+  const ingresoBrutoDividendos = sumaItems(cDividendos.ingresoBruto);
 
-  const rentaLiquidaGravableTotal = rentaLiquidaCedulaGeneral + rentaLiquidaPensiones;
+  const rentaLiquidaGravableTotal = rentaLiquidaCedulaGeneral + rentaLiquidaGravablePensiones;
   const impuestoRenta = calcularImpuestoRenta(rentaLiquidaGravableTotal);
 
   let anticipoEstimado: number | null = null;
@@ -250,9 +332,12 @@ export function armarLiquidacion(datos: DatosLiquidacion): ResultadoLiquidacion 
   }
 
   return {
-    patrimonioBruto, deudas, patrimonioLiquido, ingresosPorCedula,
-    totalDeduccionesRentasExentasPorCedula, totalDeduccionesRentasExentasGeneral, totalDeduccionesRentasExentasGeneralCapeado,
-    rentaLiquidaCedulaGeneral, rentaLiquidaPensiones, rentaLiquidaGravableTotal, impuestoRenta,
+    patrimonioBruto, deudas, patrimonioLiquido, subRentas: subRentasBase,
+    baseCalculoLimite, limite40PorcientoOMil340UVT, totalDisponibleGeneral, valorDistribuido,
+    rentaLiquidaCedulaGeneral,
+    ingresoBrutoPensiones, rentaLiquidaPensiones, rentaExentaPensiones, rentaLiquidaGravablePensiones,
+    ingresoBrutoDividendos,
+    rentaLiquidaGravableTotal, impuestoRenta,
     patrimonioLiquidoAnioAnterior: datos.patrimonioLiquidoAnioAnterior ?? null,
     impuestoNetoAnioAnterior: datos.impuestoNetoAnioAnterior ?? null,
     saldoAFavorAnterior: datos.saldoAFavorAnterior ?? null,
@@ -354,90 +439,131 @@ const FONT_BOLD = { name: "Arial", size: 10, bold: true };
 const MONEY = '$#,##0;($#,##0);"-"';
 const HEADER_FILL: ExcelJS.Fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF42302E" } };
 const HEADER_FONT = { name: "Arial", size: 10, bold: true, color: { argb: "FFFFFFFF" } };
+
+function estilarEncabezadoRenta(row: ExcelJS.Row) {
+  row.eachCell(c => { c.font = HEADER_FONT as any; c.fill = HEADER_FILL; });
+}
 const NOTA_FILL: ExcelJS.Fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFDF2D0" } };
 
 const NOMBRE_CEDULA: Record<string, string> = {
-  trabajo: "Rentas de trabajo", capital: "Rentas de capital", no_laboral: "Rentas no laborales",
+  trabajo: "Rentas de trabajo", trabajo_honorarios: "Rentas de trabajo por honorarios/compensación (sin relación laboral)",
+  capital: "Rentas de capital", no_laboral: "Rentas no laborales",
   pensiones: "Pensiones", dividendos: "Dividendos y participaciones",
 };
 
-/** Genera el Excel del borrador del Formulario 210 con la liquidación
- * calculada — no es la representación gráfica exacta del formulario
- * oficial, es un resumen ejecutivo de los renglones principales y el
- * cálculo del impuesto, para revisión antes de digitarlo en el portal
- * de la DIAN. */
+/** Escribe una fila "casilla — etiqueta — valor", con la casilla en su
+ * propia columna para que se vea como el formulario real. */
+function filaCasilla(ws: ExcelJS.Worksheet, casilla: number | string, etiqueta: string, valor: number | string, negrita = false) {
+  const r = ws.addRow([casilla, etiqueta, valor]);
+  r.getCell(1).font = { name: "Arial", size: 9, bold: true, color: { argb: "FF888888" } } as any;
+  r.getCell(1).alignment = { horizontal: "center" };
+  if (negrita) { r.getCell(2).font = FONT_BOLD as any; r.getCell(3).font = FONT_BOLD as any; }
+  return r;
+}
+
+/** Genera el Excel del borrador del Formulario 210 — representación
+ * gráfica con la numeración REAL de casillas del formulario oficial
+ * (Resolución 000044/000120 de 2024, confirmada contra el instructivo de
+ * la DIAN), organizada por secciones tal como aparece en el formulario:
+ * Patrimonio → Cédula General (4 sub-rentas, en el mismo orden de reparto
+ * que usa el servicio de diligenciamiento de la DIAN) → Pensiones →
+ * Dividendos (referencia) → Liquidación del impuesto.
+ *
+ * No reemplaza la revisión profesional ni el diligenciamiento real en el
+ * portal de la DIAN — es un apoyo para tenerlo prediligenciado y
+ * revisado antes de pasarlo al formulario oficial. */
 export async function generarBorrador210(
   resultado: ResultadoLiquidacion, clienteNombre: string, clienteCedula: string, anioGravable: number,
 ): Promise<Buffer> {
   const wb = new ExcelJS.Workbook();
   wb.creator = "Areda Work · Renta Persona Natural";
-  const fmt = (n: number) => n;
 
   const ws = wb.addWorksheet("Borrador 210");
   ws.addRow([`BORRADOR FORMULARIO 210 · ${clienteNombre} (${clienteCedula}) · Año gravable ${anioGravable}`]).font = FONT_TITLE as any;
   ws.addRow([
-    "Este es un resumen de apoyo con los renglones principales y el cálculo del impuesto — no reemplaza la",
-    "revisión profesional ni es la representación gráfica exacta del formulario oficial de la DIAN.",
+    "Numeración real de casillas del Formulario 210 (Res. 000044/000120 de 2024) — apoyo para revisión, no reemplaza",
+    "el diligenciamiento oficial ni el criterio profesional. No incluye pérdidas/compensaciones de años anteriores por cédula.",
   ]);
   ws.getRow(2).font = { name: "Arial", size: 9, italic: true } as any;
   ws.addRow([]);
+  const hCasilla = ws.addRow(["Casilla", "Concepto", "Valor"]);
+  estilarEncabezadoRenta(hCasilla);
 
-  ws.addRow(["PATRIMONIO"]).font = FONT_BOLD as any;
-  ws.addRow(["Patrimonio bruto (activos)", fmt(resultado.patrimonioBruto)]);
-  ws.addRow(["Deudas (pasivos)", fmt(resultado.deudas)]);
-  const rPL = ws.addRow(["Patrimonio líquido", fmt(resultado.patrimonioLiquido)]);
-  rPL.font = FONT_BOLD as any;
-  ws.addRow(["Patrimonio líquido año anterior (referencia)", resultado.patrimonioLiquidoAnioAnterior ?? "—"]);
+  ws.addRow(["SECCIÓN PATRIMONIO"]).font = FONT_BOLD as any;
+  filaCasilla(ws, CASILLAS_210.patrimonioBruto, "Total patrimonio bruto", resultado.patrimonioBruto);
+  filaCasilla(ws, CASILLAS_210.deudas, "Deudas", resultado.deudas);
+  filaCasilla(ws, CASILLAS_210.patrimonioLiquido, "Total patrimonio líquido (29 - 30)", resultado.patrimonioLiquido, true);
   ws.addRow([]);
 
-  ws.addRow(["INGRESOS POR CÉDULA"]).font = FONT_BOLD as any;
-  for (const [cedula, nombre] of Object.entries(NOMBRE_CEDULA)) {
-    ws.addRow([nombre, fmt(resultado.ingresosPorCedula[cedula] || 0)]);
+  ws.addRow(["CÉDULA GENERAL"]).font = FONT_BOLD as any;
+  const SUBRENTA_CASILLAS: { key: string; c: typeof CASILLAS_210.trabajo; titulo: string }[] = [
+    { key: "trabajo", c: CASILLAS_210.trabajo, titulo: "Rentas de trabajo" },
+    { key: "trabajo_honorarios", c: CASILLAS_210.trabajoHonorarios as any, titulo: "Rentas de trabajo por honorarios/compensación (sin relación laboral)" },
+    { key: "capital", c: CASILLAS_210.capital as any, titulo: "Rentas de capital" },
+    { key: "no_laboral", c: CASILLAS_210.noLaboral as any, titulo: "Rentas no laborales" },
+  ];
+  for (const { key, c, titulo } of SUBRENTA_CASILLAS) {
+    const sr = resultado.subRentas[key];
+    ws.addRow([titulo]).font = { name: "Arial", size: 10, bold: true, italic: true } as any;
+    filaCasilla(ws, c.ingresoBruto, "Ingresos brutos", sr.ingresoBruto);
+    filaCasilla(ws, c.incrngo, "Ingresos no constitutivos de renta", sr.ingresoNoConstitutivo);
+    if ("costos" in c) filaCasilla(ws, (c as any).costos, "Costos y deducciones procedentes", sr.costoDeduccionProcedente);
+    filaCasilla(ws, c.rentaLiquida, "Renta líquida", sr.rentaLiquida);
+    filaCasilla(ws, c.totalRentaExenta, "Total rentas exentas disponibles", sr.rentaExentaDisponible);
+    filaCasilla(ws, c.totalDeduccion, "Total deducciones imputables disponibles", sr.deduccionDisponible);
+    filaCasilla(ws, c.limitadas, "Rentas exentas y/o deducciones (Limitadas)", sr.rentaExentaDeduccionAsignada);
+    filaCasilla(ws, c.rentaLiquidaOrdinaria, "Renta líquida ordinaria", sr.rentaLiquidaOrdinaria, true);
   }
   ws.addRow([]);
-
-  ws.addRow(["DEDUCCIONES Y RENTAS EXENTAS POR CÉDULA"]).font = FONT_BOLD as any;
-  for (const [cedula, nombre] of Object.entries(NOMBRE_CEDULA)) {
-    ws.addRow([nombre, fmt(resultado.totalDeduccionesRentasExentasPorCedula[cedula] || 0)]);
-  }
-  ws.addRow(["Total Cédula General (trabajo + capital + no laboral)", fmt(resultado.totalDeduccionesRentasExentasGeneral)]);
-  const rCap = ws.addRow(["  → Limitado al tope de 1.340 UVT", fmt(resultado.totalDeduccionesRentasExentasGeneralCapeado)]);
-  if (resultado.totalDeduccionesRentasExentasGeneral > resultado.totalDeduccionesRentasExentasGeneralCapeado) {
-    rCap.font = { name: "Arial", size: 10, bold: true, color: { argb: "FFCC0000" } } as any;
-  }
-  ws.addRow([]);
-
-  ws.addRow(["RENTA LÍQUIDA GRAVABLE E IMPUESTO"]).font = FONT_BOLD as any;
-  ws.addRow(["Renta líquida gravable — Cédula General", fmt(resultado.rentaLiquidaCedulaGeneral)]);
-  ws.addRow(["Renta líquida gravable — Pensiones", fmt(resultado.rentaLiquidaPensiones)]);
-  const rTotal = ws.addRow(["Renta líquida gravable total", fmt(resultado.rentaLiquidaGravableTotal)]);
-  rTotal.font = FONT_BOLD as any;
   ws.addRow([
-    `Tarifa marginal aplicada (Art. 241 E.T.): ${(resultado.impuestoRenta.tarifaMarginal * 100).toFixed(0)}% — rango ${resultado.impuestoRenta.rangoUVT}`,
-  ]).font = { name: "Arial", size: 9, italic: true } as any;
-  const rImpuesto = ws.addRow(["IMPUESTO DE RENTA", fmt(resultado.impuestoRenta.impuesto)]);
-  rImpuesto.font = { name: "Arial", size: 11, bold: true } as any;
+    "Cálculo del límite de rentas exentas + deducciones (Cédula General): 40% de la base (ingresos brutos menos ingresos",
+    "no constitutivos de las 4 sub-rentas) limitado a 1.340 UVT — repartido en el orden oficial: trabajo, honorarios, capital, no laboral.",
+  ]).eachCell(c => { c.fill = NOTA_FILL; c.font = { name: "Arial", size: 9 } as any; });
+  ws.addRow(["Base para el cálculo del límite", resultado.baseCalculoLimite]);
+  ws.addRow(["Límite (40% o 1.340 UVT, el menor)", resultado.limite40PorcientoOMil340UVT]);
+  ws.addRow(["Total disponible (rentas exentas + deducciones de las 4 sub-rentas)", resultado.totalDisponibleGeneral]);
+  ws.addRow(["Valor efectivamente repartido", resultado.valorDistribuido]);
+  const rCG = filaCasilla(ws, CASILLAS_210.rentaLiquidaCedulaGeneral, "Renta líquida gravable Cédula General", resultado.rentaLiquidaCedulaGeneral, true);
+  rCG.font = { name: "Arial", size: 11, bold: true } as any;
   ws.addRow([]);
 
+  ws.addRow(["CÉDULA DE PENSIONES"]).font = FONT_BOLD as any;
+  filaCasilla(ws, CASILLAS_210.pensiones.ingresoBruto, "Ingresos brutos por rentas de pensiones", resultado.ingresoBrutoPensiones);
+  filaCasilla(ws, CASILLAS_210.pensiones.rentaLiquida, "Renta líquida", resultado.rentaLiquidaPensiones);
+  filaCasilla(ws, CASILLAS_210.pensiones.rentaExenta, "Rentas exentas de pensiones", resultado.rentaExentaPensiones);
+  filaCasilla(ws, CASILLAS_210.pensiones.rentaLiquidaGravable, "Renta líquida gravable cédula de pensiones", resultado.rentaLiquidaGravablePensiones, true);
+  ws.addRow([]);
+
+  ws.addRow(["CÉDULA DE DIVIDENDOS Y PARTICIPACIONES (referencia)"]).font = FONT_BOLD as any;
+  filaCasilla(ws, CASILLAS_210.dividendos.ingresoBruto, "Dividendos y participaciones", resultado.ingresoBrutoDividendos);
   ws.addRow([
-    "Nota: los dividendos y participaciones (si aplica) tienen tarifa especial propia (Art. 242 E.T.), no se suman a",
-    "esta renta líquida gravable general — verificar aparte.",
+    "Los dividendos tienen tarifa especial propia (Art. 242 E.T.) — no se suman a la renta líquida gravable general,",
+    "se liquidan aparte. Verificar el cálculo específico de este impuesto.",
   ]).eachCell(c => { c.fill = NOTA_FILL; c.font = { name: "Arial", size: 9 } as any; });
   ws.addRow([]);
 
+  ws.addRow(["LIQUIDACIÓN DEL IMPUESTO"]).font = FONT_BOLD as any;
+  filaCasilla(ws, CASILLAS_210.rentaLiquidaGravableTotal, "Renta líquida gravable (Cédula General + Pensiones)", resultado.rentaLiquidaGravableTotal, true);
+  ws.addRow([
+    `Tarifa marginal aplicada (Art. 241 E.T.): ${(resultado.impuestoRenta.tarifaMarginal * 100).toFixed(0)}% — rango ${resultado.impuestoRenta.rangoUVT}`,
+  ]).font = { name: "Arial", size: 9, italic: true } as any;
+  const rImpuesto = filaCasilla(ws, CASILLAS_210.impuesto, "IMPUESTO SOBRE LAS RENTAS LÍQUIDAS GRAVABLES", resultado.impuestoRenta.impuesto);
+  rImpuesto.font = { name: "Arial", size: 11, bold: true } as any;
+  ws.addRow([]);
+
   ws.addRow(["ANTICIPO Y SALDOS"]).font = FONT_BOLD as any;
-  ws.addRow(["Impuesto neto de renta año anterior", resultado.impuestoNetoAnioAnterior ?? "—"]);
-  ws.addRow(["Saldo a favor año anterior", resultado.saldoAFavorAnterior ?? "—"]);
-  const rAnticipo = ws.addRow(["Anticipo estimado para el próximo año (referencia)", resultado.anticipoEstimado ?? "—"]);
-  rAnticipo.font = FONT_BOLD as any;
+  filaCasilla(ws, CASILLAS_210.saldoAFavorAnterior, "Saldo a favor año anterior", resultado.saldoAFavorAnterior ?? "—");
+  ws.addRow(["Impuesto neto de renta año anterior (referencia)", resultado.impuestoNetoAnioAnterior ?? "—"]);
+  const rAnticipo = filaCasilla(ws, CASILLAS_210.anticipoProximoAnio, "Anticipo estimado para el próximo año (referencia)", resultado.anticipoEstimado ?? "—", true);
   ws.addRow([
     "Nota: fórmula simple de referencia (promedio entre impuesto actual y anterior, al 25%) — el Art. 807 E.T. define",
     "porcentajes distintos según sea la primera, segunda, o siguientes declaraciones; verificar antes de usar como definitivo.",
   ]).eachCell(c => { c.fill = NOTA_FILL; c.font = { name: "Arial", size: 9 } as any; });
 
-  ws.getColumn(1).width = 55;
-  ws.getColumn(2).width = 20;
-  ws.getColumn(2).numFmt = MONEY;
+  ws.getColumn(1).width = 10;
+  ws.getColumn(2).width = 62;
+  ws.getColumn(3).width = 20;
+  ws.getColumn(3).numFmt = MONEY;
 
   const buffer = await wb.xlsx.writeBuffer();
   return Buffer.from(buffer);

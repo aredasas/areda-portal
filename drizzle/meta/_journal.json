@@ -197,6 +197,13 @@
       "when": 1784865929181,
       "tag": "0027_renta_reportes",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "5",
+      "when": 1784867142047,
+      "tag": "0028_liquidacion_granular",
+      "breakpoints": true
     }
   ]
 }

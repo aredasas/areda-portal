@@ -767,58 +767,63 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId }: { rentaClienteId: 
   const [cedulaSeleccionada, setCedulaSeleccionada] = useState("trabajo");
   const [showImportarDialog, setShowImportarDialog] = useState(false);
 
-  const ingresosQuery = trpc.renta.liquidacion.list.useQuery({ rentaClienteId, seccion: "ingreso" });
-  const deduccionesQuery = trpc.renta.liquidacion.list.useQuery({ rentaClienteId, seccion: "deduccion" });
-  const rentasExentasQuery = trpc.renta.liquidacion.list.useQuery({ rentaClienteId, seccion: "rentaExenta" });
+  const cedulaItemsQuery = trpc.renta.liquidacion.list.useQuery({ rentaClienteId, seccion: "cedula" });
 
+  const [tipoValorIngreso, setTipoValorIngreso] = useState("ingreso_bruto");
   const [conceptoIngreso, setConceptoIngreso] = useState("");
   const [valorIngreso, setValorIngreso] = useState("");
   const [tipoDeduccion, setTipoDeduccion] = useState("");
   const [conceptoDeduccion, setConceptoDeduccion] = useState("");
   const [valorDeduccion, setValorDeduccion] = useState("");
 
+  const invalidarTodo = () => utils.renta.liquidacion.list.invalidate({ rentaClienteId, seccion: "cedula" });
+
   const crearIngresoMutation = trpc.renta.liquidacion.crear.useMutation({
-    onSuccess: () => { setConceptoIngreso(""); setValorIngreso(""); utils.renta.liquidacion.list.invalidate({ rentaClienteId, seccion: "ingreso" }); },
+    onSuccess: () => { setConceptoIngreso(""); setValorIngreso(""); invalidarTodo(); },
     onError: (err) => toast.error(err.message || "No se pudo agregar"),
   });
   const crearDeduccionMutation = trpc.renta.liquidacion.crear.useMutation({
     onSuccess: (data) => {
       if (data.alerta) toast.warning(data.alerta); else toast.success("Agregado");
       setConceptoDeduccion(""); setValorDeduccion(""); setTipoDeduccion("");
-      utils.renta.liquidacion.list.invalidate({ rentaClienteId, seccion: "deduccion" });
-      utils.renta.liquidacion.list.invalidate({ rentaClienteId, seccion: "rentaExenta" });
+      invalidarTodo();
     },
     onError: (err) => toast.error(err.message || "No se pudo agregar"),
   });
-  const eliminarMutation = trpc.renta.liquidacion.eliminar.useMutation({
-    onSuccess: () => {
-      utils.renta.liquidacion.list.invalidate({ rentaClienteId, seccion: "ingreso" });
-      utils.renta.liquidacion.list.invalidate({ rentaClienteId, seccion: "deduccion" });
-      utils.renta.liquidacion.list.invalidate({ rentaClienteId, seccion: "rentaExenta" });
-    },
-  });
+  const eliminarMutation = trpc.renta.liquidacion.eliminar.useMutation({ onSuccess: invalidarTodo });
 
   const fmt = (n: number) => `$${n.toLocaleString("es-CO")}`;
-  const CEDULAS_GENERAL = ["trabajo", "capital", "no_laboral"];
+  const CEDULAS_GENERAL = ["trabajo", "trabajo_honorarios", "capital", "no_laboral"];
+  const todosItems = cedulaItemsQuery.data || [];
+  const cedulaInfo = catalogoQuery.data?.cedulas.find((c: any) => c.valor === cedulaSeleccionada);
+  const tieneCostos = cedulaInfo?.tieneCostos ?? false;
 
-  const ingresosDeEstaCedula = (ingresosQuery.data || []).filter((it: any) => it.cedula === cedulaSeleccionada);
-  const totalIngresosCedula = ingresosDeEstaCedula.reduce((acc: number, it: any) => acc + it.valor, 0);
+  const itemsDeEstaCedula = todosItems.filter((it: any) => (it.cedula || "trabajo") === cedulaSeleccionada);
+  const ingresosDeEstaCedula = itemsDeEstaCedula.filter((it: any) => ["ingreso_bruto", "ingreso_no_constitutivo", "costo_deduccion_procedente"].includes(it.tipoValor));
+  const deduccionesDeEstaCedula = itemsDeEstaCedula.filter((it: any) => ["renta_exenta", "deduccion"].includes(it.tipoValor));
 
-  const todasDeducciones = [...(deduccionesQuery.data || []), ...(rentasExentasQuery.data || [])];
-  const deduccionesDeEstaCedula = todasDeducciones.filter((it: any) => it.cedula === cedulaSeleccionada);
+  const totalPorTipo = (tipo: string) => ingresosDeEstaCedula.filter((it: any) => it.tipoValor === tipo).reduce((a: number, it: any) => a + it.valor, 0);
+  const rentaLiquidaEstimadaCedula = totalPorTipo("ingreso_bruto") - totalPorTipo("ingreso_no_constitutivo") - totalPorTipo("costo_deduccion_procedente");
 
-  const totalGeneral = todasDeducciones
-    .filter((it: any) => !it.cedula || CEDULAS_GENERAL.includes(it.cedula))
-    .reduce((acc: number, it: any) => acc + it.valor, 0);
-  const totalOtrasCedulas = todasDeducciones
-    .filter((it: any) => it.cedula && !CEDULAS_GENERAL.includes(it.cedula))
-    .reduce((acc: number, it: any) => acc + it.valor, 0);
+  const totalGeneral = todosItems
+    .filter((it: any) => ["renta_exenta", "deduccion"].includes(it.tipoValor) && CEDULAS_GENERAL.includes(it.cedula || "trabajo"))
+    .reduce((a: number, it: any) => a + it.valor, 0);
+  const totalOtrasCedulas = todosItems
+    .filter((it: any) => ["renta_exenta", "deduccion"].includes(it.tipoValor) && !CEDULAS_GENERAL.includes(it.cedula || "trabajo"))
+    .reduce((a: number, it: any) => a + it.valor, 0);
   const topeGlobal = catalogoQuery.data ? catalogoQuery.data.topeGlobalUVT * catalogoQuery.data.uvt : 0;
   const excedeGlobal = topeGlobal > 0 && totalGeneral > topeGlobal;
 
+  const nombreTipoValor = (t: string) => ({
+    ingreso_bruto: "Ingreso bruto", ingreso_no_constitutivo: "Ingreso no constitutivo de renta", costo_deduccion_procedente: "Costo/deducción procedente",
+  } as Record<string, string>)[t] || t;
+
   const handleAgregarIngreso = () => {
     if (!conceptoIngreso.trim() || !valorIngreso) return;
-    crearIngresoMutation.mutate({ rentaClienteId, seccion: "ingreso", cedula: cedulaSeleccionada as any, concepto: conceptoIngreso.trim(), valor: Number(valorIngreso) });
+    crearIngresoMutation.mutate({
+      rentaClienteId, seccion: "cedula", cedula: cedulaSeleccionada as any,
+      tipoValor: tipoValorIngreso as any, concepto: conceptoIngreso.trim(), valor: Number(valorIngreso),
+    });
   };
   const handleAgregarDeduccion = () => {
     if (!conceptoDeduccion.trim() || !valorDeduccion || !tipoDeduccion) {
@@ -827,7 +832,8 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId }: { rentaClienteId: 
     }
     const tipoInfo = catalogoQuery.data?.tipos.find((t: any) => t.tipo === tipoDeduccion);
     crearDeduccionMutation.mutate({
-      rentaClienteId, seccion: (tipoInfo?.seccion || "deduccion") as any, cedula: cedulaSeleccionada as any,
+      rentaClienteId, seccion: "cedula", cedula: cedulaSeleccionada as any,
+      tipoValor: (tipoInfo?.tipoValor || "deduccion") as any,
       tipoDeduccion, concepto: conceptoDeduccion.trim(), valor: Number(valorDeduccion),
     });
   };
@@ -837,7 +843,7 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId }: { rentaClienteId: 
       <div className="space-y-1.5">
         <Label className="text-xs">Cédula</Label>
         <Select value={cedulaSeleccionada} onValueChange={setCedulaSeleccionada}>
-          <SelectTrigger className="w-full sm:w-80"><SelectValue /></SelectTrigger>
+          <SelectTrigger className="w-full sm:w-[420px]"><SelectValue /></SelectTrigger>
           <SelectContent>
             {catalogoQuery.data?.cedulas.map((c: any) => (
               <SelectItem key={c.valor} value={c.valor}>{c.nombre}</SelectItem>
@@ -846,7 +852,7 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId }: { rentaClienteId: 
         </Select>
       </div>
 
-      {/* Ingresos de la cédula seleccionada */}
+      {/* Ingresos de la cédula seleccionada — bruto / no constitutivo / costo (si aplica) */}
       <div className="border rounded-md p-3 space-y-2">
         <div className="flex items-center justify-between">
           <span className="text-sm font-medium">Ingresos</span>
@@ -858,7 +864,10 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId }: { rentaClienteId: 
           <div className="space-y-1 max-h-56 overflow-y-auto">
             {ingresosDeEstaCedula.map((it: any) => (
               <div key={it.id} className="flex items-center justify-between text-sm border-b py-1.5 gap-2">
-                <span className="flex-1 min-w-0 truncate">{it.concepto}</span>
+                <div className="flex-1 min-w-0">
+                  <div className="truncate">{it.concepto}</div>
+                  <div className="text-xs text-muted-foreground">{nombreTipoValor(it.tipoValor)}</div>
+                </div>
                 {it.origen === "exogena" && <Badge variant="outline" className="text-[10px] shrink-0">Exógena</Badge>}
                 <span className="font-medium shrink-0">{fmt(it.valor)}</span>
                 <Button variant="ghost" size="icon" className="h-7 w-7 text-red-600 shrink-0" onClick={() => eliminarMutation.mutate({ id: it.id })}>
@@ -869,10 +878,21 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId }: { rentaClienteId: 
           </div>
         )}
         <div className="flex items-center justify-between text-sm font-medium border-t pt-2">
-          <span>Total ingresos de esta cédula</span>
-          <span>{fmt(totalIngresosCedula)}</span>
+          <span>Renta líquida estimada de esta cédula (bruto − no constitutivo{tieneCostos ? " − costos" : ""})</span>
+          <span>{fmt(rentaLiquidaEstimadaCedula)}</span>
         </div>
-        <div className="grid sm:grid-cols-[1fr_140px_auto] gap-2 items-end">
+        <div className={`grid gap-2 items-end ${tieneCostos ? "sm:grid-cols-[1fr_1fr_140px_auto]" : "sm:grid-cols-[1fr_1fr_140px_auto]"}`}>
+          <div className="space-y-1">
+            <Label className="text-xs">Tipo</Label>
+            <Select value={tipoValorIngreso} onValueChange={setTipoValorIngreso}>
+              <SelectTrigger className="h-8"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="ingreso_bruto">Ingreso bruto</SelectItem>
+                <SelectItem value="ingreso_no_constitutivo">Ingreso no constitutivo de renta</SelectItem>
+                {tieneCostos && <SelectItem value="costo_deduccion_procedente">Costo/deducción procedente</SelectItem>}
+              </SelectContent>
+            </Select>
+          </div>
           <Input value={conceptoIngreso} onChange={(e) => setConceptoIngreso(e.target.value)} placeholder="Concepto" className="h-8" />
           <Input value={valorIngreso} onChange={(e) => setValorIngreso(e.target.value)} placeholder="Valor" type="number" className="h-8" />
           <Button size="sm" variant="outline" className="gap-1" onClick={handleAgregarIngreso} disabled={crearIngresoMutation.isPending}>
@@ -926,7 +946,7 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId }: { rentaClienteId: 
       <div className={`flex items-center justify-between text-sm font-medium border-t pt-2 ${excedeGlobal ? "text-red-600" : ""}`}>
         <span className="flex items-center gap-1.5">
           {excedeGlobal && <AlertTriangle className="w-3.5 h-3.5" />}
-          Total Cédula General — trabajo + capital + no laboral (tope {catalogoQuery.data?.topeGlobalUVT} UVT / {fmt(topeGlobal)})
+          Total Cédula General — trabajo + honorarios + capital + no laboral (tope {catalogoQuery.data?.topeGlobalUVT} UVT / {fmt(topeGlobal)})
         </span>
         <span>{fmt(totalGeneral)}</span>
       </div>
@@ -940,7 +960,7 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId }: { rentaClienteId: 
       <ImportarExogenaDialog
         rentaClienteId={rentaClienteId} cedula={cedulaSeleccionada}
         open={showImportarDialog} onOpenChange={setShowImportarDialog}
-        onImportado={() => utils.renta.liquidacion.list.invalidate({ rentaClienteId, seccion: "ingreso" })}
+        onImportado={invalidarTodo}
       />
     </ColapsableCard>
   );

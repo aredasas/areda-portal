@@ -680,17 +680,26 @@ export type InsertRentaDeclaracionAnterior = typeof rentaDeclaracionAnterior.$in
 export const rentaLiquidacionItems = mysqlTable("rentaLiquidacionItems", {
   id: int("id").autoincrement().primaryKey(),
   rentaClienteId: int("rentaClienteId").notNull(),
-  seccion: mysqlEnum("seccion", ["activo", "pasivo", "ingreso", "deduccion", "rentaExenta"]).notNull(),
-  /** Cédula a la que pertenece el ingreso/deducción/renta exenta (el
-   * Formulario 210 se liquida por cédula) — null para activos y pasivos,
-   * que no son cedulares. El tope combinado de deducciones + rentas
-   * exentas (1.340 UVT) solo aplica dentro de la Cédula General (trabajo,
-   * capital, no_laboral) — pensiones y dividendos tienen su propio
-   * tratamiento aparte, por eso se necesita distinguirlas. */
-  cedula: mysqlEnum("cedula", ["trabajo", "capital", "no_laboral", "pensiones", "dividendos"]),
-  /** Para deducciones/rentas exentas: el tipo específico (para poder
-   * validar contra su tope individual 2025) — null para activos, pasivos
-   * e ingresos, que no tienen un catálogo de tipos con tope. */
+  /** "cedula" agrupa todo lo que va dentro de una de las 6 sub-rentas (ver
+   * `cedula` abajo) — activo/pasivo quedan aparte porque el patrimonio no
+   * es cedular. */
+  seccion: mysqlEnum("seccion", ["activo", "pasivo", "cedula"]).notNull(),
+  /** Las 6 sub-rentas reales del Formulario 210 — "trabajo" (relación
+   * laboral, casillas 32-42) y "trabajo_honorarios" (sin relación laboral,
+   * con costos/gastos, casillas 43-57) son DISTINTAS entre sí aunque
+   * ambas hagan parte de la Cédula General; lo mismo capital (58-73) y
+   * no_laboral (74-88). Pensiones y dividendos van aparte. Null para
+   * activos y pasivos. */
+  cedula: mysqlEnum("cedula", ["trabajo", "trabajo_honorarios", "capital", "no_laboral", "pensiones", "dividendos"]),
+  /** A qué categoría de casilla corresponde este valor dentro de su
+   * cédula — determina en qué renglón del borrador se suma. Null para
+   * activos/pasivos. */
+  tipoValor: mysqlEnum("tipoValor", [
+    "ingreso_bruto", "ingreso_no_constitutivo", "costo_deduccion_procedente", "renta_exenta", "deduccion",
+  ]),
+  /** Para renta_exenta/deduccion: el tipo específico del catálogo (para
+   * validar contra su tope individual 2025) — ej. "renta_exenta_25_laboral",
+   * "salud_prepagada". Null para el resto. */
   tipoDeduccion: varchar("tipoDeduccion", { length: 60 }),
   concepto: varchar("concepto", { length: 255 }).notNull(),
   valor: double("valor").notNull(),

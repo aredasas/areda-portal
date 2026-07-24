@@ -2105,8 +2105,9 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
         }),
       crear: protectedProcedure
         .input(z.object({
-          rentaClienteId: z.number(), seccion: z.enum(["activo", "pasivo", "ingreso", "deduccion", "rentaExenta"]),
-          cedula: z.enum(["trabajo", "capital", "no_laboral", "pensiones", "dividendos"]).optional(),
+          rentaClienteId: z.number(), seccion: z.enum(["activo", "pasivo", "cedula"]),
+          cedula: z.enum(["trabajo", "trabajo_honorarios", "capital", "no_laboral", "pensiones", "dividendos"]).optional(),
+          tipoValor: z.enum(["ingreso_bruto", "ingreso_no_constitutivo", "costo_deduccion_procedente", "renta_exenta", "deduccion"]).optional(),
           tipoDeduccion: z.string().optional(), concepto: z.string().min(1), valor: z.number(),
         }))
         .mutation(async ({ input, ctx }) => {
@@ -2120,6 +2121,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           }
           const id = await db.crearLiquidacionItem({
             rentaClienteId: input.rentaClienteId, seccion: input.seccion, cedula: input.cedula || null,
+            tipoValor: input.tipoValor || null,
             tipoDeduccion: input.tipoDeduccion || null, concepto: input.concepto, valor: input.valor,
           });
           return { id, alerta };

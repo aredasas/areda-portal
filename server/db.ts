@@ -2173,6 +2173,17 @@ export async function eliminarLiquidacionItem(id: number) {
   await db.delete(rentaLiquidacionItems).where(eq(rentaLiquidacionItems.id, id));
 }
 
+/** Helper: para activo/pasivo, la fila usa seccion=esa palabra directamente
+ * (no son cedulares); para "ingreso", ahora vive como seccion="cedula" con
+ * tipoValor="ingreso_bruto" (la cédula específica la asigna quien importa,
+ * ver `cedula` más abajo). */
+function condicionSeccionImportacion(seccionImport: "activo" | "pasivo" | "ingreso") {
+  if (seccionImport === "ingreso") {
+    return and(eq(rentaLiquidacionItems.seccion, "cedula"), eq(rentaLiquidacionItems.tipoValor, "ingreso_bruto"));
+  }
+  return eq(rentaLiquidacionItems.seccion, seccionImport);
+}
+
 /** Importa como ítems de liquidación los que ya vinieron clasificados en
  * la exógena para una sección (activo/pasivo/ingreso) — no duplica los que
  * ya se hayan importado antes (se identifican por exogenaItemId). */
@@ -2186,14 +2197,16 @@ export async function importarDesdeExogena(rentaClienteId: number, seccion: "act
   if (candidatos.length === 0) return 0;
 
   const yaImportados = await db.select({ exogenaItemId: rentaLiquidacionItems.exogenaItemId }).from(rentaLiquidacionItems)
-    .where(and(eq(rentaLiquidacionItems.rentaClienteId, rentaClienteId), eq(rentaLiquidacionItems.seccion, seccion)));
+    .where(and(eq(rentaLiquidacionItems.rentaClienteId, rentaClienteId), condicionSeccionImportacion(seccion)));
   const idsImportados = new Set(yaImportados.map(f => f.exogenaItemId));
 
   let importados = 0;
   for (const item of candidatos) {
     if (idsImportados.has(item.id)) continue;
     await db.insert(rentaLiquidacionItems).values({
-      rentaClienteId, seccion,
+      rentaClienteId,
+      seccion: seccion === "ingreso" ? "cedula" : seccion,
+      tipoValor: seccion === "ingreso" ? "ingreso_bruto" : null,
       concepto: `${item.nombreTercero ? item.nombreTercero + " — " : ""}${item.detalle}`,
       valor: item.valor, origen: "exogena", exogenaItemId: item.id,
     });
@@ -2215,7 +2228,7 @@ export async function getExogenaItemsDisponibles(rentaClienteId: number, seccion
   if (candidatos.length === 0) return [];
 
   const yaImportados = await db.select({ exogenaItemId: rentaLiquidacionItems.exogenaItemId }).from(rentaLiquidacionItems)
-    .where(and(eq(rentaLiquidacionItems.rentaClienteId, rentaClienteId), eq(rentaLiquidacionItems.seccion, seccion)));
+    .where(and(eq(rentaLiquidacionItems.rentaClienteId, rentaClienteId), condicionSeccionImportacion(seccion)));
   const idsImportados = new Set(yaImportados.map(f => f.exogenaItemId));
   return candidatos.filter(it => !idsImportados.has(it.id));
 }
@@ -2225,7 +2238,7 @@ export async function getExogenaItemsDisponibles(rentaClienteId: number, seccion
  * disponibles para importarse después bajo otra cédula. */
 export async function importarItemsExogenaSeleccionados(
   rentaClienteId: number, seccion: "activo" | "pasivo" | "ingreso", exogenaItemIds: number[],
-  cedula?: "trabajo" | "capital" | "no_laboral" | "pensiones" | "dividendos",
+  cedula?: "trabajo" | "trabajo_honorarios" | "capital" | "no_laboral" | "pensiones" | "dividendos",
 ): Promise<number> {
   const db = await getDb();
   if (!db) return 0;
@@ -2236,14 +2249,17 @@ export async function importarItemsExogenaSeleccionados(
   const seleccionados = exogena.items.filter(it => idsSet.has(it.id));
 
   const yaImportados = await db.select({ exogenaItemId: rentaLiquidacionItems.exogenaItemId }).from(rentaLiquidacionItems)
-    .where(and(eq(rentaLiquidacionItems.rentaClienteId, rentaClienteId), eq(rentaLiquidacionItems.seccion, seccion)));
+    .where(and(eq(rentaLiquidacionItems.rentaClienteId, rentaClienteId), condicionSeccionImportacion(seccion)));
   const idsImportados = new Set(yaImportados.map(f => f.exogenaItemId));
 
   let importados = 0;
   for (const item of seleccionados) {
     if (idsImportados.has(item.id)) continue;
     await db.insert(rentaLiquidacionItems).values({
-      rentaClienteId, seccion, cedula: cedula || null,
+      rentaClienteId,
+      seccion: seccion === "ingreso" ? "cedula" : seccion,
+      cedula: seccion === "ingreso" ? (cedula || null) : null,
+      tipoValor: seccion === "ingreso" ? "ingreso_bruto" : null,
       concepto: `${item.nombreTercero ? item.nombreTercero + " — " : ""}${item.detalle}`,
       valor: item.valor, origen: "exogena", exogenaItemId: item.id,
     });
@@ -2277,37 +2293,42 @@ export async function eliminarDependiente(id: number) {
  * deducciones/rentas exentas (agrupadas por cédula) de un cliente de
  * renta, en el formato que necesita rentaDb.armarLiquidacion — el cálculo
  * en sí es una función pura, esta solo junta los datos crudos. */
+const CEDULAS_TODAS = ["trabajo", "trabajo_honorarios", "capital", "no_laboral", "pensiones", "dividendos"];
+
+/** Reúne los ítems de todas las cédulas de un cliente de renta, agrupados
+ * por cédula + tipoValor (ingreso bruto, no constitutivo, costo/deducción
+ * procedente, renta exenta, deducción) — en el formato que necesita
+ * rentaDb.armarLiquidacion. El cálculo en sí es una función pura, esta
+ * solo junta los datos crudos. */
 export async function getDatosLiquidacion(rentaClienteId: number) {
   const db = await getDb();
   if (!db) return null;
-  const [activos, pasivos, ingresos, deducciones, rentasExentas, declaracionAnterior] = await Promise.all([
+  const [activos, pasivos, itemsCedula, declaracionAnterior] = await Promise.all([
     getLiquidacionItems(rentaClienteId, "activo"),
     getLiquidacionItems(rentaClienteId, "pasivo"),
-    getLiquidacionItems(rentaClienteId, "ingreso"),
-    getLiquidacionItems(rentaClienteId, "deduccion"),
-    getLiquidacionItems(rentaClienteId, "rentaExenta"),
+    getLiquidacionItems(rentaClienteId, "cedula"),
     getDeclaracionAnterior(rentaClienteId),
   ]);
 
-  const ingresosPorCedula: Record<string, { concepto: string; valor: number }[]> = {};
-  for (const it of ingresos) {
-    const cedula = it.cedula || "trabajo";
-    if (!ingresosPorCedula[cedula]) ingresosPorCedula[cedula] = [];
-    ingresosPorCedula[cedula].push({ concepto: it.concepto, valor: it.valor });
+  const cedulas: Record<string, { ingresoBruto: any[]; ingresoNoConstitutivo: any[]; costoDeduccionProcedente: any[]; rentaExenta: any[]; deduccion: any[] }> = {};
+  for (const nombre of CEDULAS_TODAS) {
+    cedulas[nombre] = { ingresoBruto: [], ingresoNoConstitutivo: [], costoDeduccionProcedente: [], rentaExenta: [], deduccion: [] };
   }
-
-  const deduccionesRentasExentasPorCedula: Record<string, { concepto: string; valor: number; tipoDeduccion: string | null }[]> = {};
-  for (const it of [...deducciones, ...rentasExentas]) {
+  for (const it of itemsCedula) {
     const cedula = it.cedula || "trabajo";
-    if (!deduccionesRentasExentasPorCedula[cedula]) deduccionesRentasExentasPorCedula[cedula] = [];
-    deduccionesRentasExentasPorCedula[cedula].push({ concepto: it.concepto, valor: it.valor, tipoDeduccion: it.tipoDeduccion });
+    if (!cedulas[cedula]) cedulas[cedula] = { ingresoBruto: [], ingresoNoConstitutivo: [], costoDeduccionProcedente: [], rentaExenta: [], deduccion: [] };
+    const item = { concepto: it.concepto, valor: it.valor, tipoDeduccion: it.tipoDeduccion };
+    if (it.tipoValor === "ingreso_bruto") cedulas[cedula].ingresoBruto.push(item);
+    else if (it.tipoValor === "ingreso_no_constitutivo") cedulas[cedula].ingresoNoConstitutivo.push(item);
+    else if (it.tipoValor === "costo_deduccion_procedente") cedulas[cedula].costoDeduccionProcedente.push(item);
+    else if (it.tipoValor === "renta_exenta") cedulas[cedula].rentaExenta.push(item);
+    else if (it.tipoValor === "deduccion") cedulas[cedula].deduccion.push(item);
   }
 
   return {
     activos: activos.map(a => ({ concepto: a.concepto, valor: a.valor })),
     pasivos: pasivos.map(p => ({ concepto: p.concepto, valor: p.valor })),
-    ingresosPorCedula,
-    deduccionesRentasExentasPorCedula,
+    cedulas,
     patrimonioLiquidoAnioAnterior: declaracionAnterior?.patrimonioLiquidoAnioAnterior ?? null,
     impuestoNetoAnioAnterior: declaracionAnterior?.impuestoNetoAnioAnterior ?? null,
     saldoAFavorAnterior: declaracionAnterior?.saldoAFavorAnterior ?? null,
