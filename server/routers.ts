@@ -883,7 +883,7 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
         const attachments = await db.getTaskAttachments(input.id);
         return { ...task, attachments };
       }),
-    create: adminProcedure
+    create: protectedProcedure
       .input(z.object({
         title: z.string().min(1),
         description: z.string().optional(),
@@ -905,23 +905,29 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
         });
         return { id };
       }),
-    update: adminProcedure
+    // Una vez grabada la tarea, la fecha límite ya no se puede modificar
+    // (por eso no está en este input) — si quedó mal, un administrador
+    // debe eliminarla y crearla de nuevo. Los administradores pueden
+    // editar cualquier tarea; los demás usuarios solo las que ellos mismos
+    // crearon.
+    update: protectedProcedure
       .input(z.object({
         id: z.number(),
         title: z.string().optional(),
         description: z.string().optional(),
         assignedToId: z.number().nullable().optional(),
-        dueDate: z.string().nullable().optional(),
         priority: z.enum(["baja", "media", "alta", "urgente"]).optional(),
         status: z.enum(["pendiente", "en_progreso", "completada", "vencida"]).optional(),
       }))
-      .mutation(async ({ input }) => {
-        const { id, ...data } = input;
-        const updateData: any = { ...data };
-        if (data.dueDate !== undefined) {
-          updateData.dueDate = data.dueDate ? new Date(data.dueDate) : null;
+      .mutation(async ({ input, ctx }) => {
+        if (ctx.user.role !== "admin") {
+          const existente = await db.getTaskById(input.id);
+          if (!existente || existente.createdById !== ctx.user.id) {
+            throw new Error("Solo puedes editar tareas que tú mismo hayas creado.");
+          }
         }
-        await db.updateTask(id, updateData);
+        const { id, ...data } = input;
+        await db.updateTask(id, data);
         return { success: true };
       }),
     /** Complete task with evidence (confirmation + file upload). Non-admins may
@@ -1072,11 +1078,26 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
         return { success: true };
       }),
     /** Admin sends a completed task back to the collaborator for
-     * correction, with a required observation of what needs fixing. */
+     * correction, with a required observation of what needs fixing, y
+     * opcionalmente un archivo adjunto (ej. una captura señalando el
+     * error) — el adjunto es voluntario, la observación sigue siendo
+     * obligatoria. */
     requestCorrection: adminProcedure
-      .input(z.object({ id: z.number(), reviewNotes: z.string().min(1, "Debe indicar qué corregir") }))
+      .input(z.object({
+        id: z.number(), reviewNotes: z.string().min(1, "Debe indicar qué corregir"),
+        adjunto: z.object({ fileName: z.string(), fileBase64: z.string(), contentType: z.string() }).optional(),
+      }))
       .mutation(async ({ input, ctx }) => {
         await db.requestTaskCorrection(input.id, ctx.user.id, input.reviewNotes);
+        if (input.adjunto) {
+          const buffer = Buffer.from(input.adjunto.fileBase64, "base64");
+          const rawKey = `tasks/${input.id}/${Date.now()}_${input.adjunto.fileName}`;
+          const { url, key } = await storagePut(rawKey, buffer, input.adjunto.contentType);
+          await db.createTaskAttachment({
+            taskId: input.id, fileName: input.adjunto.fileName, fileUrl: url, fileKey: key,
+            contentType: input.adjunto.contentType, fileSize: buffer.length, uploadedById: ctx.user.id,
+          });
+        }
         const task = await db.getTaskById(input.id);
         if (task?.assignedToId && task.assignedToId !== ctx.user.id) {
           const client = await db.getClientById(task.clientId);

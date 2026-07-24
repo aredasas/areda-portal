@@ -1151,12 +1151,13 @@ export async function getAllTasks(assignedToId?: number) {
     .leftJoin(completedByUser, eq(tasks.completedById, completedByUser.id))
     .leftJoin(reviewedByUser, eq(tasks.reviewedById, reviewedByUser.id));
 
-  // Non-admins only see tasks assigned directly to them — not every task for
-  // clients they happen to manage (that broader scope is for deadlines,
-  // where the manager is responsible for ALL of a client's obligations;
-  // tasks have their own individual assignee).
+  // Non-admins ven las tareas asignadas a ellos O que ellos mismos crearon
+  // (ahora que los colaboradores también pueden crear tareas) — no cada
+  // tarea de los clientes que manejan (ese alcance más amplio es para
+  // vencimientos, donde el encargado responde por TODAS las obligaciones
+  // de un cliente; las tareas tienen su propio responsable individual).
   if (assignedToId) {
-    return query.where(eq(tasks.assignedToId, assignedToId)).orderBy(desc(tasks.createdAt));
+    return query.where(or(eq(tasks.assignedToId, assignedToId), eq(tasks.createdById, assignedToId))).orderBy(desc(tasks.createdAt));
   }
   return query.orderBy(desc(tasks.createdAt));
 }

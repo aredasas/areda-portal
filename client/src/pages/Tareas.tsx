@@ -139,7 +139,6 @@ export default function Tareas() {
           title: form.title,
           description: form.description || undefined,
           assignedToId: form.assignedToId ? parseInt(form.assignedToId) : null,
-          dueDate: form.dueDate || null,
           priority: form.priority as any,
         });
         toast.success("Tarea actualizada");
@@ -297,16 +296,16 @@ export default function Tareas() {
           <h1 className="text-2xl font-bold text-[#42302E]">Tareas</h1>
           <p className="text-muted-foreground mt-1">Gestión de tareas asignadas a colaboradores</p>
         </div>
-        {isAdmin && (
-          <div className="flex gap-2">
+        <div className="flex gap-2">
+          {isAdmin && (
             <Button onClick={() => setShowRecurringDialog(true)} variant="outline" className="gap-2">
               <Repeat className="h-4 w-4" /> Recurrentes
             </Button>
-            <Button onClick={handleOpenNew} className="gap-2 bg-[#EDA011] hover:bg-[#d48f0f] text-white">
-              <Plus className="h-4 w-4" /> Nueva Tarea
-            </Button>
-          </div>
-        )}
+          )}
+          <Button onClick={handleOpenNew} className="gap-2 bg-[#EDA011] hover:bg-[#d48f0f] text-white">
+            <Plus className="h-4 w-4" /> Nueva Tarea
+          </Button>
+        </div>
       </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
@@ -395,7 +394,7 @@ export default function Tareas() {
                             <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleViewDetail(task)} title="Ver detalle">
                               <Eye className="w-4 h-4" />
                             </Button>
-                            {isAdmin && task.status !== "completada" && task.status !== "cancelada" && (
+                            {(isAdmin || task.createdById === user?.id) && task.status !== "completada" && task.status !== "cancelada" && (
                               <Button variant="ghost" size="sm" onClick={() => handleEdit(task)}>Editar</Button>
                             )}
                             {task.status !== "completada" && task.reviewStatus === "correccion" && (
@@ -488,8 +487,12 @@ export default function Tareas() {
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label>Fecha Límite</Label>
-                <Input type="date" value={form.dueDate} onChange={(e) => setForm({ ...form, dueDate: e.target.value })} />
+                <Label>Fecha Límite {editingTask && <span className="text-xs text-muted-foreground font-normal">(no se puede modificar una vez creada)</span>}</Label>
+                {editingTask ? (
+                  <Input type="date" value={form.dueDate} disabled className="bg-muted" />
+                ) : (
+                  <Input type="date" value={form.dueDate} onChange={(e) => setForm({ ...form, dueDate: e.target.value })} />
+                )}
               </div>
               <div className="space-y-2">
                 <Label>Prioridad</Label>

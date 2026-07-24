@@ -24,6 +24,8 @@ import {
   RotateCcw,
   History,
   Search,
+  Upload,
+  Paperclip,
 } from "lucide-react";
 
 const historyLabels: Record<string, string> = {
@@ -90,6 +92,7 @@ export default function Revision() {
   const attachments = selectedItem?.itemType === "task" ? taskDetail?.attachments : deadlineAttachments;
 
   const [reviewNotesInput, setReviewNotesInput] = useState("");
+  const [adjuntoCorreccion, setAdjuntoCorreccion] = useState<File | null>(null);
   const approveTask = trpc.tasks.approve.useMutation();
   const approveDeadline = trpc.deadlines.approve.useMutation();
   const requestTaskCorrection = trpc.tasks.requestCorrection.useMutation();
@@ -126,13 +129,24 @@ export default function Revision() {
     if (!selectedItem || !reviewNotesInput.trim()) return;
     try {
       if (selectedItem.itemType === "task") {
-        await requestTaskCorrection.mutateAsync({ id: selectedItem.id, reviewNotes: reviewNotesInput });
+        let adjunto: { fileName: string; fileBase64: string; contentType: string } | undefined;
+        if (adjuntoCorreccion) {
+          const fileBase64 = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve((reader.result as string).split(",")[1]);
+            reader.onerror = reject;
+            reader.readAsDataURL(adjuntoCorreccion);
+          });
+          adjunto = { fileName: adjuntoCorreccion.name, fileBase64, contentType: adjuntoCorreccion.type || "application/octet-stream" };
+        }
+        await requestTaskCorrection.mutateAsync({ id: selectedItem.id, reviewNotes: reviewNotesInput, adjunto });
       } else {
         await requestDeadlineCorrection.mutateAsync({ id: selectedItem.id, reviewNotes: reviewNotesInput });
       }
       toast.success("Se envió de vuelta al encargado con la observación");
       setSelectedItem(null);
       setReviewNotesInput("");
+      setAdjuntoCorreccion(null);
       refetch();
     } catch (error: any) {
       toast.error(error.message || "Error al solicitar la corrección");
@@ -390,6 +404,26 @@ export default function Revision() {
                         placeholder="Ej: Todo en orden. / Verificar el valor del renglón 32 para el próximo período."
                         rows={2}
                       />
+                      {selectedItem.itemType === "task" && (
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="file"
+                            id="adjunto-correccion"
+                            className="hidden"
+                            onChange={(e) => setAdjuntoCorreccion(e.target.files?.[0] || null)}
+                          />
+                          <Button
+                            variant="outline" size="sm" type="button" className="gap-2"
+                            onClick={() => document.getElementById("adjunto-correccion")?.click()}
+                          >
+                            <Paperclip className="h-3.5 w-3.5" />
+                            {adjuntoCorreccion ? adjuntoCorreccion.name : "Adjuntar archivo (opcional, para corregir)"}
+                          </Button>
+                          {adjuntoCorreccion && (
+                            <Button variant="ghost" size="sm" onClick={() => setAdjuntoCorreccion(null)}>Quitar</Button>
+                          )}
+                        </div>
+                      )}
                       <div className="flex gap-2">
                         <Button
                           onClick={handleApprove}
