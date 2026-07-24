@@ -1178,20 +1178,30 @@ const NOMBRE_SUBRENTA: Record<string, string> = {
 };
 
 /** Resumen de seguimiento — se actualiza con lo que haya cargado hasta el
- * momento, sin necesidad de generar el Excel cada vez. Se ubica después de
- * la captura de retenciones porque ahí ya están todos los insumos para
- * mostrar el anticipo. */
+ * momento, sin necesidad de generar el Excel cada vez. Empieza con
+ * patrimonio, en el medio muestra cada cédula como una lista limpia de
+ * ingresos y descuentos (signo +/-) terminando en su total, y cierra con
+ * retenciones y los dos métodos de anticipo — ahí ya están todos los
+ * insumos para calcularlo. */
 function ResumenPendiente210Card({ rentaClienteId }: { rentaClienteId: number }) {
-  const query = trpc.renta.reportes.resumenActual.useQuery({ rentaClienteId });
+  const resumenQuery = trpc.renta.reportes.resumenActual.useQuery({ rentaClienteId });
+  const itemsQuery = trpc.renta.liquidacion.list.useQuery({ rentaClienteId, seccion: "cedula" });
   const fmt = (n: number | null | undefined) => n == null ? "—" : `$${n.toLocaleString("es-CO")}`;
-  const r = query.data;
+  const fmtFirmado = (n: number) => `${n < 0 ? "−" : ""}$${Math.abs(n).toLocaleString("es-CO")}`;
+  const r = resumenQuery.data;
+  const items = itemsQuery.data || [];
+
+  const isFetching = resumenQuery.isFetching || itemsQuery.isFetching;
+  const refetch = () => { resumenQuery.refetch(); itemsQuery.refetch(); };
+
+  const CEDULAS_ORDEN = ["trabajo", "trabajo_honorarios", "capital", "no_laboral"];
 
   return (
     <ColapsableCard
       titulo="Resumen pendiente del Formulario 210"
       extra={
-        <Button size="sm" variant="ghost" className="h-7 gap-1.5 text-xs" onClick={() => query.refetch()} disabled={query.isFetching}>
-          {query.isFetching ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Calculator className="w-3.5 h-3.5" />}
+        <Button size="sm" variant="ghost" className="h-7 gap-1.5 text-xs" onClick={refetch} disabled={isFetching}>
+          {isFetching ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Calculator className="w-3.5 h-3.5" />}
           Actualizar
         </Button>
       }
@@ -1199,25 +1209,52 @@ function ResumenPendiente210Card({ rentaClienteId }: { rentaClienteId: number })
       {!r ? (
         <p className="text-sm text-muted-foreground">Sin información cargada todavía.</p>
       ) : (
-        <div className="space-y-3 text-sm">
+        <div className="space-y-4 text-sm">
+          {/* Patrimonio */}
           <div className="grid sm:grid-cols-3 gap-2">
-            <div className="border rounded-md p-2.5"><div className="text-xs text-muted-foreground">Patrimonio líquido</div><div className="font-semibold">{fmt(r.patrimonioLiquido)}</div></div>
-            <div className="border rounded-md p-2.5"><div className="text-xs text-muted-foreground">Renta líquida gravable total</div><div className="font-semibold">{fmt(r.rentaLiquidaGravableTotal)}</div></div>
-            <div className="border rounded-md p-2.5"><div className="text-xs text-muted-foreground">Impuesto de renta ({(r.impuestoRenta.tarifaMarginal * 100).toFixed(0)}%)</div><div className="font-semibold">{fmt(r.impuestoRenta.impuesto)}</div></div>
+            <div className="border rounded-md p-2.5"><div className="text-xs text-muted-foreground">Activos</div><div className="font-semibold">{fmt(r.patrimonioBruto)}</div></div>
+            <div className="border rounded-md p-2.5"><div className="text-xs text-muted-foreground">Pasivos</div><div className="font-semibold">{fmt(r.deudas)}</div></div>
+            <div className="border rounded-md p-2.5 bg-muted/40"><div className="text-xs text-muted-foreground">Patrimonio líquido</div><div className="font-semibold">{fmt(r.patrimonioLiquido)}</div></div>
           </div>
 
-          <div>
-            <p className="text-xs font-medium text-muted-foreground mb-1">Renta líquida ordinaria por sub-renta (Cédula General)</p>
-            <div className="space-y-1">
-              {Object.entries(r.subRentas).map(([k, sr]: any) => (
-                <div key={k} className="flex items-center justify-between border-b py-1">
-                  <span>{NOMBRE_SUBRENTA[k] || k}</span>
-                  <span className="text-xs text-muted-foreground">bruto {fmt(sr.ingresoBruto)} · exentas/ded. asignadas {fmt(sr.rentaExentaDeduccionAsignada)}</span>
-                  <span className="font-medium">{fmt(sr.rentaLiquidaOrdinaria)}</span>
+          {/* Cada cédula como una lista limpia terminando en su total */}
+          {CEDULAS_ORDEN.filter(k => items.some((it: any) => (it.cedula || "trabajo") === k && it.tipoValor === "ingreso_bruto")).map((k) => {
+            const deEstaCedula = items.filter((it: any) => (it.cedula || "trabajo") === k);
+            const linea = (it: any, signo: 1 | -1) => (
+              <div key={it.id} className="flex items-center justify-between py-0.5">
+                <span className="text-muted-foreground">{it.concepto}</span>
+                <span className={signo < 0 ? "text-red-600" : ""}>{fmtFirmado(signo * it.valor)}</span>
+              </div>
+            );
+            const sr = r.subRentas[k];
+            const sumaSimple = deEstaCedula.reduce((a: number, it: any) => {
+              if (it.tipoValor === "ingreso_bruto") return a + it.valor;
+              if (["ingreso_no_constitutivo", "costo_deduccion_procedente", "deduccion", "renta_exenta"].includes(it.tipoValor)) return a - it.valor;
+              return a;
+            }, 0);
+            const ajustadoPorTope = sr && Math.abs(sumaSimple - sr.rentaLiquidaOrdinaria) > 1;
+            return (
+              <div key={k} className="border rounded-md p-3">
+                <p className="font-semibold text-sm mb-1.5">{NOMBRE_SUBRENTA[k] || k}</p>
+                <div className="pl-1">
+                  {deEstaCedula.filter((it: any) => it.tipoValor === "ingreso_bruto").map((it: any) => linea(it, 1))}
+                  {deEstaCedula.filter((it: any) => it.tipoValor === "ingreso_no_constitutivo").map((it: any) => linea(it, -1))}
+                  {deEstaCedula.filter((it: any) => it.tipoValor === "costo_deduccion_procedente").map((it: any) => linea(it, -1))}
+                  {deEstaCedula.filter((it: any) => it.tipoValor === "deduccion").map((it: any) => linea(it, -1))}
+                  {deEstaCedula.filter((it: any) => it.tipoValor === "renta_exenta").map((it: any) => linea(it, -1))}
                 </div>
-              ))}
-            </div>
-          </div>
+                <div className="flex items-center justify-between border-t mt-1.5 pt-1.5 font-bold">
+                  <span>Total renta cédula</span>
+                  <span>{fmt(sr?.rentaLiquidaOrdinaria)}</span>
+                </div>
+                {ajustadoPorTope && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Incluye el ajuste del reparto del tope de 1.340 UVT entre las cédulas de la Cédula General.
+                  </p>
+                )}
+              </div>
+            );
+          })}
 
           {(r.ingresoBrutoPensiones > 0 || r.ingresoBrutoDividendos > 0) && (
             <div className="flex flex-wrap gap-4 text-xs text-muted-foreground">
@@ -1226,6 +1263,16 @@ function ResumenPendiente210Card({ rentaClienteId }: { rentaClienteId: number })
             </div>
           )}
 
+          <div className="flex items-center justify-between border-t pt-2 font-semibold text-base">
+            <span>Renta líquida gravable total</span>
+            <span>{fmt(r.rentaLiquidaGravableTotal)}</span>
+          </div>
+          <div className="flex items-center justify-between font-semibold text-base">
+            <span>Impuesto de renta ({(r.impuestoRenta.tarifaMarginal * 100).toFixed(0)}%)</span>
+            <span>{fmt(r.impuestoRenta.impuesto)}</span>
+          </div>
+
+          {/* Retenciones y anticipo — al final, cuando ya están todos los insumos */}
           <div className="border-t pt-2 grid sm:grid-cols-3 gap-2">
             <div className="border rounded-md p-2.5"><div className="text-xs text-muted-foreground">Total retenciones</div><div className="font-semibold">{fmt(r.totalRetenciones)}</div></div>
             <div className="border rounded-md p-2.5"><div className="text-xs text-muted-foreground">Anticipo — Método 1 (actual × 75% − ret.)</div><div className="font-semibold">{fmt(r.anticipoMetodo1)}</div></div>
