@@ -1,7 +1,7 @@
 import { eq, and, desc, asc, like, sql, inArray, gte, lte, or, ne, isNull } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { alias } from "drizzle-orm/mysql-core";
-import { InsertUser, users, clients, InsertClient, taxObligations, InsertTaxObligation, clientObligations, InsertClientObligation, taxDeadlines, InsertTaxDeadline, tasks, InsertTask, taskAttachments, InsertTaskAttachment, deadlineAttachments, InsertDeadlineAttachment, appSettings, InsertAppSetting, dianCalendar, InsertDianCalendar, clientDriveSubfolders, timeEntries, InsertTimeEntry, comments, InsertComment, historyEvents, notifications, workLocationEntries, taskRecurrences, InsertTaskRecurrence, boardPosts, boardAttachments, rentaClientes, InsertRentaCliente } from "../drizzle/schema";
+import { InsertUser, users, clients, InsertClient, taxObligations, InsertTaxObligation, clientObligations, InsertClientObligation, taxDeadlines, InsertTaxDeadline, tasks, InsertTask, taskAttachments, InsertTaskAttachment, deadlineAttachments, InsertDeadlineAttachment, appSettings, InsertAppSetting, dianCalendar, InsertDianCalendar, clientDriveSubfolders, timeEntries, InsertTimeEntry, comments, InsertComment, historyEvents, notifications, workLocationEntries, taskRecurrences, InsertTaskRecurrence, boardPosts, boardAttachments, rentaClientes, InsertRentaCliente, rentaExogena, InsertRentaExogena, rentaExogenaItems, InsertRentaExogenaItem } from "../drizzle/schema";
 import { ENV } from './_core/env';
 import { bogotaTodayUTCMidnight } from "./dateUtils";
 
@@ -2094,6 +2094,39 @@ export async function getVencimientoRentaPN(cedula: string, anioGravable: number
   }
   return null;
 }
+
+/** Reemplaza por completo la exógena vigente de un cliente de renta (borra
+ * la anterior y sus ítems, si existía, y guarda la nueva) — solo una
+ * exógena activa por cliente, la más reciente que se haya subido. */
+export async function guardarExogenaRenta(
+  rentaClienteId: number, data: Omit<InsertRentaExogena, "rentaClienteId">, items: Omit<InsertRentaExogenaItem, "rentaExogenaId">[],
+): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new Error("Base de datos no disponible");
+  const existente = await db.select({ id: rentaExogena.id }).from(rentaExogena)
+    .where(eq(rentaExogena.rentaClienteId, rentaClienteId));
+  for (const e of existente) {
+    await db.delete(rentaExogenaItems).where(eq(rentaExogenaItems.rentaExogenaId, e.id));
+    await db.delete(rentaExogena).where(eq(rentaExogena.id, e.id));
+  }
+  const result = await db.insert(rentaExogena).values({ ...data, rentaClienteId });
+  const id = Number((result as any).insertId ?? (result as any)[0]?.insertId);
+  for (let i = 0; i < items.length; i += 200) {
+    const lote = items.slice(i, i + 200).map(it => ({ ...it, rentaExogenaId: id }));
+    if (lote.length > 0) await db.insert(rentaExogenaItems).values(lote);
+  }
+  return id;
+}
+
+export async function getExogenaRenta(rentaClienteId: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const filas = await db.select().from(rentaExogena).where(eq(rentaExogena.rentaClienteId, rentaClienteId)).limit(1);
+  if (filas.length === 0) return null;
+  const items = await db.select().from(rentaExogenaItems).where(eq(rentaExogenaItems.rentaExogenaId, filas[0].id));
+  return { ...filas[0], items };
+}
+
 
 
 

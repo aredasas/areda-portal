@@ -612,3 +612,45 @@ export const rentaClientes = mysqlTable("rentaClientes", {
 export type RentaCliente = typeof rentaClientes.$inferSelect;
 export type InsertRentaCliente = typeof rentaClientes.$inferInsert;
 
+/** Un archivo de exógena procesado para un cliente de renta — uno vigente
+ * por cliente (al subir uno nuevo, reemplaza al anterior). Guarda los 5
+ * "Topes" que la propia DIAN ya calcula (útiles para el chequeo de
+ * obligado a declarar) y el archivo original en storage. */
+export const rentaExogena = mysqlTable("rentaExogena", {
+  id: int("id").autoincrement().primaryKey(),
+  rentaClienteId: int("rentaClienteId").notNull(),
+  nombreArchivo: varchar("nombreArchivo", { length: 255 }).notNull(),
+  fileKey: varchar("fileKey", { length: 500 }).notNull(),
+  topeIngresos: double("topeIngresos"),
+  topePatrimonio: double("topePatrimonio"),
+  topeConsumoTC: double("topeConsumoTC"),
+  topeMovimiento: double("topeMovimiento"),
+  topeCompras: double("topeCompras"),
+  uploadedById: int("uploadedById"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (table) => ({
+  rentaClienteIdx: uniqueIndex("rentaExogena_rentaCliente_idx").on(table.rentaClienteId),
+}));
+export type RentaExogena = typeof rentaExogena.$inferSelect;
+export type InsertRentaExogena = typeof rentaExogena.$inferInsert;
+
+/** Cada línea individual del archivo de exógena, con el renglón del
+ * Formulario 210 ya extraído de la columna "Uso declaración Sugerida" de
+ * la propia DIAN — sirve tanto para el resumen automático como de base
+ * para los detalles de activos/pasivos/ingresos más adelante. */
+export const rentaExogenaItems = mysqlTable("rentaExogenaItems", {
+  id: int("id").autoincrement().primaryKey(),
+  rentaExogenaId: int("rentaExogenaId").notNull(),
+  nitTercero: varchar("nitTercero", { length: 20 }),
+  nombreTercero: varchar("nombreTercero", { length: 255 }),
+  detalle: text("detalle"),
+  valor: double("valor").notNull(),
+  renglon: varchar("renglon", { length: 10 }), // ej. "R32", "R29" — null si la fila no trae uno
+  categoria: mysqlEnum("categoria", ["ingreso", "patrimonio", "deuda", "otro"]).default("otro").notNull(),
+  infoAdicional: text("infoAdicional"),
+}, (table) => ({
+  rentaExogenaIdx: index("rentaExogenaItems_rentaExogena_idx").on(table.rentaExogenaId),
+}));
+export type RentaExogenaItem = typeof rentaExogenaItems.$inferSelect;
+export type InsertRentaExogenaItem = typeof rentaExogenaItems.$inferInsert;
+

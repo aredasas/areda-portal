@@ -75,6 +75,7 @@ import * as informesDb from "./informesDb";
 import { generarReporteERI } from "./informesReportERI";
 import { generarReporteERM } from "./informesReportERM";
 import * as informesDian from "./informesDianDb";
+import * as rentaDb from "./rentaDb";
 import { storagePut, storageGetSignedUrl, storageGetBuffer } from "./storage";
 import { invokeLLM } from "./_core/llm";
 import { isDriveConfigured, extractFolderIdFromUrl, testFolderAccess, listSubfoldersRecursive, listAllFilesRecursive, uploadFileToDrive, resolveUploadFolder } from "./googleDrive";
@@ -2023,6 +2024,49 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           assertInformesAccess(ctx.user.cedula);
           await db.deleteRentaCliente(input.id);
           return { success: true };
+        }),
+    }),
+    exogena: router({
+      get: protectedProcedure
+        .input(z.object({ rentaClienteId: z.number() }))
+        .query(async ({ input, ctx }) => {
+          assertInformesAccess(ctx.user.cedula);
+          const exogena = await db.getExogenaRenta(input.rentaClienteId);
+          if (!exogena) return null;
+          const resumen = rentaDb.resumirPorRenglon(exogena.items as any);
+          return { ...exogena, resumen };
+        }),
+      // Sube y procesa el archivo de exógena de un cliente de renta — se
+      // reemplaza cualquier exógena anterior de ese mismo cliente.
+      upload: protectedProcedure
+        .input(z.object({
+          rentaClienteId: z.number(), nombreArchivo: z.string(), archivoBase64: z.string(),
+        }))
+        .mutation(async ({ input, ctx }) => {
+          assertInformesAccess(ctx.user.cedula);
+          const buffer = Buffer.from(input.archivoBase64, "base64");
+          const resultado = await rentaDb.parseExogenaDian(buffer);
+          if (resultado.items.length === 0 && Object.values(resultado.topes).every(v => v === null)) {
+            throw new Error("No se pudo reconocer el archivo — verifica que sea el reporte de Consulta de Información Exógena de la DIAN.");
+          }
+          const key = `renta/exogena/${input.rentaClienteId}_${Date.now()}_${input.nombreArchivo}`;
+          const { key: fileKey } = await storagePut(
+            key, buffer, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          );
+          await db.guardarExogenaRenta(
+            input.rentaClienteId,
+            {
+              nombreArchivo: input.nombreArchivo, fileKey,
+              topeIngresos: resultado.topes.ingresos, topePatrimonio: resultado.topes.patrimonio,
+              topeConsumoTC: resultado.topes.consumoTC, topeMovimiento: resultado.topes.movimiento,
+              topeCompras: resultado.topes.compras, uploadedById: ctx.user.id,
+            },
+            resultado.items,
+          );
+          const resumen = rentaDb.resumirPorRenglon(resultado.items);
+          return {
+            success: true, totalItems: resultado.items.length, topes: resultado.topes, resumen,
+          };
         }),
     }),
   }),

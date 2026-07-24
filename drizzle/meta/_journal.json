@@ -169,6 +169,13 @@
       "when": 1784859089412,
       "tag": "0023_renta_clientes",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "5",
+      "when": 1784859886849,
+      "tag": "0024_renta_exogena",
+      "breakpoints": true
     }
   ]
 }
