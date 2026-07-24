@@ -9,10 +9,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { trpc } from "@/lib/trpc";
 import {
   UserSquare2, Construction, Plus, Loader2, Pencil, Trash2, CheckCircle2, Clock, Users, FileSpreadsheet,
-  Upload, AlertTriangle, Wallet,
+  Upload, AlertTriangle, Wallet, ChevronDown,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -411,6 +412,35 @@ function LiquidacionTab({ anioGravable }: { anioGravable: number }) {
   );
 }
 
+/** Envoltorio genérico para que cada sección de la liquidación se pueda
+ * colapsar — con varios clientes cargando datos, la pestaña se vuelve
+ * larga rápido, así que cada tarjeta se puede cerrar independientemente. */
+function ColapsableCard({ titulo, extra, children, defaultOpen = true }: {
+  titulo: React.ReactNode; extra?: React.ReactNode; children: React.ReactNode; defaultOpen?: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <Card>
+      <Collapsible open={open} onOpenChange={setOpen}>
+        <CardHeader className="flex flex-row items-center justify-between space-y-0">
+          <CollapsibleTrigger asChild>
+            <button type="button" className="flex items-center gap-2 text-left flex-1 min-w-0">
+              <ChevronDown className={`w-4 h-4 shrink-0 transition-transform ${open ? "" : "-rotate-90"}`} />
+              <CardTitle className="text-base">{titulo}</CardTitle>
+            </button>
+          </CollapsibleTrigger>
+          {extra}
+        </CardHeader>
+        <CollapsibleContent>
+          <CardContent className="space-y-3">
+            {children}
+          </CardContent>
+        </CollapsibleContent>
+      </Collapsible>
+    </Card>
+  );
+}
+
 function DeclaracionAnteriorCard({ rentaClienteId }: { rentaClienteId: number }) {
   const utils = trpc.useUtils();
   const query = trpc.renta.declaracionAnterior.get.useQuery({ rentaClienteId });
@@ -442,34 +472,29 @@ function DeclaracionAnteriorCard({ rentaClienteId }: { rentaClienteId: number })
   };
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">Declaración anterior</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        <p className="text-sm text-muted-foreground">
-          El impuesto neto de renta del año anterior es necesario para calcular el nuevo anticipo de renta.
-        </p>
-        <div className="grid sm:grid-cols-3 gap-3">
-          <div className="space-y-1.5">
-            <Label className="text-xs">Patrimonio líquido año anterior</Label>
-            <Input type="number" value={patrimonio} onChange={(e) => { setPatrimonio(e.target.value); setEditado(true); }} />
-          </div>
-          <div className="space-y-1.5">
-            <Label className="text-xs">Impuesto neto de renta año anterior</Label>
-            <Input type="number" value={impuestoNeto} onChange={(e) => { setImpuestoNeto(e.target.value); setEditado(true); }} />
-          </div>
-          <div className="space-y-1.5">
-            <Label className="text-xs">Saldo a favor anterior</Label>
-            <Input type="number" value={saldoAFavor} onChange={(e) => { setSaldoAFavor(e.target.value); setEditado(true); }} />
-          </div>
+    <ColapsableCard titulo="Declaración anterior">
+      <p className="text-sm text-muted-foreground">
+        El impuesto neto de renta del año anterior es necesario para calcular el nuevo anticipo de renta.
+      </p>
+      <div className="grid sm:grid-cols-3 gap-3">
+        <div className="space-y-1.5">
+          <Label className="text-xs">Patrimonio líquido año anterior</Label>
+          <Input type="number" value={patrimonio} onChange={(e) => { setPatrimonio(e.target.value); setEditado(true); }} />
         </div>
-        <Button size="sm" onClick={handleGuardar} disabled={guardarMutation.isPending} className="bg-[#EDA011] hover:bg-[#d48f0f] text-white">
-          {guardarMutation.isPending && <Loader2 className="w-3.5 h-3.5 animate-spin mr-2" />}
-          Guardar
-        </Button>
-      </CardContent>
-    </Card>
+        <div className="space-y-1.5">
+          <Label className="text-xs">Impuesto neto de renta año anterior</Label>
+          <Input type="number" value={impuestoNeto} onChange={(e) => { setImpuestoNeto(e.target.value); setEditado(true); }} />
+        </div>
+        <div className="space-y-1.5">
+          <Label className="text-xs">Saldo a favor anterior</Label>
+          <Input type="number" value={saldoAFavor} onChange={(e) => { setSaldoAFavor(e.target.value); setEditado(true); }} />
+        </div>
+      </div>
+      <Button size="sm" onClick={handleGuardar} disabled={guardarMutation.isPending} className="bg-[#EDA011] hover:bg-[#d48f0f] text-white">
+        {guardarMutation.isPending && <Loader2 className="w-3.5 h-3.5 animate-spin mr-2" />}
+        Guardar
+      </Button>
+    </ColapsableCard>
   );
 }
 
@@ -477,47 +502,66 @@ function DependientesCard({ rentaClienteId }: { rentaClienteId: number }) {
   const utils = trpc.useUtils();
   const query = trpc.renta.dependientes.list.useQuery({ rentaClienteId });
   const [nombre, setNombre] = useState("");
+  const [tipoDocumento, setTipoDocumento] = useState("CC");
+  const [numeroDocumento, setNumeroDocumento] = useState("");
 
   const agregarMutation = trpc.renta.dependientes.agregar.useMutation({
-    onSuccess: () => { setNombre(""); utils.renta.dependientes.list.invalidate({ rentaClienteId }); },
+    onSuccess: () => { setNombre(""); setNumeroDocumento(""); utils.renta.dependientes.list.invalidate({ rentaClienteId }); },
     onError: (err) => toast.error(err.message || "No se pudo agregar"),
   });
   const eliminarMutation = trpc.renta.dependientes.eliminar.useMutation({
     onSuccess: () => utils.renta.dependientes.list.invalidate({ rentaClienteId }),
   });
 
+  const handleAgregar = () => {
+    if (!nombre.trim() || !numeroDocumento.trim()) {
+      toast.error("Nombre y número de documento son obligatorios");
+      return;
+    }
+    agregarMutation.mutate({ rentaClienteId, nombre: nombre.trim(), tipoDocumento, numeroDocumento: numeroDocumento.trim() });
+  };
+
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">Dependientes económicos ({query.data?.length || 0})</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        {!!query.data?.length && (
-          <div className="space-y-1">
-            {query.data.map((d: any) => (
-              <div key={d.id} className="flex items-center justify-between text-sm border-b py-1.5">
-                <span>{d.nombre}</span>
-                <Button variant="ghost" size="icon" className="h-7 w-7 text-red-600" onClick={() => eliminarMutation.mutate({ id: d.id })}>
-                  <Trash2 className="w-3.5 h-3.5" />
-                </Button>
-              </div>
-            ))}
-          </div>
-        )}
-        <div className="flex items-center gap-2">
-          <Input
-            value={nombre} onChange={(e) => setNombre(e.target.value)} placeholder="Nombre del dependiente"
-            className="h-8" onKeyDown={(e) => { if (e.key === "Enter" && nombre.trim()) agregarMutation.mutate({ rentaClienteId, nombre: nombre.trim() }); }}
-          />
-          <Button
-            size="sm" variant="outline" className="gap-1"
-            onClick={() => nombre.trim() && agregarMutation.mutate({ rentaClienteId, nombre: nombre.trim() })}
-          >
-            <Plus className="w-3.5 h-3.5" /> Agregar
-          </Button>
+    <ColapsableCard titulo={`Dependientes económicos (${query.data?.length || 0})`}>
+      {!!query.data?.length && (
+        <div className="space-y-1">
+          {query.data.map((d: any) => (
+            <div key={d.id} className="flex items-center justify-between text-sm border-b py-1.5">
+              <span>{d.nombre} <span className="text-muted-foreground text-xs">— {d.tipoDocumento} {d.numeroDocumento}</span></span>
+              <Button variant="ghost" size="icon" className="h-7 w-7 text-red-600" onClick={() => eliminarMutation.mutate({ id: d.id })}>
+                <Trash2 className="w-3.5 h-3.5" />
+              </Button>
+            </div>
+          ))}
         </div>
-      </CardContent>
-    </Card>
+      )}
+      <div className="grid sm:grid-cols-[1fr_100px_140px_auto] gap-2 items-end">
+        <div className="space-y-1">
+          <Label className="text-xs">Nombre</Label>
+          <Input value={nombre} onChange={(e) => setNombre(e.target.value)} className="h-8" />
+        </div>
+        <div className="space-y-1">
+          <Label className="text-xs">Tipo doc.</Label>
+          <Select value={tipoDocumento} onValueChange={setTipoDocumento}>
+            <SelectTrigger className="h-8"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="CC">CC</SelectItem>
+              <SelectItem value="TI">TI</SelectItem>
+              <SelectItem value="RC">RC</SelectItem>
+              <SelectItem value="CE">CE</SelectItem>
+              <SelectItem value="PA">Pasaporte</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-1">
+          <Label className="text-xs">Número</Label>
+          <Input value={numeroDocumento} onChange={(e) => setNumeroDocumento(e.target.value)} className="h-8" />
+        </div>
+        <Button size="sm" variant="outline" className="gap-1" onClick={handleAgregar} disabled={agregarMutation.isPending}>
+          <Plus className="w-3.5 h-3.5" /> Agregar
+        </Button>
+      </div>
+    </ColapsableCard>
   );
 }
 
@@ -526,11 +570,14 @@ function SeccionItemsCard({ rentaClienteId, seccion, titulo, puedeImportar }: {
 }) {
   const utils = trpc.useUtils();
   const query = trpc.renta.liquidacion.list.useQuery({ rentaClienteId, seccion });
+  const catalogoQuery = trpc.renta.liquidacion.catalogoTopes.useQuery();
   const [concepto, setConcepto] = useState("");
   const [valor, setValor] = useState("");
+  const [cedula, setCedula] = useState("");
+  const requiereCedula = seccion === "ingreso";
 
   const crearMutation = trpc.renta.liquidacion.crear.useMutation({
-    onSuccess: () => { setConcepto(""); setValor(""); utils.renta.liquidacion.list.invalidate({ rentaClienteId, seccion }); },
+    onSuccess: () => { setConcepto(""); setValor(""); setCedula(""); utils.renta.liquidacion.list.invalidate({ rentaClienteId, seccion }); },
     onError: (err) => toast.error(err.message || "No se pudo agregar"),
   });
   const eliminarMutation = trpc.renta.liquidacion.eliminar.useMutation({
@@ -543,57 +590,95 @@ function SeccionItemsCard({ rentaClienteId, seccion, titulo, puedeImportar }: {
     },
   });
 
-  const total = (query.data || []).reduce((acc: number, it: any) => acc + it.valor, 0);
+  const items = query.data || [];
+  const total = items.reduce((acc: number, it: any) => acc + it.valor, 0);
   const fmt = (n: number) => `$${n.toLocaleString("es-CO")}`;
+  const nombreCedula = (valor: string | null) => catalogoQuery.data?.cedulas.find((c: any) => c.valor === valor)?.nombre || "Sin cédula asignada";
+
+  // Para ingresos, se agrupa por cédula (cada una se declara y limita por
+  // separado en el Formulario 210) — para activos/pasivos no aplica.
+  const grupos = requiereCedula
+    ? Array.from(new Set(items.map((it: any) => it.cedula || "")))
+        .map(c => ({ cedula: c || null, items: items.filter((it: any) => (it.cedula || "") === c) }))
+    : [{ cedula: null, items }];
 
   const handleAgregar = () => {
     if (!concepto.trim() || !valor) return;
-    crearMutation.mutate({ rentaClienteId, seccion: seccion as any, concepto: concepto.trim(), valor: Number(valor) });
+    if (requiereCedula && !cedula) {
+      toast.error("Selecciona la cédula a la que pertenece este ingreso");
+      return;
+    }
+    crearMutation.mutate({ rentaClienteId, seccion: seccion as any, concepto: concepto.trim(), valor: Number(valor), cedula: (cedula || undefined) as any });
   };
 
   return (
-    <Card>
-      <CardHeader className="flex flex-row items-center justify-between space-y-0">
-        <CardTitle className="text-base">{titulo}</CardTitle>
-        {puedeImportar && (
-          <Button
-            size="sm" variant="outline" className="gap-1.5"
-            onClick={() => importarMutation.mutate({ rentaClienteId, seccion: seccion as any })}
-            disabled={importarMutation.isPending}
-          >
-            {importarMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileSpreadsheet className="w-3.5 h-3.5" />}
-            Importar desde exógena
-          </Button>
-        )}
-      </CardHeader>
-      <CardContent className="space-y-3">
-        {!!query.data?.length && (
-          <div className="space-y-1 max-h-56 overflow-y-auto">
-            {query.data.map((it: any) => (
-              <div key={it.id} className="flex items-center justify-between text-sm border-b py-1.5 gap-2">
-                <span className="flex-1 min-w-0 truncate">{it.concepto}</span>
-                {it.origen === "exogena" && <Badge variant="outline" className="text-[10px] shrink-0">Exógena</Badge>}
-                <span className="font-medium shrink-0">{fmt(it.valor)}</span>
-                <Button variant="ghost" size="icon" className="h-7 w-7 text-red-600 shrink-0" onClick={() => eliminarMutation.mutate({ id: it.id })}>
-                  <Trash2 className="w-3.5 h-3.5" />
-                </Button>
+    <ColapsableCard
+      titulo={titulo}
+      extra={puedeImportar && (
+        <Button
+          size="sm" variant="outline" className="gap-1.5"
+          onClick={() => importarMutation.mutate({ rentaClienteId, seccion: seccion as any })}
+          disabled={importarMutation.isPending}
+        >
+          {importarMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileSpreadsheet className="w-3.5 h-3.5" />}
+          Importar desde exógena
+        </Button>
+      )}
+    >
+      {!!items.length && (
+        <div className="space-y-3 max-h-72 overflow-y-auto">
+          {grupos.map((grupo) => (
+            <div key={grupo.cedula || "sin-cedula"}>
+              {requiereCedula && (
+                <div className="text-xs font-medium text-muted-foreground mb-1">{nombreCedula(grupo.cedula)}</div>
+              )}
+              <div className="space-y-1">
+                {grupo.items.map((it: any) => (
+                  <div key={it.id} className="flex items-center justify-between text-sm border-b py-1.5 gap-2">
+                    <span className="flex-1 min-w-0 truncate">{it.concepto}</span>
+                    {it.origen === "exogena" && <Badge variant="outline" className="text-[10px] shrink-0">Exógena</Badge>}
+                    <span className="font-medium shrink-0">{fmt(it.valor)}</span>
+                    <Button variant="ghost" size="icon" className="h-7 w-7 text-red-600 shrink-0" onClick={() => eliminarMutation.mutate({ id: it.id })}>
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </Button>
+                  </div>
+                ))}
               </div>
-            ))}
+              {requiereCedula && (
+                <div className="flex items-center justify-between text-xs text-muted-foreground pt-1">
+                  <span>Subtotal</span>
+                  <span>{fmt(grupo.items.reduce((acc: number, it: any) => acc + it.valor, 0))}</span>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="flex items-center justify-between text-sm font-medium border-t pt-2">
+        <span>Total {titulo.toLowerCase()}</span>
+        <span>{fmt(total)}</span>
+      </div>
+      <div className={`grid gap-2 pt-2 border-t items-end ${requiereCedula ? "sm:grid-cols-[1fr_1fr_140px_auto]" : "sm:grid-cols-[1fr_140px_auto]"}`}>
+        {requiereCedula && (
+          <div className="space-y-1">
+            <Label className="text-xs">Cédula</Label>
+            <Select value={cedula} onValueChange={setCedula}>
+              <SelectTrigger className="h-8"><SelectValue placeholder="Selecciona..." /></SelectTrigger>
+              <SelectContent>
+                {catalogoQuery.data?.cedulas.map((c: any) => (
+                  <SelectItem key={c.valor} value={c.valor}>{c.nombre}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
         )}
-        <div className="flex items-center justify-between text-sm font-medium border-t pt-2">
-          <span>Total {titulo.toLowerCase()}</span>
-          <span>{fmt(total)}</span>
-        </div>
-        <div className="flex items-center gap-2 pt-2 border-t">
-          <Input value={concepto} onChange={(e) => setConcepto(e.target.value)} placeholder="Concepto" className="h-8 flex-1" />
-          <Input value={valor} onChange={(e) => setValor(e.target.value)} placeholder="Valor" type="number" className="h-8 w-36" />
-          <Button size="sm" variant="outline" className="gap-1" onClick={handleAgregar} disabled={crearMutation.isPending}>
-            <Plus className="w-3.5 h-3.5" /> Agregar
-          </Button>
-        </div>
-      </CardContent>
-    </Card>
+        <Input value={concepto} onChange={(e) => setConcepto(e.target.value)} placeholder="Concepto" className="h-8" />
+        <Input value={valor} onChange={(e) => setValor(e.target.value)} placeholder="Valor" type="number" className="h-8" />
+        <Button size="sm" variant="outline" className="gap-1" onClick={handleAgregar} disabled={crearMutation.isPending}>
+          <Plus className="w-3.5 h-3.5" /> Agregar
+        </Button>
+      </div>
+    </ColapsableCard>
   );
 }
 
@@ -603,6 +688,7 @@ function DeduccionesCard({ rentaClienteId }: { rentaClienteId: number }) {
   const deduccionesQuery = trpc.renta.liquidacion.list.useQuery({ rentaClienteId, seccion: "deduccion" });
   const rentasExentasQuery = trpc.renta.liquidacion.list.useQuery({ rentaClienteId, seccion: "rentaExenta" });
   const [tipoDeduccion, setTipoDeduccion] = useState("");
+  const [cedula, setCedula] = useState("");
   const [concepto, setConcepto] = useState("");
   const [valor, setValor] = useState("");
 
@@ -610,7 +696,7 @@ function DeduccionesCard({ rentaClienteId }: { rentaClienteId: number }) {
     onSuccess: (data) => {
       if (data.alerta) toast.warning(data.alerta);
       else toast.success("Agregado");
-      setConcepto(""); setValor(""); setTipoDeduccion("");
+      setConcepto(""); setValor(""); setTipoDeduccion(""); setCedula("");
       utils.renta.liquidacion.list.invalidate({ rentaClienteId, seccion: "deduccion" });
       utils.renta.liquidacion.list.invalidate({ rentaClienteId, seccion: "rentaExenta" });
     },
@@ -624,87 +710,113 @@ function DeduccionesCard({ rentaClienteId }: { rentaClienteId: number }) {
   });
 
   const fmt = (n: number) => `$${n.toLocaleString("es-CO")}`;
+  const CEDULAS_GENERAL = ["trabajo", "capital", "no_laboral"];
+  const nombreCedula = (v: string | null) => catalogoQuery.data?.cedulas.find((c: any) => c.valor === v)?.nombre || "Sin cédula asignada";
   const todos = [...(deduccionesQuery.data || []), ...(rentasExentasQuery.data || [])];
-  const total = todos.reduce((acc: number, it: any) => acc + it.valor, 0);
+  // El tope global de 1.340 UVT solo aplica dentro de la Cédula General
+  // (trabajo/capital/no_laboral) — lo de pensiones y dividendos, si algún
+  // día aplica una deducción ahí, se lleva aparte y no se mezcla en este
+  // límite. Los ítems sin cédula asignada (de antes de este ajuste) se
+  // cuentan como generales, igual que antes.
+  const totalGeneral = todos
+    .filter((it: any) => !it.cedula || CEDULAS_GENERAL.includes(it.cedula))
+    .reduce((acc: number, it: any) => acc + it.valor, 0);
+  const totalOtrasCedulas = todos
+    .filter((it: any) => it.cedula && !CEDULAS_GENERAL.includes(it.cedula))
+    .reduce((acc: number, it: any) => acc + it.valor, 0);
   const topeGlobal = catalogoQuery.data ? catalogoQuery.data.topeGlobalUVT * catalogoQuery.data.uvt : 0;
-  const excedeGlobal = topeGlobal > 0 && total > topeGlobal;
+  const excedeGlobal = topeGlobal > 0 && totalGeneral > topeGlobal;
 
   const handleAgregar = () => {
-    if (!concepto.trim() || !valor || !tipoDeduccion) {
-      toast.error("Selecciona el tipo, y digita concepto y valor");
+    if (!concepto.trim() || !valor || !tipoDeduccion || !cedula) {
+      toast.error("Selecciona el tipo, la cédula, y digita concepto y valor");
       return;
     }
     const tipoInfo = catalogoQuery.data?.tipos.find((t: any) => t.tipo === tipoDeduccion);
     crearMutation.mutate({
       rentaClienteId, seccion: (tipoInfo?.seccion || "deduccion") as any,
-      tipoDeduccion, concepto: concepto.trim(), valor: Number(valor),
+      tipoDeduccion, cedula: cedula as any, concepto: concepto.trim(), valor: Number(valor),
     });
   };
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">Deducciones y Rentas Exentas</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        <p className="text-sm text-muted-foreground">
-          Cada tipo se valida contra su tope individual 2025. El total combinado no puede superar{" "}
-          {catalogoQuery.data && `${catalogoQuery.data.topeGlobalUVT} UVT (${fmt(topeGlobal)})`} — o el 40% de la
-          renta líquida, lo que sea menor (verificar una vez estén completos los ingresos).
-        </p>
+    <ColapsableCard titulo="Deducciones y Rentas Exentas">
+      <p className="text-sm text-muted-foreground">
+        Cada tipo se valida contra su tope individual 2025. El total combinado de la <strong>Cédula General</strong> no
+        puede superar {catalogoQuery.data && `${catalogoQuery.data.topeGlobalUVT} UVT (${fmt(topeGlobal)})`} — o el 40%
+        de la renta líquida, lo que sea menor (verificar una vez estén completos los ingresos). Pensiones y
+        dividendos tienen su propio tratamiento y no se mezclan en este límite.
+      </p>
 
-        {!!todos.length && (
-          <div className="space-y-1 max-h-56 overflow-y-auto">
-            {todos.map((it: any) => (
-              <div key={it.id} className="flex items-center justify-between text-sm border-b py-1.5 gap-2">
-                <div className="flex-1 min-w-0">
-                  <div className="truncate">{it.concepto}</div>
-                  <div className="text-xs text-muted-foreground">
-                    {catalogoQuery.data?.tipos.find((t: any) => t.tipo === it.tipoDeduccion)?.nombre || it.tipoDeduccion}
-                  </div>
+      {!!todos.length && (
+        <div className="space-y-1 max-h-56 overflow-y-auto">
+          {todos.map((it: any) => (
+            <div key={it.id} className="flex items-center justify-between text-sm border-b py-1.5 gap-2">
+              <div className="flex-1 min-w-0">
+                <div className="truncate">{it.concepto}</div>
+                <div className="text-xs text-muted-foreground">
+                  {catalogoQuery.data?.tipos.find((t: any) => t.tipo === it.tipoDeduccion)?.nombre || it.tipoDeduccion}
+                  {" · "}{nombreCedula(it.cedula)}
                 </div>
-                <span className="font-medium shrink-0">{fmt(it.valor)}</span>
-                <Button variant="ghost" size="icon" className="h-7 w-7 text-red-600 shrink-0" onClick={() => eliminarMutation.mutate({ id: it.id })}>
-                  <Trash2 className="w-3.5 h-3.5" />
-                </Button>
               </div>
-            ))}
-          </div>
-        )}
-
-        <div className={`flex items-center justify-between text-sm font-medium border-t pt-2 ${excedeGlobal ? "text-red-600" : ""}`}>
-          <span className="flex items-center gap-1.5">
-            {excedeGlobal && <AlertTriangle className="w-3.5 h-3.5" />}
-            Total deducciones + rentas exentas
-          </span>
-          <span>{fmt(total)}</span>
+              <span className="font-medium shrink-0">{fmt(it.valor)}</span>
+              <Button variant="ghost" size="icon" className="h-7 w-7 text-red-600 shrink-0" onClick={() => eliminarMutation.mutate({ id: it.id })}>
+                <Trash2 className="w-3.5 h-3.5" />
+              </Button>
+            </div>
+          ))}
         </div>
+      )}
 
-        <div className="grid sm:grid-cols-[1fr_1fr_140px_auto] gap-2 pt-2 border-t items-end">
-          <div className="space-y-1">
-            <Label className="text-xs">Tipo</Label>
-            <Select value={tipoDeduccion} onValueChange={setTipoDeduccion}>
-              <SelectTrigger className="h-8"><SelectValue placeholder="Selecciona..." /></SelectTrigger>
-              <SelectContent>
-                {catalogoQuery.data?.tipos.map((t: any) => (
-                  <SelectItem key={t.tipo} value={t.tipo}>{t.nombre}{t.topeUVT ? ` (tope ${t.topeUVT} UVT)` : ""}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-1">
-            <Label className="text-xs">Concepto</Label>
-            <Input value={concepto} onChange={(e) => setConcepto(e.target.value)} className="h-8" />
-          </div>
-          <div className="space-y-1">
-            <Label className="text-xs">Valor</Label>
-            <Input value={valor} onChange={(e) => setValor(e.target.value)} type="number" className="h-8" />
-          </div>
-          <Button size="sm" variant="outline" className="gap-1" onClick={handleAgregar} disabled={crearMutation.isPending}>
-            <Plus className="w-3.5 h-3.5" /> Agregar
-          </Button>
+      <div className={`flex items-center justify-between text-sm font-medium border-t pt-2 ${excedeGlobal ? "text-red-600" : ""}`}>
+        <span className="flex items-center gap-1.5">
+          {excedeGlobal && <AlertTriangle className="w-3.5 h-3.5" />}
+          Total Cédula General (sujeto al tope de 1.340 UVT)
+        </span>
+        <span>{fmt(totalGeneral)}</span>
+      </div>
+      {totalOtrasCedulas > 0 && (
+        <div className="flex items-center justify-between text-xs text-muted-foreground">
+          <span>Total pensiones / dividendos (aparte, no aplica este tope)</span>
+          <span>{fmt(totalOtrasCedulas)}</span>
         </div>
-      </CardContent>
-    </Card>
+      )}
+
+      <div className="grid sm:grid-cols-[1fr_1fr_1fr_140px_auto] gap-2 pt-2 border-t items-end">
+        <div className="space-y-1">
+          <Label className="text-xs">Tipo</Label>
+          <Select value={tipoDeduccion} onValueChange={setTipoDeduccion}>
+            <SelectTrigger className="h-8"><SelectValue placeholder="Selecciona..." /></SelectTrigger>
+            <SelectContent>
+              {catalogoQuery.data?.tipos.map((t: any) => (
+                <SelectItem key={t.tipo} value={t.tipo}>{t.nombre}{t.topeUVT ? ` (tope ${t.topeUVT} UVT)` : ""}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-1">
+          <Label className="text-xs">Cédula</Label>
+          <Select value={cedula} onValueChange={setCedula}>
+            <SelectTrigger className="h-8"><SelectValue placeholder="Selecciona..." /></SelectTrigger>
+            <SelectContent>
+              {catalogoQuery.data?.cedulas.map((c: any) => (
+                <SelectItem key={c.valor} value={c.valor}>{c.nombre}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-1">
+          <Label className="text-xs">Concepto</Label>
+          <Input value={concepto} onChange={(e) => setConcepto(e.target.value)} className="h-8" />
+        </div>
+        <div className="space-y-1">
+          <Label className="text-xs">Valor</Label>
+          <Input value={valor} onChange={(e) => setValor(e.target.value)} type="number" className="h-8" />
+        </div>
+        <Button size="sm" variant="outline" className="gap-1" onClick={handleAgregar} disabled={crearMutation.isPending}>
+          <Plus className="w-3.5 h-3.5" /> Agregar
+        </Button>
+      </div>
+    </ColapsableCard>
   );
 }

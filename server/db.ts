@@ -2210,10 +2210,10 @@ export async function getDependientes(rentaClienteId: number) {
   return db.select().from(rentaDependientes).where(eq(rentaDependientes.rentaClienteId, rentaClienteId));
 }
 
-export async function agregarDependiente(rentaClienteId: number, nombre: string): Promise<number> {
+export async function agregarDependiente(rentaClienteId: number, nombre: string, tipoDocumento: string, numeroDocumento: string): Promise<number> {
   const db = await getDb();
   if (!db) throw new Error("Base de datos no disponible");
-  const result = await db.insert(rentaDependientes).values({ rentaClienteId, nombre });
+  const result = await db.insert(rentaDependientes).values({ rentaClienteId, nombre, tipoDocumento, numeroDocumento });
   return Number((result as any).insertId ?? (result as any)[0]?.insertId);
 }
 

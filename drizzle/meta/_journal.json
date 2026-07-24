@@ -183,6 +183,13 @@
       "when": 1784861653243,
       "tag": "0025_renta_liquidacion",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "5",
+      "when": 1784863149716,
+      "tag": "0026_dependientes_cedula",
+      "breakpoints": true
     }
   ]
 }

@@ -2095,7 +2095,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
       // muestre el tope de cada tipo sin duplicar esos números ahí.
       catalogoTopes: protectedProcedure.query(async ({ ctx }) => {
         assertInformesAccess(ctx.user.cedula);
-        return { uvt: rentaDb.UVT_2025, tipos: rentaDb.TIPOS_DEDUCCION_RENTA_EXENTA, topeGlobalUVT: rentaDb.TOPES_DEDUCCION_2025.limiteGlobalDeduccionesRentasExentas };
+        return { uvt: rentaDb.UVT_2025, tipos: rentaDb.TIPOS_DEDUCCION_RENTA_EXENTA, topeGlobalUVT: rentaDb.TOPES_DEDUCCION_2025.limiteGlobalDeduccionesRentasExentas, cedulas: rentaDb.CEDULAS };
       }),
       list: protectedProcedure
         .input(z.object({ rentaClienteId: z.number(), seccion: z.string().optional() }))
@@ -2106,6 +2106,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
       crear: protectedProcedure
         .input(z.object({
           rentaClienteId: z.number(), seccion: z.enum(["activo", "pasivo", "ingreso", "deduccion", "rentaExenta"]),
+          cedula: z.enum(["trabajo", "capital", "no_laboral", "pensiones", "dividendos"]).optional(),
           tipoDeduccion: z.string().optional(), concepto: z.string().min(1), valor: z.number(),
         }))
         .mutation(async ({ input, ctx }) => {
@@ -2118,7 +2119,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
             }
           }
           const id = await db.crearLiquidacionItem({
-            rentaClienteId: input.rentaClienteId, seccion: input.seccion,
+            rentaClienteId: input.rentaClienteId, seccion: input.seccion, cedula: input.cedula || null,
             tipoDeduccion: input.tipoDeduccion || null, concepto: input.concepto, valor: input.valor,
           });
           return { id, alerta };
@@ -2156,10 +2157,10 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           return db.getDependientes(input.rentaClienteId);
         }),
       agregar: protectedProcedure
-        .input(z.object({ rentaClienteId: z.number(), nombre: z.string().min(1) }))
+        .input(z.object({ rentaClienteId: z.number(), nombre: z.string().min(1), tipoDocumento: z.string().min(1), numeroDocumento: z.string().min(1) }))
         .mutation(async ({ input, ctx }) => {
           assertInformesAccess(ctx.user.cedula);
-          const id = await db.agregarDependiente(input.rentaClienteId, input.nombre);
+          const id = await db.agregarDependiente(input.rentaClienteId, input.nombre, input.tipoDocumento, input.numeroDocumento);
           return { id };
         }),
       eliminar: protectedProcedure

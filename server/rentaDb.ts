@@ -89,6 +89,22 @@ function esFilaEncabezado(valores: any[]): boolean {
 /** UVT y topes del año gravable 2025 (Resolución DIAN, UVT = $49.799).
  * Valores confirmados por varias fuentes tributarias — si cambian para
  * otro año gravable, este es el único lugar que hay que actualizar. */
+/** Las 5 cédulas del Formulario 210 — el tope combinado de deducciones +
+ * rentas exentas (1.340 UVT) solo aplica dentro de la Cédula General
+ * (trabajo/capital/no_laboral); pensiones y dividendos tienen su propio
+ * tratamiento y no se mezclan en ese límite. */
+export const CEDULAS: { valor: string; nombre: string; esGeneral: boolean }[] = [
+  { valor: "trabajo", nombre: "General — Rentas de trabajo", esGeneral: true },
+  { valor: "capital", nombre: "General — Rentas de capital", esGeneral: true },
+  { valor: "no_laboral", nombre: "General — Rentas no laborales", esGeneral: true },
+  { valor: "pensiones", nombre: "Cédula de Pensiones", esGeneral: false },
+  { valor: "dividendos", nombre: "Cédula de Dividendos y Participaciones", esGeneral: false },
+];
+
+export function esCedulaGeneral(cedula: string | null | undefined): boolean {
+  return CEDULAS.find(c => c.valor === cedula)?.esGeneral ?? true; // sin cédula asignada: se asume general (comportamiento previo)
+}
+
 export const UVT_2025 = 49799;
 
 export const TOPES_DEDUCCION_2025 = {

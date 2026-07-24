@@ -681,6 +681,13 @@ export const rentaLiquidacionItems = mysqlTable("rentaLiquidacionItems", {
   id: int("id").autoincrement().primaryKey(),
   rentaClienteId: int("rentaClienteId").notNull(),
   seccion: mysqlEnum("seccion", ["activo", "pasivo", "ingreso", "deduccion", "rentaExenta"]).notNull(),
+  /** Cédula a la que pertenece el ingreso/deducción/renta exenta (el
+   * Formulario 210 se liquida por cédula) — null para activos y pasivos,
+   * que no son cedulares. El tope combinado de deducciones + rentas
+   * exentas (1.340 UVT) solo aplica dentro de la Cédula General (trabajo,
+   * capital, no_laboral) — pensiones y dividendos tienen su propio
+   * tratamiento aparte, por eso se necesita distinguirlas. */
+  cedula: mysqlEnum("cedula", ["trabajo", "capital", "no_laboral", "pensiones", "dividendos"]),
   /** Para deducciones/rentas exentas: el tipo específico (para poder
    * validar contra su tope individual 2025) — null para activos, pasivos
    * e ingresos, que no tienen un catálogo de tipos con tope. */
@@ -696,14 +703,16 @@ export const rentaLiquidacionItems = mysqlTable("rentaLiquidacionItems", {
 export type RentaLiquidacionItem = typeof rentaLiquidacionItems.$inferSelect;
 export type InsertRentaLiquidacionItem = typeof rentaLiquidacionItems.$inferInsert;
 
-/** Dependientes económicos del cliente de renta — solo nombre, para el
- * registro y el anexo ejecutivo (la deducción por dependientes es un
- * valor fijo si hay al menos uno, no aumenta por cada dependiente
- * adicional). */
+/** Dependientes económicos del cliente de renta — nombre + tipo y número
+ * de documento, para el registro y el anexo ejecutivo (la deducción por
+ * dependientes es un valor fijo si hay al menos uno, no aumenta por cada
+ * dependiente adicional). */
 export const rentaDependientes = mysqlTable("rentaDependientes", {
   id: int("id").autoincrement().primaryKey(),
   rentaClienteId: int("rentaClienteId").notNull(),
   nombre: varchar("nombre", { length: 255 }).notNull(),
+  tipoDocumento: varchar("tipoDocumento", { length: 10 }).notNull(),
+  numeroDocumento: varchar("numeroDocumento", { length: 20 }).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 export type RentaDependiente = typeof rentaDependientes.$inferSelect;
