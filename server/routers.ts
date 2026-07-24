@@ -1967,6 +1967,65 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
         }),
     }),
   }),
+
+  renta: router({
+    // Restringido a la misma cédula que Informes (Arlex) — mismo patrón,
+    // ver assertInformesAccess.
+    clientes: router({
+      list: protectedProcedure
+        .input(z.object({ anioGravable: z.number() }))
+        .query(async ({ input, ctx }) => {
+          assertInformesAccess(ctx.user.cedula);
+          const filas = await db.getRentaClientes(input.anioGravable);
+          const conVencimiento = await Promise.all(filas.map(async (c) => {
+            const vencimiento = c.noObligado ? null : await db.getVencimientoRentaPN(c.cedula, c.anioGravable);
+            const diasRestantes = vencimiento
+              ? Math.ceil((vencimiento.getTime() - Date.now()) / (1000 * 60 * 60 * 24))
+              : null;
+            return { ...c, vencimiento, diasRestantes };
+          }));
+          // Orden: primero los obligados y pendientes (por menos días
+          // restantes), luego los ya terminados, y al final los no
+          // obligados a declarar.
+          return conVencimiento.sort((a, b) => {
+            if (a.noObligado !== b.noObligado) return a.noObligado ? 1 : -1;
+            if (a.terminado !== b.terminado) return a.terminado ? 1 : -1;
+            const da = a.diasRestantes ?? Infinity;
+            const dbb = b.diasRestantes ?? Infinity;
+            return da - dbb;
+          });
+        }),
+      create: protectedProcedure
+        .input(z.object({ nombre: z.string().min(1), cedula: z.string().min(1), anioGravable: z.number() }))
+        .mutation(async ({ input, ctx }) => {
+          assertInformesAccess(ctx.user.cedula);
+          const id = await db.createRentaCliente({
+            nombre: input.nombre, cedula: input.cedula.replace(/\D/g, ""),
+            anioGravable: input.anioGravable, createdById: ctx.user.id,
+          });
+          return { id };
+        }),
+      update: protectedProcedure
+        .input(z.object({
+          id: z.number(), nombre: z.string().optional(), cedula: z.string().optional(),
+          noObligado: z.boolean().optional(), terminado: z.boolean().optional(),
+        }))
+        .mutation(async ({ input, ctx }) => {
+          assertInformesAccess(ctx.user.cedula);
+          const { id, ...data } = input;
+          if (data.cedula) data.cedula = data.cedula.replace(/\D/g, "");
+          await db.updateRentaCliente(id, data);
+          return { success: true };
+        }),
+      delete: protectedProcedure
+        .input(z.object({ id: z.number() }))
+        .mutation(async ({ input, ctx }) => {
+          assertInformesAccess(ctx.user.cedula);
+          await db.deleteRentaCliente(input.id);
+          return { success: true };
+        }),
+    }),
+  }),
 });
 
 export type AppRouter = typeof appRouter;

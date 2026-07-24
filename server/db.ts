@@ -1,7 +1,7 @@
 import { eq, and, desc, asc, like, sql, inArray, gte, lte, or, ne, isNull } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { alias } from "drizzle-orm/mysql-core";
-import { InsertUser, users, clients, InsertClient, taxObligations, InsertTaxObligation, clientObligations, InsertClientObligation, taxDeadlines, InsertTaxDeadline, tasks, InsertTask, taskAttachments, InsertTaskAttachment, deadlineAttachments, InsertDeadlineAttachment, appSettings, InsertAppSetting, dianCalendar, InsertDianCalendar, clientDriveSubfolders, timeEntries, InsertTimeEntry, comments, InsertComment, historyEvents, notifications, workLocationEntries, taskRecurrences, InsertTaskRecurrence, boardPosts, boardAttachments } from "../drizzle/schema";
+import { InsertUser, users, clients, InsertClient, taxObligations, InsertTaxObligation, clientObligations, InsertClientObligation, taxDeadlines, InsertTaxDeadline, tasks, InsertTask, taskAttachments, InsertTaskAttachment, deadlineAttachments, InsertDeadlineAttachment, appSettings, InsertAppSetting, dianCalendar, InsertDianCalendar, clientDriveSubfolders, timeEntries, InsertTimeEntry, comments, InsertComment, historyEvents, notifications, workLocationEntries, taskRecurrences, InsertTaskRecurrence, boardPosts, boardAttachments, rentaClientes, InsertRentaCliente } from "../drizzle/schema";
 import { ENV } from './_core/env';
 import { bogotaTodayUTCMidnight } from "./dateUtils";
 
@@ -2036,5 +2036,64 @@ export async function getBoardContextForAssistant(limite: number = 15) {
   })));
   return conAdjuntos;
 }
+
+// ==================== RENTA PERSONA NATURAL ====================
+
+export async function getRentaClientes(anioGravable: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(rentaClientes).where(eq(rentaClientes.anioGravable, anioGravable));
+}
+
+export async function createRentaCliente(data: InsertRentaCliente): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new Error("Base de datos no disponible");
+  const result = await db.insert(rentaClientes).values(data);
+  return Number((result as any).insertId ?? (result as any)[0]?.insertId);
+}
+
+export async function updateRentaCliente(id: number, data: Partial<InsertRentaCliente>) {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(rentaClientes).set(data).where(eq(rentaClientes.id, id));
+}
+
+export async function deleteRentaCliente(id: number) {
+  const db = await getDb();
+  if (!db) return;
+  await db.delete(rentaClientes).where(eq(rentaClientes.id, id));
+}
+
+/** Busca el vencimiento de Renta Personas Naturales para una cédula,
+ * reutilizando el calendario ya cargado en Configuración (dianCalendar) —
+ * no se guarda ninguna fecha aparte, siempre se calcula en vivo contra el
+ * mismo calendario que usa el resto de la aplicación. La obligación se
+ * busca por nombre de forma FLEXIBLE (contiene "Renta" y "Natural"), no por
+ * texto exacto — el nombre real trae guion y puede variar en mayúsculas
+ * ("Renta - Personas Naturales"), y una búsqueda exacta fallaría. Se evita
+ * a propósito hacer match solo con "Renta" para no confundir con "Renta -
+ * Personas Jurídicas". `anioGravable` es el año que se está declarando
+ * (ej. 2025); el calendario normalmente vive un año calendario después (se
+ * declara en 2026), así que se prueba primero con ese año y, si no hay
+ * nada, con el año gravable mismo, por si el calendario se cargó bajo ese
+ * año en vez del año de declaración. */
+export async function getVencimientoRentaPN(cedula: string, anioGravable: number): Promise<Date | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const obligacion = await db.select().from(taxObligations)
+    .where(and(like(taxObligations.name, "%Renta%"), like(taxObligations.name, "%Natural%")))
+    .limit(1);
+  if (obligacion.length === 0) return null;
+  const code = obligacion[0].code;
+
+  for (const anioCalendario of [anioGravable + 1, anioGravable]) {
+    for (const periodo of [String(anioGravable), String(anioCalendario)]) {
+      const entrada = await getDianCalendarForDeadline(anioCalendario, code, cedula, periodo);
+      if (entrada) return entrada.dueDate;
+    }
+  }
+  return null;
+}
+
 
 

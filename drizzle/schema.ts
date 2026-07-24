@@ -585,3 +585,30 @@ export const boardAttachments = mysqlTable("boardAttachments", {
 });
 export type BoardAttachment = typeof boardAttachments.$inferSelect;
 export type InsertBoardAttachment = typeof boardAttachments.$inferInsert;
+
+// ==================== RENTA PERSONA NATURAL (módulo separado) ====================
+// Clientes propios de este módulo — separados de los clientes generales
+// (`clients`). Solo nombre + cédula; el vencimiento se calcula en vivo
+// contra el calendario ya cargado en Configuración (dianCalendar), por
+// últimos dígitos de cédula, no se guarda una fecha fija aquí.
+
+export const rentaClientes = mysqlTable("rentaClientes", {
+  id: int("id").autoincrement().primaryKey(),
+  nombre: varchar("nombre", { length: 255 }).notNull(),
+  cedula: varchar("cedula", { length: 20 }).notNull(),
+  /** Año gravable que se está declarando (ej. 2025, se declara en 2026). */
+  anioGravable: int("anioGravable").notNull(),
+  /** Marcado cuando se revisó y NO está obligado a declarar — se ubica al
+   * final del listado en vez de ordenarse por vencimiento. */
+  noObligado: boolean("noObligado").default(false).notNull(),
+  /** Se pone en true cuando en la pestaña de liquidación se sube el
+   * Formulario 210 con el sello de "recibido" — la renta queda finalizada. */
+  terminado: boolean("terminado").default(false).notNull(),
+  createdById: int("createdById"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (table) => ({
+  cedulaAnioIdx: uniqueIndex("rentaClientes_cedula_anio_idx").on(table.cedula, table.anioGravable),
+}));
+export type RentaCliente = typeof rentaClientes.$inferSelect;
+export type InsertRentaCliente = typeof rentaClientes.$inferInsert;
+
