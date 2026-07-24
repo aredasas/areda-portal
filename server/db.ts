@@ -1,7 +1,7 @@
 import { eq, and, desc, asc, like, sql, inArray, gte, lte, or, ne, isNull } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { alias } from "drizzle-orm/mysql-core";
-import { InsertUser, users, clients, InsertClient, taxObligations, InsertTaxObligation, clientObligations, InsertClientObligation, taxDeadlines, InsertTaxDeadline, tasks, InsertTask, taskAttachments, InsertTaskAttachment, deadlineAttachments, InsertDeadlineAttachment, appSettings, InsertAppSetting, dianCalendar, InsertDianCalendar, clientDriveSubfolders, timeEntries, InsertTimeEntry, comments, InsertComment, historyEvents, notifications, workLocationEntries, taskRecurrences, InsertTaskRecurrence, boardPosts, boardAttachments, rentaClientes, InsertRentaCliente, rentaExogena, InsertRentaExogena, rentaExogenaItems, InsertRentaExogenaItem, rentaDeclaracionAnterior, InsertRentaDeclaracionAnterior, rentaLiquidacionItems, InsertRentaLiquidacionItem, rentaDependientes, InsertRentaDependiente } from "../drizzle/schema";
+import { InsertUser, users, clients, InsertClient, taxObligations, InsertTaxObligation, clientObligations, InsertClientObligation, taxDeadlines, InsertTaxDeadline, tasks, InsertTask, taskAttachments, InsertTaskAttachment, deadlineAttachments, InsertDeadlineAttachment, appSettings, InsertAppSetting, dianCalendar, InsertDianCalendar, clientDriveSubfolders, timeEntries, InsertTimeEntry, comments, InsertComment, historyEvents, notifications, workLocationEntries, taskRecurrences, InsertTaskRecurrence, boardPosts, boardAttachments, rentaClientes, InsertRentaCliente, rentaExogena, InsertRentaExogena, rentaExogenaItems, InsertRentaExogenaItem, rentaDeclaracionAnterior, InsertRentaDeclaracionAnterior, rentaLiquidacionItems, InsertRentaLiquidacionItem, rentaDependientes, InsertRentaDependiente, rentaReportes, InsertRentaReporte } from "../drizzle/schema";
 import { ENV } from './_core/env';
 import { bogotaTodayUTCMidnight } from "./dateUtils";
 
@@ -2271,6 +2271,60 @@ export async function eliminarDependiente(id: number) {
   const db = await getDb();
   if (!db) return;
   await db.delete(rentaDependientes).where(eq(rentaDependientes.id, id));
+}
+
+/** Reúne los activos, pasivos, ingresos (agrupados por cédula), y
+ * deducciones/rentas exentas (agrupadas por cédula) de un cliente de
+ * renta, en el formato que necesita rentaDb.armarLiquidacion — el cálculo
+ * en sí es una función pura, esta solo junta los datos crudos. */
+export async function getDatosLiquidacion(rentaClienteId: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const [activos, pasivos, ingresos, deducciones, rentasExentas, declaracionAnterior] = await Promise.all([
+    getLiquidacionItems(rentaClienteId, "activo"),
+    getLiquidacionItems(rentaClienteId, "pasivo"),
+    getLiquidacionItems(rentaClienteId, "ingreso"),
+    getLiquidacionItems(rentaClienteId, "deduccion"),
+    getLiquidacionItems(rentaClienteId, "rentaExenta"),
+    getDeclaracionAnterior(rentaClienteId),
+  ]);
+
+  const ingresosPorCedula: Record<string, { concepto: string; valor: number }[]> = {};
+  for (const it of ingresos) {
+    const cedula = it.cedula || "trabajo";
+    if (!ingresosPorCedula[cedula]) ingresosPorCedula[cedula] = [];
+    ingresosPorCedula[cedula].push({ concepto: it.concepto, valor: it.valor });
+  }
+
+  const deduccionesRentasExentasPorCedula: Record<string, { concepto: string; valor: number; tipoDeduccion: string | null }[]> = {};
+  for (const it of [...deducciones, ...rentasExentas]) {
+    const cedula = it.cedula || "trabajo";
+    if (!deduccionesRentasExentasPorCedula[cedula]) deduccionesRentasExentasPorCedula[cedula] = [];
+    deduccionesRentasExentasPorCedula[cedula].push({ concepto: it.concepto, valor: it.valor, tipoDeduccion: it.tipoDeduccion });
+  }
+
+  return {
+    activos: activos.map(a => ({ concepto: a.concepto, valor: a.valor })),
+    pasivos: pasivos.map(p => ({ concepto: p.concepto, valor: p.valor })),
+    ingresosPorCedula,
+    deduccionesRentasExentasPorCedula,
+    patrimonioLiquidoAnioAnterior: declaracionAnterior?.patrimonioLiquidoAnioAnterior ?? null,
+    impuestoNetoAnioAnterior: declaracionAnterior?.impuestoNetoAnioAnterior ?? null,
+    saldoAFavorAnterior: declaracionAnterior?.saldoAFavorAnterior ?? null,
+  };
+}
+
+export async function guardarRentaReporte(rentaClienteId: number, fileKey: string, generadoPorId: number): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new Error("Base de datos no disponible");
+  const result = await db.insert(rentaReportes).values({ rentaClienteId, fileKey, generadoPorId });
+  return Number((result as any).insertId ?? (result as any)[0]?.insertId);
+}
+
+export async function getRentaReportes(rentaClienteId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(rentaReportes).where(eq(rentaReportes.rentaClienteId, rentaClienteId)).orderBy(desc(rentaReportes.createdAt));
 }
 
 

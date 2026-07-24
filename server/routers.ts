@@ -2167,6 +2167,44 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           return { importados };
         }),
     }),
+    reportes: router({
+      list: protectedProcedure
+        .input(z.object({ rentaClienteId: z.number() }))
+        .query(async ({ input, ctx }) => {
+          assertInformesAccess(ctx.user.cedula);
+          return db.getRentaReportes(input.rentaClienteId);
+        }),
+      getDownloadUrl: protectedProcedure
+        .input(z.object({ fileKey: z.string() }))
+        .query(async ({ input, ctx }) => {
+          assertInformesAccess(ctx.user.cedula);
+          return { signedUrl: await storageGetSignedUrl(input.fileKey) };
+        }),
+      // Reúne activos/pasivos/ingresos/deducciones/declaración anterior ya
+      // cargados, calcula la liquidación (patrimonio líquido, renta líquida
+      // gravable por cédula con el tope aplicado, impuesto según Art. 241,
+      // anticipo de referencia), y genera el Excel del borrador.
+      generarBorrador210: protectedProcedure
+        .input(z.object({ rentaClienteId: z.number(), anioGravable: z.number() }))
+        .mutation(async ({ input, ctx }) => {
+          assertInformesAccess(ctx.user.cedula);
+          const cliente = (await db.getRentaClientes(input.anioGravable)).find((c: any) => c.id === input.rentaClienteId);
+          if (!cliente) throw new Error("Cliente de renta no encontrado para ese año gravable.");
+          const datos = await db.getDatosLiquidacion(input.rentaClienteId);
+          if (!datos) throw new Error("No se pudo reunir la información de liquidación.");
+
+          const resultado = rentaDb.armarLiquidacion(datos);
+          const buffer = await rentaDb.generarBorrador210(resultado, cliente.nombre, cliente.cedula, input.anioGravable);
+
+          const key = `renta/borrador210/${input.rentaClienteId}_${Date.now()}.xlsx`;
+          const { key: fileKey } = await storagePut(
+            key, buffer, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          );
+          await db.guardarRentaReporte(input.rentaClienteId, fileKey, ctx.user.id);
+          const signedUrl = await storageGetSignedUrl(fileKey);
+          return { signedUrl, fileKey, resultado };
+        }),
+    }),
     dependientes: router({
       list: protectedProcedure
         .input(z.object({ rentaClienteId: z.number() }))

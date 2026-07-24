@@ -13,7 +13,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { trpc } from "@/lib/trpc";
 import {
   UserSquare2, Construction, Plus, Loader2, Pencil, Trash2, CheckCircle2, Clock, Users, FileSpreadsheet,
-  Upload, AlertTriangle, Wallet, ChevronDown,
+  Upload, AlertTriangle, Wallet, ChevronDown, Download, Calculator,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -390,6 +390,7 @@ function LiquidacionTab({ anioGravable }: { anioGravable: number }) {
           <SeccionItemsCard rentaClienteId={rentaClienteId} seccion="activo" titulo="Activos" puedeImportar />
           <SeccionItemsCard rentaClienteId={rentaClienteId} seccion="pasivo" titulo="Pasivos" puedeImportar />
           <IngresosDeduccionesPorCedulaCard rentaClienteId={rentaClienteId} />
+          <Borrador210Card rentaClienteId={rentaClienteId} anioGravable={anioGravable} />
 
           <Card className="border-dashed">
             <CardContent className="py-10 flex flex-col items-center text-center gap-3">
@@ -399,8 +400,8 @@ function LiquidacionTab({ anioGravable }: { anioGravable: number }) {
               </div>
               <h3 className="font-medium">En construcción</h3>
               <p className="text-sm text-muted-foreground max-w-md">
-                Validación del 60% de costos en rentas de trabajo, generación del borrador del
-                Formulario 210 con su anexo ejecutivo, carpeta de Drive para soportes, y finalización.
+                Validación del 60% de costos en rentas de trabajo, anexo ejecutivo, carpeta de Drive
+                para soportes, y finalización (subir el 210 con sello de recibido).
               </p>
               <Badge variant="outline" className="text-xs">Próxima entrega</Badge>
             </CardContent>
@@ -942,5 +943,81 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId }: { rentaClienteId: 
         onImportado={() => utils.renta.liquidacion.list.invalidate({ rentaClienteId, seccion: "ingreso" })}
       />
     </ColapsableCard>
+  );
+}
+
+function Borrador210Card({ rentaClienteId, anioGravable }: { rentaClienteId: number; anioGravable: number }) {
+  const utils = trpc.useUtils();
+  const reportesQuery = trpc.renta.reportes.list.useQuery({ rentaClienteId });
+  const [ultimoResultado, setUltimoResultado] = useState<any | null>(null);
+
+  const generarMutation = trpc.renta.reportes.generarBorrador210.useMutation({
+    onSuccess: (data) => {
+      toast.success("Borrador generado");
+      setUltimoResultado(data.resultado);
+      window.open(data.signedUrl, "_blank");
+      utils.renta.reportes.list.invalidate({ rentaClienteId });
+    },
+    onError: (err) => toast.error(err.message || "No se pudo generar el borrador"),
+  });
+
+  const fmt = (n: number | null) => n == null ? "—" : `$${n.toLocaleString("es-CO")}`;
+
+  return (
+    <ColapsableCard titulo="Borrador Formulario 210">
+      <p className="text-sm text-muted-foreground">
+        Reúne los activos, pasivos, ingresos y deducciones/rentas exentas ya cargados, calcula el
+        patrimonio líquido, la renta líquida gravable por cédula (con el tope de 1.340 UVT aplicado a la
+        Cédula General), y el impuesto según la tabla del Art. 241 E.T. Es un resumen de apoyo — no
+        reemplaza la revisión profesional.
+      </p>
+
+      <Button
+        onClick={() => generarMutation.mutate({ rentaClienteId, anioGravable })}
+        disabled={generarMutation.isPending}
+        className="gap-2 bg-[#EDA011] hover:bg-[#d48f0f] text-white"
+      >
+        {generarMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Calculator className="w-4 h-4" />}
+        Generar borrador
+      </Button>
+
+      {ultimoResultado && (
+        <div className="border rounded-md p-3 space-y-1.5 text-sm">
+          <div className="flex items-center justify-between"><span>Patrimonio líquido</span><span className="font-medium">{fmt(ultimoResultado.patrimonioLiquido)}</span></div>
+          <div className="flex items-center justify-between"><span>Renta líquida gravable total</span><span className="font-medium">{fmt(ultimoResultado.rentaLiquidaGravableTotal)}</span></div>
+          <div className="flex items-center justify-between font-medium border-t pt-1.5">
+            <span>Impuesto de renta ({(ultimoResultado.impuestoRenta.tarifaMarginal * 100).toFixed(0)}%)</span>
+            <span>{fmt(ultimoResultado.impuestoRenta.impuesto)}</span>
+          </div>
+          {ultimoResultado.anticipoEstimado != null && (
+            <div className="flex items-center justify-between text-muted-foreground">
+              <span>Anticipo estimado (referencia)</span><span>{fmt(ultimoResultado.anticipoEstimado)}</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {!!reportesQuery.data?.length && (
+        <div className="space-y-1 pt-2 border-t">
+          <span className="text-xs text-muted-foreground">Borradores generados anteriormente</span>
+          {reportesQuery.data.map((r: any) => (
+            <ReporteRentaDownloadLink key={r.id} fileKey={r.fileKey} fecha={r.createdAt} />
+          ))}
+        </div>
+      )}
+    </ColapsableCard>
+  );
+}
+
+function ReporteRentaDownloadLink({ fileKey, fecha }: { fileKey: string; fecha: string }) {
+  const urlQuery = trpc.renta.reportes.getDownloadUrl.useQuery({ fileKey }, { enabled: false });
+  const handleClick = async () => {
+    const result = await urlQuery.refetch();
+    if (result.data?.signedUrl) window.open(result.data.signedUrl, "_blank");
+  };
+  return (
+    <button onClick={handleClick} className="flex items-center justify-between text-sm border-b py-1.5 w-full text-left hover:bg-muted/50 rounded px-1">
+      <span className="flex items-center gap-1.5"><Download className="w-3.5 h-3.5" /> {new Date(fecha).toLocaleString("es-CO")}</span>
+    </button>
   );
 }

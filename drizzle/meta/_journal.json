@@ -190,6 +190,13 @@
       "when": 1784863149716,
       "tag": "0026_dependientes_cedula",
       "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "5",
+      "when": 1784865929181,
+      "tag": "0027_renta_reportes",
+      "breakpoints": true
     }
   ]
 }

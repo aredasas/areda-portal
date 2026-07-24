@@ -1,4 +1,5 @@
 import * as XLSX from "xlsx";
+import ExcelJS from "exceljs";
 
 // El reporte de "Consulta de Información Exógena" de la DIAN usa un
 // prefijo de espacio de nombres XML poco común en su archivo interno
@@ -107,6 +108,35 @@ export function esCedulaGeneral(cedula: string | null | undefined): boolean {
 
 export const UVT_2025 = 49799;
 
+/** Tabla de tarifas del Art. 241 del Estatuto Tributario — vigente sin
+ * cambios desde la Ley 2010 de 2019 (confirmado directamente contra el
+ * texto del artículo). Rangos en UVT sobre la renta líquida gravable. */
+const TABLA_TARIFA_241: { desde: number; hasta: number | null; tarifa: number; restarUVT: number; sumarUVT: number }[] = [
+  { desde: 0, hasta: 1090, tarifa: 0, restarUVT: 0, sumarUVT: 0 },
+  { desde: 1090, hasta: 1700, tarifa: 0.19, restarUVT: 1090, sumarUVT: 0 },
+  { desde: 1700, hasta: 4100, tarifa: 0.28, restarUVT: 1700, sumarUVT: 116 },
+  { desde: 4100, hasta: 8670, tarifa: 0.33, restarUVT: 4100, sumarUVT: 788 },
+  { desde: 8670, hasta: 18970, tarifa: 0.35, restarUVT: 8670, sumarUVT: 2296 },
+  { desde: 18970, hasta: 31000, tarifa: 0.37, restarUVT: 18970, sumarUVT: 5901 },
+  { desde: 31000, hasta: null, tarifa: 0.39, restarUVT: 31000, sumarUVT: 10352 },
+];
+
+/** Calcula el impuesto de renta sobre una renta líquida gravable (en
+ * pesos), aplicando la tabla progresiva del Art. 241 — ver la tabla
+ * arriba. Devuelve el impuesto en pesos y el rango/tarifa marginal
+ * aplicado, para mostrar la fórmula usada en el borrador. */
+export function calcularImpuestoRenta(rentaLiquidaGravable: number): { impuesto: number; tarifaMarginal: number; rangoUVT: string } {
+  if (rentaLiquidaGravable <= 0) return { impuesto: 0, tarifaMarginal: 0, rangoUVT: "0 UVT" };
+  const baseUVT = rentaLiquidaGravable / UVT_2025;
+  const rango = TABLA_TARIFA_241.find(r => baseUVT > r.desde && (r.hasta === null || baseUVT <= r.hasta)) || TABLA_TARIFA_241[0];
+  const impuestoUVT = (baseUVT - rango.restarUVT) * rango.tarifa + rango.sumarUVT;
+  return {
+    impuesto: Math.round(impuestoUVT * UVT_2025),
+    tarifaMarginal: rango.tarifa,
+    rangoUVT: rango.hasta ? `${rango.desde}-${rango.hasta} UVT` : `>${rango.desde} UVT`,
+  };
+}
+
 export const TOPES_DEDUCCION_2025 = {
   ingresos: 1400, // tope de ingresos brutos para obligación de declarar (referencia)
   patrimonio: 4500,
@@ -144,6 +174,90 @@ export function validarTopeDeduccion(tipoDeduccion: string, valor: number): { ex
   if (!catalogo || catalogo.topeUVT === null) return { excedeTope: false, tope: null, topeUVT: null };
   const tope = catalogo.topeUVT * UVT_2025;
   return { excedeTope: valor > tope, tope, topeUVT: catalogo.topeUVT };
+}
+
+export type DatosLiquidacion = {
+  activos: { concepto: string; valor: number }[];
+  pasivos: { concepto: string; valor: number }[];
+  ingresosPorCedula: Record<string, { concepto: string; valor: number }[]>;
+  deduccionesRentasExentasPorCedula: Record<string, { concepto: string; valor: number; tipoDeduccion: string | null }[]>;
+  patrimonioLiquidoAnioAnterior: number | null;
+  impuestoNetoAnioAnterior: number | null;
+  saldoAFavorAnterior: number | null;
+};
+
+export type ResultadoLiquidacion = {
+  patrimonioBruto: number;
+  deudas: number;
+  patrimonioLiquido: number;
+  ingresosPorCedula: Record<string, number>;
+  totalDeduccionesRentasExentasPorCedula: Record<string, number>;
+  totalDeduccionesRentasExentasGeneral: number;
+  totalDeduccionesRentasExentasGeneralCapeado: number;
+  rentaLiquidaCedulaGeneral: number;
+  rentaLiquidaPensiones: number;
+  rentaLiquidaGravableTotal: number;
+  impuestoRenta: { impuesto: number; tarifaMarginal: number; rangoUVT: string };
+  patrimonioLiquidoAnioAnterior: number | null;
+  impuestoNetoAnioAnterior: number | null;
+  saldoAFavorAnterior: number | null;
+  anticipoEstimado: number | null;
+};
+
+const CEDULAS_GENERAL_CALC = ["trabajo", "capital", "no_laboral"];
+
+/** Reúne los totales de activos/pasivos/ingresos/deducciones ya obtenidos
+ * de la base de datos y calcula la liquidación — patrimonio líquido,
+ * renta líquida gravable por cédula (con el tope de deducciones/rentas
+ * exentas de 1.340 UVT aplicado solo a la Cédula General), el impuesto
+ * según la tabla del Art. 241, y un anticipo estimado (fórmula simple de
+ * referencia — el Art. 807 tiene reglas adicionales según si es la
+ * primera declaración o hubo cambios grandes en el impuesto, que el
+ * contador debe verificar antes de usar esta cifra como definitiva). */
+export function armarLiquidacion(datos: DatosLiquidacion): ResultadoLiquidacion {
+  const patrimonioBruto = datos.activos.reduce((a, it) => a + it.valor, 0);
+  const deudas = datos.pasivos.reduce((a, it) => a + it.valor, 0);
+  const patrimonioLiquido = Math.max(0, patrimonioBruto - deudas);
+
+  const ingresosPorCedula: Record<string, number> = {};
+  for (const [cedula, items] of Object.entries(datos.ingresosPorCedula)) {
+    ingresosPorCedula[cedula] = items.reduce((a, it) => a + it.valor, 0);
+  }
+
+  const totalDeduccionesRentasExentasPorCedula: Record<string, number> = {};
+  for (const [cedula, items] of Object.entries(datos.deduccionesRentasExentasPorCedula)) {
+    totalDeduccionesRentasExentasPorCedula[cedula] = items.reduce((a, it) => a + it.valor, 0);
+  }
+
+  const totalDeduccionesRentasExentasGeneral = CEDULAS_GENERAL_CALC
+    .reduce((a, c) => a + (totalDeduccionesRentasExentasPorCedula[c] || 0), 0);
+  const topeGlobal = TOPES_DEDUCCION_2025.limiteGlobalDeduccionesRentasExentas * UVT_2025;
+  const totalDeduccionesRentasExentasGeneralCapeado = Math.min(totalDeduccionesRentasExentasGeneral, topeGlobal);
+
+  const ingresosGeneral = CEDULAS_GENERAL_CALC.reduce((a, c) => a + (ingresosPorCedula[c] || 0), 0);
+  const rentaLiquidaCedulaGeneral = Math.max(0, ingresosGeneral - totalDeduccionesRentasExentasGeneralCapeado);
+
+  const ingresosPensiones = ingresosPorCedula["pensiones"] || 0;
+  const rentasExentasPensiones = totalDeduccionesRentasExentasPorCedula["pensiones"] || 0;
+  const rentaLiquidaPensiones = Math.max(0, ingresosPensiones - rentasExentasPensiones);
+
+  const rentaLiquidaGravableTotal = rentaLiquidaCedulaGeneral + rentaLiquidaPensiones;
+  const impuestoRenta = calcularImpuestoRenta(rentaLiquidaGravableTotal);
+
+  let anticipoEstimado: number | null = null;
+  if (datos.impuestoNetoAnioAnterior !== null && datos.impuestoNetoAnioAnterior !== undefined) {
+    anticipoEstimado = Math.round(((impuestoRenta.impuesto + datos.impuestoNetoAnioAnterior) / 2) * 0.25);
+  }
+
+  return {
+    patrimonioBruto, deudas, patrimonioLiquido, ingresosPorCedula,
+    totalDeduccionesRentasExentasPorCedula, totalDeduccionesRentasExentasGeneral, totalDeduccionesRentasExentasGeneralCapeado,
+    rentaLiquidaCedulaGeneral, rentaLiquidaPensiones, rentaLiquidaGravableTotal, impuestoRenta,
+    patrimonioLiquidoAnioAnterior: datos.patrimonioLiquidoAnioAnterior ?? null,
+    impuestoNetoAnioAnterior: datos.impuestoNetoAnioAnterior ?? null,
+    saldoAFavorAnterior: datos.saldoAFavorAnterior ?? null,
+    anticipoEstimado,
+  };
 }
 
 export async function parseExogenaDian(filePathOrBuffer: string | Buffer): Promise<ResultadoExogena> {
@@ -233,4 +347,98 @@ export function resumirPorRenglon(items: ItemExogena[]): { renglon: string; cate
   return Array.from(mapa.entries())
     .map(([renglon, v]) => ({ renglon, ...v }))
     .sort((a, b) => b.valor - a.valor);
+}
+
+const FONT_TITLE = { name: "Arial", size: 12, bold: true };
+const FONT_BOLD = { name: "Arial", size: 10, bold: true };
+const MONEY = '$#,##0;($#,##0);"-"';
+const HEADER_FILL: ExcelJS.Fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF42302E" } };
+const HEADER_FONT = { name: "Arial", size: 10, bold: true, color: { argb: "FFFFFFFF" } };
+const NOTA_FILL: ExcelJS.Fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFDF2D0" } };
+
+const NOMBRE_CEDULA: Record<string, string> = {
+  trabajo: "Rentas de trabajo", capital: "Rentas de capital", no_laboral: "Rentas no laborales",
+  pensiones: "Pensiones", dividendos: "Dividendos y participaciones",
+};
+
+/** Genera el Excel del borrador del Formulario 210 con la liquidación
+ * calculada — no es la representación gráfica exacta del formulario
+ * oficial, es un resumen ejecutivo de los renglones principales y el
+ * cálculo del impuesto, para revisión antes de digitarlo en el portal
+ * de la DIAN. */
+export async function generarBorrador210(
+  resultado: ResultadoLiquidacion, clienteNombre: string, clienteCedula: string, anioGravable: number,
+): Promise<Buffer> {
+  const wb = new ExcelJS.Workbook();
+  wb.creator = "Areda Work · Renta Persona Natural";
+  const fmt = (n: number) => n;
+
+  const ws = wb.addWorksheet("Borrador 210");
+  ws.addRow([`BORRADOR FORMULARIO 210 · ${clienteNombre} (${clienteCedula}) · Año gravable ${anioGravable}`]).font = FONT_TITLE as any;
+  ws.addRow([
+    "Este es un resumen de apoyo con los renglones principales y el cálculo del impuesto — no reemplaza la",
+    "revisión profesional ni es la representación gráfica exacta del formulario oficial de la DIAN.",
+  ]);
+  ws.getRow(2).font = { name: "Arial", size: 9, italic: true } as any;
+  ws.addRow([]);
+
+  ws.addRow(["PATRIMONIO"]).font = FONT_BOLD as any;
+  ws.addRow(["Patrimonio bruto (activos)", fmt(resultado.patrimonioBruto)]);
+  ws.addRow(["Deudas (pasivos)", fmt(resultado.deudas)]);
+  const rPL = ws.addRow(["Patrimonio líquido", fmt(resultado.patrimonioLiquido)]);
+  rPL.font = FONT_BOLD as any;
+  ws.addRow(["Patrimonio líquido año anterior (referencia)", resultado.patrimonioLiquidoAnioAnterior ?? "—"]);
+  ws.addRow([]);
+
+  ws.addRow(["INGRESOS POR CÉDULA"]).font = FONT_BOLD as any;
+  for (const [cedula, nombre] of Object.entries(NOMBRE_CEDULA)) {
+    ws.addRow([nombre, fmt(resultado.ingresosPorCedula[cedula] || 0)]);
+  }
+  ws.addRow([]);
+
+  ws.addRow(["DEDUCCIONES Y RENTAS EXENTAS POR CÉDULA"]).font = FONT_BOLD as any;
+  for (const [cedula, nombre] of Object.entries(NOMBRE_CEDULA)) {
+    ws.addRow([nombre, fmt(resultado.totalDeduccionesRentasExentasPorCedula[cedula] || 0)]);
+  }
+  ws.addRow(["Total Cédula General (trabajo + capital + no laboral)", fmt(resultado.totalDeduccionesRentasExentasGeneral)]);
+  const rCap = ws.addRow(["  → Limitado al tope de 1.340 UVT", fmt(resultado.totalDeduccionesRentasExentasGeneralCapeado)]);
+  if (resultado.totalDeduccionesRentasExentasGeneral > resultado.totalDeduccionesRentasExentasGeneralCapeado) {
+    rCap.font = { name: "Arial", size: 10, bold: true, color: { argb: "FFCC0000" } } as any;
+  }
+  ws.addRow([]);
+
+  ws.addRow(["RENTA LÍQUIDA GRAVABLE E IMPUESTO"]).font = FONT_BOLD as any;
+  ws.addRow(["Renta líquida gravable — Cédula General", fmt(resultado.rentaLiquidaCedulaGeneral)]);
+  ws.addRow(["Renta líquida gravable — Pensiones", fmt(resultado.rentaLiquidaPensiones)]);
+  const rTotal = ws.addRow(["Renta líquida gravable total", fmt(resultado.rentaLiquidaGravableTotal)]);
+  rTotal.font = FONT_BOLD as any;
+  ws.addRow([
+    `Tarifa marginal aplicada (Art. 241 E.T.): ${(resultado.impuestoRenta.tarifaMarginal * 100).toFixed(0)}% — rango ${resultado.impuestoRenta.rangoUVT}`,
+  ]).font = { name: "Arial", size: 9, italic: true } as any;
+  const rImpuesto = ws.addRow(["IMPUESTO DE RENTA", fmt(resultado.impuestoRenta.impuesto)]);
+  rImpuesto.font = { name: "Arial", size: 11, bold: true } as any;
+  ws.addRow([]);
+
+  ws.addRow([
+    "Nota: los dividendos y participaciones (si aplica) tienen tarifa especial propia (Art. 242 E.T.), no se suman a",
+    "esta renta líquida gravable general — verificar aparte.",
+  ]).eachCell(c => { c.fill = NOTA_FILL; c.font = { name: "Arial", size: 9 } as any; });
+  ws.addRow([]);
+
+  ws.addRow(["ANTICIPO Y SALDOS"]).font = FONT_BOLD as any;
+  ws.addRow(["Impuesto neto de renta año anterior", resultado.impuestoNetoAnioAnterior ?? "—"]);
+  ws.addRow(["Saldo a favor año anterior", resultado.saldoAFavorAnterior ?? "—"]);
+  const rAnticipo = ws.addRow(["Anticipo estimado para el próximo año (referencia)", resultado.anticipoEstimado ?? "—"]);
+  rAnticipo.font = FONT_BOLD as any;
+  ws.addRow([
+    "Nota: fórmula simple de referencia (promedio entre impuesto actual y anterior, al 25%) — el Art. 807 E.T. define",
+    "porcentajes distintos según sea la primera, segunda, o siguientes declaraciones; verificar antes de usar como definitivo.",
+  ]).eachCell(c => { c.fill = NOTA_FILL; c.font = { name: "Arial", size: 9 } as any; });
+
+  ws.getColumn(1).width = 55;
+  ws.getColumn(2).width = 20;
+  ws.getColumn(2).numFmt = MONEY;
+
+  const buffer = await wb.xlsx.writeBuffer();
+  return Buffer.from(buffer);
 }

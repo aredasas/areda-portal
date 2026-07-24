@@ -718,3 +718,18 @@ export const rentaDependientes = mysqlTable("rentaDependientes", {
 export type RentaDependiente = typeof rentaDependientes.$inferSelect;
 export type InsertRentaDependiente = typeof rentaDependientes.$inferInsert;
 
+/** Historial de borradores del Formulario 210 generados para un cliente
+ * de renta — mismo patrón que informesReportes. */
+export const rentaReportes = mysqlTable("rentaReportes", {
+  id: int("id").autoincrement().primaryKey(),
+  rentaClienteId: int("rentaClienteId").notNull(),
+  tipo: varchar("tipo", { length: 40 }).default("BORRADOR_210").notNull(),
+  fileKey: varchar("fileKey", { length: 500 }).notNull(),
+  generadoPorId: int("generadoPorId").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (table) => ({
+  rentaClienteIdx: index("rentaReportes_rentaCliente_idx").on(table.rentaClienteId),
+}));
+export type RentaReporte = typeof rentaReportes.$inferSelect;
+export type InsertRentaReporte = typeof rentaReportes.$inferInsert;
+
