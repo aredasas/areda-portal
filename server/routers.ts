@@ -2148,6 +2148,24 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           const importados = await db.importarDesdeExogena(input.rentaClienteId, input.seccion);
           return { importados };
         }),
+      // Lista los ítems de exógena todavía sin importar, para elegir
+      // manualmente cuáles van a la cédula seleccionada.
+      exogenaDisponibles: protectedProcedure
+        .input(z.object({ rentaClienteId: z.number(), seccion: z.enum(["activo", "pasivo", "ingreso"]) }))
+        .query(async ({ input, ctx }) => {
+          assertInformesAccess(ctx.user.cedula);
+          return db.getExogenaItemsDisponibles(input.rentaClienteId, input.seccion);
+        }),
+      importarSeleccionDesdeExogena: protectedProcedure
+        .input(z.object({
+          rentaClienteId: z.number(), seccion: z.enum(["activo", "pasivo", "ingreso"]),
+          exogenaItemIds: z.array(z.number()), cedula: z.enum(["trabajo", "capital", "no_laboral", "pensiones", "dividendos"]).optional(),
+        }))
+        .mutation(async ({ input, ctx }) => {
+          assertInformesAccess(ctx.user.cedula);
+          const importados = await db.importarItemsExogenaSeleccionados(input.rentaClienteId, input.seccion, input.exogenaItemIds, input.cedula);
+          return { importados };
+        }),
     }),
     dependientes: router({
       list: protectedProcedure

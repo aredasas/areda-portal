@@ -2202,6 +2202,56 @@ export async function importarDesdeExogena(rentaClienteId: number, seccion: "act
   return importados;
 }
 
+/** Lista los ítems de la exógena de una sección que todavía NO se han
+ * importado a la liquidación (de ningún cliente/cédula) — para mostrarlos
+ * como opciones marcables antes de decidir a cuál cédula van. */
+export async function getExogenaItemsDisponibles(rentaClienteId: number, seccion: "activo" | "pasivo" | "ingreso") {
+  const db = await getDb();
+  if (!db) return [];
+  const exogena = await getExogenaRenta(rentaClienteId);
+  if (!exogena) return [];
+  const categoriaOrigen = seccion === "activo" ? "patrimonio" : seccion === "pasivo" ? "deuda" : "ingreso";
+  const candidatos = exogena.items.filter(it => it.categoria === categoriaOrigen);
+  if (candidatos.length === 0) return [];
+
+  const yaImportados = await db.select({ exogenaItemId: rentaLiquidacionItems.exogenaItemId }).from(rentaLiquidacionItems)
+    .where(and(eq(rentaLiquidacionItems.rentaClienteId, rentaClienteId), eq(rentaLiquidacionItems.seccion, seccion)));
+  const idsImportados = new Set(yaImportados.map(f => f.exogenaItemId));
+  return candidatos.filter(it => !idsImportados.has(it.id));
+}
+
+/** Importa solo los ítems de exógena elegidos explícitamente (por id),
+ * asignándolos a la cédula indicada — los que no se elijan quedan
+ * disponibles para importarse después bajo otra cédula. */
+export async function importarItemsExogenaSeleccionados(
+  rentaClienteId: number, seccion: "activo" | "pasivo" | "ingreso", exogenaItemIds: number[],
+  cedula?: "trabajo" | "capital" | "no_laboral" | "pensiones" | "dividendos",
+): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  if (exogenaItemIds.length === 0) return 0;
+  const exogena = await getExogenaRenta(rentaClienteId);
+  if (!exogena) return 0;
+  const idsSet = new Set(exogenaItemIds);
+  const seleccionados = exogena.items.filter(it => idsSet.has(it.id));
+
+  const yaImportados = await db.select({ exogenaItemId: rentaLiquidacionItems.exogenaItemId }).from(rentaLiquidacionItems)
+    .where(and(eq(rentaLiquidacionItems.rentaClienteId, rentaClienteId), eq(rentaLiquidacionItems.seccion, seccion)));
+  const idsImportados = new Set(yaImportados.map(f => f.exogenaItemId));
+
+  let importados = 0;
+  for (const item of seleccionados) {
+    if (idsImportados.has(item.id)) continue;
+    await db.insert(rentaLiquidacionItems).values({
+      rentaClienteId, seccion, cedula: cedula || null,
+      concepto: `${item.nombreTercero ? item.nombreTercero + " — " : ""}${item.detalle}`,
+      valor: item.valor, origen: "exogena", exogenaItemId: item.id,
+    });
+    importados++;
+  }
+  return importados;
+}
+
 // ---- Dependientes económicos ----
 
 export async function getDependientes(rentaClienteId: number) {

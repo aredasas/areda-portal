@@ -389,8 +389,7 @@ function LiquidacionTab({ anioGravable }: { anioGravable: number }) {
           <DependientesCard rentaClienteId={rentaClienteId} />
           <SeccionItemsCard rentaClienteId={rentaClienteId} seccion="activo" titulo="Activos" puedeImportar />
           <SeccionItemsCard rentaClienteId={rentaClienteId} seccion="pasivo" titulo="Pasivos" puedeImportar />
-          <SeccionItemsCard rentaClienteId={rentaClienteId} seccion="ingreso" titulo="Ingresos por cédula" puedeImportar />
-          <DeduccionesCard rentaClienteId={rentaClienteId} />
+          <IngresosDeduccionesPorCedulaCard rentaClienteId={rentaClienteId} />
 
           <Card className="border-dashed">
             <CardContent className="py-10 flex flex-col items-center text-center gap-3">
@@ -682,21 +681,109 @@ function SeccionItemsCard({ rentaClienteId, seccion, titulo, puedeImportar }: {
   );
 }
 
-function DeduccionesCard({ rentaClienteId }: { rentaClienteId: number }) {
+/** Diálogo para elegir manualmente cuáles ítems de la exógena se importan
+ * a la cédula actualmente seleccionada — los que no se marquen quedan
+ * disponibles para importarse después bajo otra cédula. */
+function ImportarExogenaDialog({ rentaClienteId, cedula, open, onOpenChange, onImportado }: {
+  rentaClienteId: number; cedula: string; open: boolean; onOpenChange: (open: boolean) => void; onImportado: () => void;
+}) {
+  const disponiblesQuery = trpc.renta.liquidacion.exogenaDisponibles.useQuery(
+    { rentaClienteId, seccion: "ingreso" }, { enabled: open },
+  );
+  const [seleccionados, setSeleccionados] = useState<Set<number>>(new Set());
+  const fmt = (n: number) => `$${n.toLocaleString("es-CO")}`;
+
+  const importarMutation = trpc.renta.liquidacion.importarSeleccionDesdeExogena.useMutation({
+    onSuccess: (data) => {
+      toast.success(`${data.importados} ítem(s) importado(s) a esta cédula`);
+      setSeleccionados(new Set());
+      onImportado();
+      onOpenChange(false);
+    },
+    onError: (err) => toast.error(err.message || "No se pudo importar"),
+  });
+
+  const toggle = (id: number) => {
+    setSeleccionados(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-lg max-h-[80vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>Elegir ingresos a importar en esta cédula</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-2 py-2">
+          <p className="text-sm text-muted-foreground">
+            Los que no marques quedan disponibles para importarlos después bajo otra cédula.
+          </p>
+          {disponiblesQuery.isLoading ? (
+            <Loader2 className="w-5 h-5 animate-spin" />
+          ) : !disponiblesQuery.data?.length ? (
+            <p className="text-sm text-muted-foreground">No hay ingresos de la exógena pendientes por importar.</p>
+          ) : (
+            <div className="space-y-1">
+              {disponiblesQuery.data.map((item: any) => (
+                <label key={item.id} className="flex items-center gap-2 text-sm border-b py-1.5 cursor-pointer">
+                  <Checkbox checked={seleccionados.has(item.id)} onCheckedChange={() => toggle(item.id)} />
+                  <span className="flex-1 min-w-0">
+                    <span className="truncate block">{item.nombreTercero ? `${item.nombreTercero} — ` : ""}{item.detalle}</span>
+                  </span>
+                  <span className="font-medium shrink-0">{fmt(item.valor)}</span>
+                </label>
+              ))}
+            </div>
+          )}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancelar</Button>
+          <Button
+            onClick={() => importarMutation.mutate({ rentaClienteId, seccion: "ingreso", exogenaItemIds: Array.from(seleccionados), cedula: cedula as any })}
+            disabled={seleccionados.size === 0 || importarMutation.isPending}
+            className="bg-[#EDA011] hover:bg-[#d48f0f] text-white"
+          >
+            {importarMutation.isPending && <Loader2 className="w-4 h-4 animate-spin mr-2" />}
+            Importar {seleccionados.size > 0 ? `(${seleccionados.size})` : ""}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** Se elige primero la cédula, y dentro de ella se cargan sus ingresos y
+ * sus deducciones/rentas exentas — en vez de elegir la cédula en cada
+ * registro individual. El tope combinado de 1.340 UVT se calcula siempre
+ * sobre TODAS las cédulas de la Cédula General juntas (trabajo + capital +
+ * no laboral), no solo la que esté seleccionada en pantalla. */
+function IngresosDeduccionesPorCedulaCard({ rentaClienteId }: { rentaClienteId: number }) {
   const utils = trpc.useUtils();
   const catalogoQuery = trpc.renta.liquidacion.catalogoTopes.useQuery();
+  const [cedulaSeleccionada, setCedulaSeleccionada] = useState("trabajo");
+  const [showImportarDialog, setShowImportarDialog] = useState(false);
+
+  const ingresosQuery = trpc.renta.liquidacion.list.useQuery({ rentaClienteId, seccion: "ingreso" });
   const deduccionesQuery = trpc.renta.liquidacion.list.useQuery({ rentaClienteId, seccion: "deduccion" });
   const rentasExentasQuery = trpc.renta.liquidacion.list.useQuery({ rentaClienteId, seccion: "rentaExenta" });
-  const [tipoDeduccion, setTipoDeduccion] = useState("");
-  const [cedula, setCedula] = useState("");
-  const [concepto, setConcepto] = useState("");
-  const [valor, setValor] = useState("");
 
-  const crearMutation = trpc.renta.liquidacion.crear.useMutation({
+  const [conceptoIngreso, setConceptoIngreso] = useState("");
+  const [valorIngreso, setValorIngreso] = useState("");
+  const [tipoDeduccion, setTipoDeduccion] = useState("");
+  const [conceptoDeduccion, setConceptoDeduccion] = useState("");
+  const [valorDeduccion, setValorDeduccion] = useState("");
+
+  const crearIngresoMutation = trpc.renta.liquidacion.crear.useMutation({
+    onSuccess: () => { setConceptoIngreso(""); setValorIngreso(""); utils.renta.liquidacion.list.invalidate({ rentaClienteId, seccion: "ingreso" }); },
+    onError: (err) => toast.error(err.message || "No se pudo agregar"),
+  });
+  const crearDeduccionMutation = trpc.renta.liquidacion.crear.useMutation({
     onSuccess: (data) => {
-      if (data.alerta) toast.warning(data.alerta);
-      else toast.success("Agregado");
-      setConcepto(""); setValor(""); setTipoDeduccion(""); setCedula("");
+      if (data.alerta) toast.warning(data.alerta); else toast.success("Agregado");
+      setConceptoDeduccion(""); setValorDeduccion(""); setTipoDeduccion("");
       utils.renta.liquidacion.list.invalidate({ rentaClienteId, seccion: "deduccion" });
       utils.renta.liquidacion.list.invalidate({ rentaClienteId, seccion: "rentaExenta" });
     },
@@ -704,6 +791,7 @@ function DeduccionesCard({ rentaClienteId }: { rentaClienteId: number }) {
   });
   const eliminarMutation = trpc.renta.liquidacion.eliminar.useMutation({
     onSuccess: () => {
+      utils.renta.liquidacion.list.invalidate({ rentaClienteId, seccion: "ingreso" });
       utils.renta.liquidacion.list.invalidate({ rentaClienteId, seccion: "deduccion" });
       utils.renta.liquidacion.list.invalidate({ rentaClienteId, seccion: "rentaExenta" });
     },
@@ -711,67 +799,133 @@ function DeduccionesCard({ rentaClienteId }: { rentaClienteId: number }) {
 
   const fmt = (n: number) => `$${n.toLocaleString("es-CO")}`;
   const CEDULAS_GENERAL = ["trabajo", "capital", "no_laboral"];
-  const nombreCedula = (v: string | null) => catalogoQuery.data?.cedulas.find((c: any) => c.valor === v)?.nombre || "Sin cédula asignada";
-  const todos = [...(deduccionesQuery.data || []), ...(rentasExentasQuery.data || [])];
-  // El tope global de 1.340 UVT solo aplica dentro de la Cédula General
-  // (trabajo/capital/no_laboral) — lo de pensiones y dividendos, si algún
-  // día aplica una deducción ahí, se lleva aparte y no se mezcla en este
-  // límite. Los ítems sin cédula asignada (de antes de este ajuste) se
-  // cuentan como generales, igual que antes.
-  const totalGeneral = todos
+
+  const ingresosDeEstaCedula = (ingresosQuery.data || []).filter((it: any) => it.cedula === cedulaSeleccionada);
+  const totalIngresosCedula = ingresosDeEstaCedula.reduce((acc: number, it: any) => acc + it.valor, 0);
+
+  const todasDeducciones = [...(deduccionesQuery.data || []), ...(rentasExentasQuery.data || [])];
+  const deduccionesDeEstaCedula = todasDeducciones.filter((it: any) => it.cedula === cedulaSeleccionada);
+
+  const totalGeneral = todasDeducciones
     .filter((it: any) => !it.cedula || CEDULAS_GENERAL.includes(it.cedula))
     .reduce((acc: number, it: any) => acc + it.valor, 0);
-  const totalOtrasCedulas = todos
+  const totalOtrasCedulas = todasDeducciones
     .filter((it: any) => it.cedula && !CEDULAS_GENERAL.includes(it.cedula))
     .reduce((acc: number, it: any) => acc + it.valor, 0);
   const topeGlobal = catalogoQuery.data ? catalogoQuery.data.topeGlobalUVT * catalogoQuery.data.uvt : 0;
   const excedeGlobal = topeGlobal > 0 && totalGeneral > topeGlobal;
 
-  const handleAgregar = () => {
-    if (!concepto.trim() || !valor || !tipoDeduccion || !cedula) {
-      toast.error("Selecciona el tipo, la cédula, y digita concepto y valor");
+  const handleAgregarIngreso = () => {
+    if (!conceptoIngreso.trim() || !valorIngreso) return;
+    crearIngresoMutation.mutate({ rentaClienteId, seccion: "ingreso", cedula: cedulaSeleccionada as any, concepto: conceptoIngreso.trim(), valor: Number(valorIngreso) });
+  };
+  const handleAgregarDeduccion = () => {
+    if (!conceptoDeduccion.trim() || !valorDeduccion || !tipoDeduccion) {
+      toast.error("Selecciona el tipo, y digita concepto y valor");
       return;
     }
     const tipoInfo = catalogoQuery.data?.tipos.find((t: any) => t.tipo === tipoDeduccion);
-    crearMutation.mutate({
-      rentaClienteId, seccion: (tipoInfo?.seccion || "deduccion") as any,
-      tipoDeduccion, cedula: cedula as any, concepto: concepto.trim(), valor: Number(valor),
+    crearDeduccionMutation.mutate({
+      rentaClienteId, seccion: (tipoInfo?.seccion || "deduccion") as any, cedula: cedulaSeleccionada as any,
+      tipoDeduccion, concepto: conceptoDeduccion.trim(), valor: Number(valorDeduccion),
     });
   };
 
   return (
-    <ColapsableCard titulo="Deducciones y Rentas Exentas">
-      <p className="text-sm text-muted-foreground">
-        Cada tipo se valida contra su tope individual 2025. El total combinado de la <strong>Cédula General</strong> no
-        puede superar {catalogoQuery.data && `${catalogoQuery.data.topeGlobalUVT} UVT (${fmt(topeGlobal)})`} — o el 40%
-        de la renta líquida, lo que sea menor (verificar una vez estén completos los ingresos). Pensiones y
-        dividendos tienen su propio tratamiento y no se mezclan en este límite.
-      </p>
+    <ColapsableCard titulo="Ingresos, Deducciones y Rentas Exentas por Cédula">
+      <div className="space-y-1.5">
+        <Label className="text-xs">Cédula</Label>
+        <Select value={cedulaSeleccionada} onValueChange={setCedulaSeleccionada}>
+          <SelectTrigger className="w-full sm:w-80"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            {catalogoQuery.data?.cedulas.map((c: any) => (
+              <SelectItem key={c.valor} value={c.valor}>{c.nombre}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
 
-      {!!todos.length && (
-        <div className="space-y-1 max-h-56 overflow-y-auto">
-          {todos.map((it: any) => (
-            <div key={it.id} className="flex items-center justify-between text-sm border-b py-1.5 gap-2">
-              <div className="flex-1 min-w-0">
-                <div className="truncate">{it.concepto}</div>
-                <div className="text-xs text-muted-foreground">
-                  {catalogoQuery.data?.tipos.find((t: any) => t.tipo === it.tipoDeduccion)?.nombre || it.tipoDeduccion}
-                  {" · "}{nombreCedula(it.cedula)}
-                </div>
-              </div>
-              <span className="font-medium shrink-0">{fmt(it.valor)}</span>
-              <Button variant="ghost" size="icon" className="h-7 w-7 text-red-600 shrink-0" onClick={() => eliminarMutation.mutate({ id: it.id })}>
-                <Trash2 className="w-3.5 h-3.5" />
-              </Button>
-            </div>
-          ))}
+      {/* Ingresos de la cédula seleccionada */}
+      <div className="border rounded-md p-3 space-y-2">
+        <div className="flex items-center justify-between">
+          <span className="text-sm font-medium">Ingresos</span>
+          <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setShowImportarDialog(true)}>
+            <FileSpreadsheet className="w-3.5 h-3.5" /> Importar desde exógena
+          </Button>
         </div>
-      )}
+        {!!ingresosDeEstaCedula.length && (
+          <div className="space-y-1 max-h-56 overflow-y-auto">
+            {ingresosDeEstaCedula.map((it: any) => (
+              <div key={it.id} className="flex items-center justify-between text-sm border-b py-1.5 gap-2">
+                <span className="flex-1 min-w-0 truncate">{it.concepto}</span>
+                {it.origen === "exogena" && <Badge variant="outline" className="text-[10px] shrink-0">Exógena</Badge>}
+                <span className="font-medium shrink-0">{fmt(it.valor)}</span>
+                <Button variant="ghost" size="icon" className="h-7 w-7 text-red-600 shrink-0" onClick={() => eliminarMutation.mutate({ id: it.id })}>
+                  <Trash2 className="w-3.5 h-3.5" />
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="flex items-center justify-between text-sm font-medium border-t pt-2">
+          <span>Total ingresos de esta cédula</span>
+          <span>{fmt(totalIngresosCedula)}</span>
+        </div>
+        <div className="grid sm:grid-cols-[1fr_140px_auto] gap-2 items-end">
+          <Input value={conceptoIngreso} onChange={(e) => setConceptoIngreso(e.target.value)} placeholder="Concepto" className="h-8" />
+          <Input value={valorIngreso} onChange={(e) => setValorIngreso(e.target.value)} placeholder="Valor" type="number" className="h-8" />
+          <Button size="sm" variant="outline" className="gap-1" onClick={handleAgregarIngreso} disabled={crearIngresoMutation.isPending}>
+            <Plus className="w-3.5 h-3.5" /> Agregar
+          </Button>
+        </div>
+      </div>
 
+      {/* Deducciones y rentas exentas de la cédula seleccionada */}
+      <div className="border rounded-md p-3 space-y-2">
+        <span className="text-sm font-medium">Deducciones y Rentas Exentas</span>
+        {!!deduccionesDeEstaCedula.length && (
+          <div className="space-y-1 max-h-56 overflow-y-auto">
+            {deduccionesDeEstaCedula.map((it: any) => (
+              <div key={it.id} className="flex items-center justify-between text-sm border-b py-1.5 gap-2">
+                <div className="flex-1 min-w-0">
+                  <div className="truncate">{it.concepto}</div>
+                  <div className="text-xs text-muted-foreground">
+                    {catalogoQuery.data?.tipos.find((t: any) => t.tipo === it.tipoDeduccion)?.nombre || it.tipoDeduccion}
+                  </div>
+                </div>
+                <span className="font-medium shrink-0">{fmt(it.valor)}</span>
+                <Button variant="ghost" size="icon" className="h-7 w-7 text-red-600 shrink-0" onClick={() => eliminarMutation.mutate({ id: it.id })}>
+                  <Trash2 className="w-3.5 h-3.5" />
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="grid sm:grid-cols-[1fr_1fr_140px_auto] gap-2 items-end">
+          <div className="space-y-1">
+            <Label className="text-xs">Tipo</Label>
+            <Select value={tipoDeduccion} onValueChange={setTipoDeduccion}>
+              <SelectTrigger className="h-8"><SelectValue placeholder="Selecciona..." /></SelectTrigger>
+              <SelectContent>
+                {catalogoQuery.data?.tipos.map((t: any) => (
+                  <SelectItem key={t.tipo} value={t.tipo}>{t.nombre}{t.topeUVT ? ` (tope ${t.topeUVT} UVT)` : ""}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <Input value={conceptoDeduccion} onChange={(e) => setConceptoDeduccion(e.target.value)} placeholder="Concepto" className="h-8" />
+          <Input value={valorDeduccion} onChange={(e) => setValorDeduccion(e.target.value)} placeholder="Valor" type="number" className="h-8" />
+          <Button size="sm" variant="outline" className="gap-1" onClick={handleAgregarDeduccion} disabled={crearDeduccionMutation.isPending}>
+            <Plus className="w-3.5 h-3.5" /> Agregar
+          </Button>
+        </div>
+      </div>
+
+      {/* Totales combinados — siempre sobre TODAS las cédulas, no solo la seleccionada */}
       <div className={`flex items-center justify-between text-sm font-medium border-t pt-2 ${excedeGlobal ? "text-red-600" : ""}`}>
         <span className="flex items-center gap-1.5">
           {excedeGlobal && <AlertTriangle className="w-3.5 h-3.5" />}
-          Total Cédula General (sujeto al tope de 1.340 UVT)
+          Total Cédula General — trabajo + capital + no laboral (tope {catalogoQuery.data?.topeGlobalUVT} UVT / {fmt(topeGlobal)})
         </span>
         <span>{fmt(totalGeneral)}</span>
       </div>
@@ -782,41 +936,11 @@ function DeduccionesCard({ rentaClienteId }: { rentaClienteId: number }) {
         </div>
       )}
 
-      <div className="grid sm:grid-cols-[1fr_1fr_1fr_140px_auto] gap-2 pt-2 border-t items-end">
-        <div className="space-y-1">
-          <Label className="text-xs">Tipo</Label>
-          <Select value={tipoDeduccion} onValueChange={setTipoDeduccion}>
-            <SelectTrigger className="h-8"><SelectValue placeholder="Selecciona..." /></SelectTrigger>
-            <SelectContent>
-              {catalogoQuery.data?.tipos.map((t: any) => (
-                <SelectItem key={t.tipo} value={t.tipo}>{t.nombre}{t.topeUVT ? ` (tope ${t.topeUVT} UVT)` : ""}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="space-y-1">
-          <Label className="text-xs">Cédula</Label>
-          <Select value={cedula} onValueChange={setCedula}>
-            <SelectTrigger className="h-8"><SelectValue placeholder="Selecciona..." /></SelectTrigger>
-            <SelectContent>
-              {catalogoQuery.data?.cedulas.map((c: any) => (
-                <SelectItem key={c.valor} value={c.valor}>{c.nombre}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="space-y-1">
-          <Label className="text-xs">Concepto</Label>
-          <Input value={concepto} onChange={(e) => setConcepto(e.target.value)} className="h-8" />
-        </div>
-        <div className="space-y-1">
-          <Label className="text-xs">Valor</Label>
-          <Input value={valor} onChange={(e) => setValor(e.target.value)} type="number" className="h-8" />
-        </div>
-        <Button size="sm" variant="outline" className="gap-1" onClick={handleAgregar} disabled={crearMutation.isPending}>
-          <Plus className="w-3.5 h-3.5" /> Agregar
-        </Button>
-      </div>
+      <ImportarExogenaDialog
+        rentaClienteId={rentaClienteId} cedula={cedulaSeleccionada}
+        open={showImportarDialog} onOpenChange={setShowImportarDialog}
+        onImportado={() => utils.renta.liquidacion.list.invalidate({ rentaClienteId, seccion: "ingreso" })}
+      />
     </ColapsableCard>
   );
 }
