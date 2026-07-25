@@ -1,5 +1,6 @@
 import * as XLSX from "xlsx";
 import ExcelJS from "exceljs";
+import PDFDocument from "pdfkit";
 
 // El reporte de "Consulta de Información Exógena" de la DIAN usa un
 // prefijo de espacio de nombres XML poco común en su archivo interno
@@ -607,4 +608,140 @@ export async function generarBorrador210(
 
   const buffer = await wb.xlsx.writeBuffer();
   return Buffer.from(buffer);
+}
+
+const SUBRENTAS_ANEXO: { key: string; titulo: string }[] = [
+  { key: "trabajo", titulo: "Rentas de trabajo" },
+  { key: "trabajo_honorarios", titulo: "Rentas de trabajo por honorarios/compensación (sin relación laboral)" },
+  { key: "capital", titulo: "Rentas de capital" },
+  { key: "no_laboral", titulo: "Rentas no laborales" },
+];
+
+/** Genera los 2 anexos de renta en un solo PDF (uno por página): el
+ * Anexo 1 con el detalle de ingresos/INCRNGO/costos/deducciones/rentas
+ * exentas por cédula (muy similar a lo que se ve en pantalla), y el
+ * Anexo 2 con el detalle de activos y pasivos. Es un documento de apoyo
+ * para el cliente/revisión — no reemplaza el borrador Excel ni el
+ * diligenciamiento oficial. */
+export async function generarAnexosRenta(
+  datos: DatosLiquidacion, resultado: ResultadoLiquidacion, clienteNombre: string, clienteCedula: string, anioGravable: number,
+): Promise<Buffer> {
+  const fmt = (n: number) => `$${Math.round(n).toLocaleString("es-CO")}`;
+  const chunks: Buffer[] = [];
+  const doc = new PDFDocument({ size: "letter", margin: 50 });
+  doc.on("data", (c: Buffer) => chunks.push(c));
+  const done = new Promise<Buffer>((resolve) => doc.on("end", () => resolve(Buffer.concat(chunks))));
+
+  const anchoUtil = doc.page.width - 100;
+  const xLabel = 50;
+  const xValor = doc.page.width - 50;
+
+  function encabezado(titulo: string) {
+    doc.fontSize(13).font("Helvetica-Bold").text(titulo, { align: "center" });
+    doc.fontSize(9).font("Helvetica").fillColor("#555555")
+      .text(`${clienteNombre} (${clienteCedula}) · Año gravable ${anioGravable}`, { align: "center" });
+    doc.fillColor("#000000");
+    doc.moveDown(1);
+  }
+
+  function filaTexto(label: string, valor: string, opciones?: { negrita?: boolean; color?: string; indent?: number }) {
+    const y = doc.y;
+    doc.font(opciones?.negrita ? "Helvetica-Bold" : "Helvetica").fontSize(9.5).fillColor(opciones?.color || "#000000");
+    doc.text(label, xLabel + (opciones?.indent || 0), y, { width: anchoUtil - 150 - (opciones?.indent || 0) });
+    doc.text(valor, xLabel, y, { width: anchoUtil, align: "right" });
+    doc.fillColor("#000000");
+  }
+
+  function lineaDivisoria() {
+    doc.moveTo(xLabel, doc.y).lineTo(xValor, doc.y).strokeColor("#cccccc").stroke();
+    doc.moveDown(0.3);
+  }
+
+  // ================= ANEXO 1: Ingresos, INCRNGO, deducciones, rentas exentas =================
+  encabezado("ANEXO 1 — DETALLE DE INGRESOS, INCRNGO, DEDUCCIONES Y RENTAS EXENTAS");
+
+  for (const { key, titulo } of SUBRENTAS_ANEXO) {
+    const c = datos.cedulas[key];
+    if (!c || c.ingresoBruto.length === 0) continue; // solo las cédulas con datos, para no saturar
+
+    doc.font("Helvetica-Bold").fontSize(11).text(titulo);
+    doc.moveDown(0.2);
+    for (const it of c.ingresoBruto) filaTexto(it.concepto, fmt(it.valor), { indent: 8 });
+    for (const it of c.ingresoNoConstitutivo) filaTexto(it.concepto, `-${fmt(it.valor)}`, { indent: 8, color: "#b91c1c" });
+    for (const it of c.costoDeduccionProcedente) filaTexto(it.concepto, `-${fmt(it.valor)}`, { indent: 8, color: "#b91c1c" });
+    for (const it of c.deduccion) filaTexto(it.concepto, `-${fmt(it.valor)}`, { indent: 8, color: "#b91c1c" });
+    for (const it of c.rentaExenta) filaTexto(it.concepto, `-${fmt(it.valor)}`, { indent: 8, color: "#b91c1c" });
+    doc.moveDown(0.2);
+    lineaDivisoria();
+    const sr = resultado.subRentas[key];
+    filaTexto("Total renta cédula", fmt(sr?.rentaLiquidaOrdinaria || 0), { negrita: true });
+    doc.moveDown(0.8);
+  }
+
+  if (resultado.ingresoBrutoPensiones > 0) {
+    doc.font("Helvetica-Bold").fontSize(11).text("Pensiones");
+    doc.moveDown(0.2);
+    for (const it of datos.cedulas["pensiones"]?.ingresoBruto || []) filaTexto(it.concepto, fmt(it.valor), { indent: 8 });
+    for (const it of datos.cedulas["pensiones"]?.ingresoNoConstitutivo || []) filaTexto(it.concepto, `-${fmt(it.valor)}`, { indent: 8, color: "#b91c1c" });
+    for (const it of datos.cedulas["pensiones"]?.rentaExenta || []) filaTexto(it.concepto, `-${fmt(it.valor)}`, { indent: 8, color: "#b91c1c" });
+    lineaDivisoria();
+    filaTexto("Renta líquida gravable cédula de pensiones", fmt(resultado.rentaLiquidaGravablePensiones), { negrita: true });
+    doc.moveDown(0.8);
+  }
+
+  if (resultado.ingresoBrutoDividendos > 0) {
+    doc.font("Helvetica-Bold").fontSize(11).text("Dividendos y participaciones (referencia — tarifa especial Art. 242 E.T., no incluida aquí)");
+    doc.moveDown(0.2);
+    for (const it of datos.cedulas["dividendos"]?.ingresoBruto || []) filaTexto(it.concepto, fmt(it.valor), { indent: 8 });
+    doc.moveDown(0.8);
+  }
+
+  lineaDivisoria();
+  filaTexto("Renta líquida gravable total (Cédula General + Pensiones)", fmt(resultado.rentaLiquidaGravableTotal), { negrita: true });
+  filaTexto(`Impuesto de renta (tarifa marginal ${(resultado.impuestoRenta.tarifaMarginal * 100).toFixed(0)}%, Art. 241 E.T.)`, fmt(resultado.impuestoRenta.impuesto), { negrita: true });
+  doc.moveDown(0.8);
+  filaTexto("Total retenciones practicadas", fmt(resultado.totalRetenciones));
+  doc.moveDown(0.3);
+  doc.fontSize(8.5).font("Helvetica-Oblique").fillColor("#555555")
+    .text("Anticipo de renta para el próximo año — dos métodos (Art. 807 E.T.), verificar cuál aplica:");
+  doc.fillColor("#000000");
+  filaTexto("Método 1: impuesto actual × 75% - retenciones", fmt(resultado.anticipoMetodo1));
+  filaTexto("Método 2: promedio(impuesto anterior, actual) × 75% - retenciones", fmt(resultado.anticipoMetodo2));
+
+  // ================= ANEXO 2: Activos y Pasivos =================
+  doc.addPage();
+  encabezado("ANEXO 2 — DETALLE DE ACTIVOS Y PASIVOS");
+
+  doc.font("Helvetica-Bold").fontSize(11).text("Activos");
+  doc.moveDown(0.2);
+  if (datos.activos.length === 0) {
+    doc.font("Helvetica").fontSize(9.5).fillColor("#777777").text("Sin activos cargados.");
+    doc.fillColor("#000000");
+  } else {
+    for (const it of datos.activos) filaTexto(it.concepto, fmt(it.valor), { indent: 8 });
+  }
+  doc.moveDown(0.2);
+  lineaDivisoria();
+  filaTexto("Total activos (patrimonio bruto)", fmt(resultado.patrimonioBruto), { negrita: true });
+  doc.moveDown(1);
+
+  doc.font("Helvetica-Bold").fontSize(11).text("Pasivos");
+  doc.moveDown(0.2);
+  if (datos.pasivos.length === 0) {
+    doc.font("Helvetica").fontSize(9.5).fillColor("#777777").text("Sin pasivos cargados.");
+    doc.fillColor("#000000");
+  } else {
+    for (const it of datos.pasivos) filaTexto(it.concepto, fmt(it.valor), { indent: 8 });
+  }
+  doc.moveDown(0.2);
+  lineaDivisoria();
+  filaTexto("Total pasivos (deudas)", fmt(resultado.deudas), { negrita: true });
+  doc.moveDown(1);
+
+  lineaDivisoria();
+  doc.fontSize(11);
+  filaTexto("PATRIMONIO LÍQUIDO", fmt(resultado.patrimonioLiquido), { negrita: true });
+
+  doc.end();
+  return done;
 }

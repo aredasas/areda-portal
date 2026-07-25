@@ -807,9 +807,12 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId }: { rentaClienteId: 
 
   const cedulaItemsQuery = trpc.renta.liquidacion.list.useQuery({ rentaClienteId, seccion: "cedula" });
 
-  const [tipoValorIngreso, setTipoValorIngreso] = useState("ingreso_bruto");
-  const [conceptoIngreso, setConceptoIngreso] = useState("");
-  const [valorIngreso, setValorIngreso] = useState("");
+  const [conceptoIngresoBruto, setConceptoIngresoBruto] = useState("");
+  const [valorIngresoBruto, setValorIngresoBruto] = useState("");
+  const [conceptoIncrngo, setConceptoIncrngo] = useState("");
+  const [valorIncrngo, setValorIncrngo] = useState("");
+  const [conceptoCostos, setConceptoCostos] = useState("");
+  const [valorCostos, setValorCostos] = useState("");
   const [tipoDeduccion, setTipoDeduccion] = useState("");
   const [conceptoDeduccion, setConceptoDeduccion] = useState("");
   const [valorDeduccion, setValorDeduccion] = useState("");
@@ -878,12 +881,26 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId }: { rentaClienteId: 
 
   const nombreCatalogo = (tipoDed: string | null | undefined) => catalogoQuery.data?.tipos.find((t: any) => t.tipo === tipoDed)?.nombre || tipoDed || "";
 
-  const handleAgregarIngreso = () => {
-    if (!conceptoIngreso.trim() || !valorIngreso) return;
+  const handleAgregarIngresoBruto = () => {
+    if (!conceptoIngresoBruto.trim() || !valorIngresoBruto) return;
     crearMutation.mutate({
       rentaClienteId, seccion: "cedula", cedula: cedulaSeleccionada as any,
-      tipoValor: tipoValorIngreso as any, concepto: conceptoIngreso.trim(), valor: Number(valorIngreso),
-    }, { onSuccess: () => { setConceptoIngreso(""); setValorIngreso(""); } });
+      tipoValor: "ingreso_bruto", concepto: conceptoIngresoBruto.trim(), valor: Number(valorIngresoBruto),
+    }, { onSuccess: () => { setConceptoIngresoBruto(""); setValorIngresoBruto(""); } });
+  };
+  const handleAgregarIncrngo = () => {
+    if (!conceptoIncrngo.trim() || !valorIncrngo) return;
+    crearMutation.mutate({
+      rentaClienteId, seccion: "cedula", cedula: cedulaSeleccionada as any,
+      tipoValor: "ingreso_no_constitutivo", concepto: conceptoIncrngo.trim(), valor: Number(valorIncrngo),
+    }, { onSuccess: () => { setConceptoIncrngo(""); setValorIncrngo(""); } });
+  };
+  const handleAgregarCostos = () => {
+    if (!conceptoCostos.trim() || !valorCostos) return;
+    crearMutation.mutate({
+      rentaClienteId, seccion: "cedula", cedula: cedulaSeleccionada as any,
+      tipoValor: "costo_deduccion_procedente", concepto: conceptoCostos.trim(), valor: Number(valorCostos),
+    }, { onSuccess: () => { setConceptoCostos(""); setValorCostos(""); } });
   };
   const handleAgregarDeduccion = () => {
     if (!conceptoDeduccion.trim() || !valorDeduccion || !tipoDeduccion) {
@@ -950,6 +967,13 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId }: { rentaClienteId: 
         <div className="flex items-center justify-between text-base font-bold text-green-800 pt-1.5 border-t border-green-200">
           <span>Total ingresos brutos</span><span>{fmt(totalIngresoBruto)}</span>
         </div>
+        <div className="grid sm:grid-cols-[1fr_140px_auto] gap-2 items-end pt-1">
+          <Input value={conceptoIngresoBruto} onChange={(e) => setConceptoIngresoBruto(e.target.value)} placeholder="Concepto" className="h-8" />
+          <Input value={valorIngresoBruto} onChange={(e) => setValorIngresoBruto(e.target.value)} placeholder="Valor" type="number" className="h-8" />
+          <Button size="sm" variant="outline" className="gap-1" onClick={handleAgregarIngresoBruto} disabled={crearMutation.isPending}>
+            <Plus className="w-3.5 h-3.5" /> Agregar
+          </Button>
+        </div>
       </div>
 
       {/* INCRNGO */}
@@ -968,6 +992,13 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId }: { rentaClienteId: 
         )}
         <div className="flex items-center justify-between text-base font-bold text-blue-800 pt-1.5 border-t border-blue-200">
           <span>Total INCRNGO</span><span>{fmt(totalIncrngo)}</span>
+        </div>
+        <div className="grid sm:grid-cols-[1fr_140px_auto] gap-2 items-end pt-1">
+          <Input value={conceptoIncrngo} onChange={(e) => setConceptoIncrngo(e.target.value)} placeholder="Concepto" className="h-8" />
+          <Input value={valorIncrngo} onChange={(e) => setValorIncrngo(e.target.value)} placeholder="Valor" type="number" className="h-8" />
+          <Button size="sm" variant="outline" className="gap-1" onClick={handleAgregarIncrngo} disabled={crearMutation.isPending}>
+            <Plus className="w-3.5 h-3.5" /> Agregar
+          </Button>
         </div>
       </div>
 
@@ -1000,32 +1031,19 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId }: { rentaClienteId: 
               (referencia usual del Ayuda Renta, verificar caso a caso).
             </p>
           )}
+          <div className="grid sm:grid-cols-[1fr_140px_auto] gap-2 items-end pt-1">
+            <Input value={conceptoCostos} onChange={(e) => setConceptoCostos(e.target.value)} placeholder="Concepto" className="h-8" />
+            <Input value={valorCostos} onChange={(e) => setValorCostos(e.target.value)} placeholder="Valor" type="number" className="h-8" />
+            <Button size="sm" variant="outline" className="gap-1" onClick={handleAgregarCostos} disabled={crearMutation.isPending}>
+              <Plus className="w-3.5 h-3.5" /> Agregar
+            </Button>
+          </div>
         </div>
       )}
 
       <div className="flex items-center justify-between text-sm font-medium bg-muted/50 rounded-md px-3 py-2">
         <span>Renta líquida estimada de esta cédula (ingresos − INCRNGO{tieneCostos ? " − costos" : ""})</span>
         <span className="font-bold">{fmt(rentaLiquidaEstimadaCedula)}</span>
-      </div>
-
-      {/* Formulario para agregar ingreso/incrngo/costo */}
-      <div className={`grid gap-2 items-end sm:grid-cols-[1fr_1fr_140px_auto]`}>
-        <div className="space-y-1">
-          <Label className="text-xs">Tipo</Label>
-          <Select value={tipoValorIngreso} onValueChange={setTipoValorIngreso}>
-            <SelectTrigger className="h-8"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="ingreso_bruto">Ingreso bruto</SelectItem>
-              <SelectItem value="ingreso_no_constitutivo">INCRNGO</SelectItem>
-              {tieneCostos && <SelectItem value="costo_deduccion_procedente">Costo/deducción imputable</SelectItem>}
-            </SelectContent>
-          </Select>
-        </div>
-        <Input value={conceptoIngreso} onChange={(e) => setConceptoIngreso(e.target.value)} placeholder="Concepto" className="h-8" />
-        <Input value={valorIngreso} onChange={(e) => setValorIngreso(e.target.value)} placeholder="Valor" type="number" className="h-8" />
-        <Button size="sm" variant="outline" className="gap-1" onClick={handleAgregarIngreso} disabled={crearMutation.isPending}>
-          <Plus className="w-3.5 h-3.5" /> Agregar
-        </Button>
       </div>
 
       {/* Deducciones */}
@@ -1291,26 +1309,29 @@ function Borrador210Card({ rentaClienteId, anioGravable }: { rentaClienteId: num
   const utils = trpc.useUtils();
   const reportesQuery = trpc.renta.reportes.list.useQuery({ rentaClienteId });
   const [ultimoResultado, setUltimoResultado] = useState<any | null>(null);
+  const [urls, setUrls] = useState<{ excel: string; pdf: string } | null>(null);
 
   const generarMutation = trpc.renta.reportes.generarBorrador210.useMutation({
     onSuccess: (data) => {
-      toast.success("Borrador generado");
+      toast.success("Borrador y anexos generados");
       setUltimoResultado(data.resultado);
-      window.open(data.signedUrl, "_blank");
+      setUrls({ excel: data.signedUrl, pdf: data.signedUrlPdf });
       utils.renta.reportes.list.invalidate({ rentaClienteId });
     },
     onError: (err) => toast.error(err.message || "No se pudo generar el borrador"),
   });
 
   const fmt = (n: number | null) => n == null ? "—" : `$${n.toLocaleString("es-CO")}`;
+  const nombreTipo = (tipo: string) => tipo === "ANEXOS_PDF" ? "Anexos (PDF)" : "Borrador Formulario 210 (Excel)";
 
   return (
-    <ColapsableCard titulo="Borrador Formulario 210">
+    <ColapsableCard titulo="Borrador Formulario 210 y Anexos">
       <p className="text-sm text-muted-foreground">
         Reúne los activos, pasivos, ingresos y deducciones/rentas exentas ya cargados, calcula el
         patrimonio líquido, la renta líquida gravable por cédula (con el tope de 1.340 UVT aplicado a la
-        Cédula General), y el impuesto según la tabla del Art. 241 E.T. Es un resumen de apoyo — no
-        reemplaza la revisión profesional.
+        Cédula General), y el impuesto según la tabla del Art. 241 E.T. Genera el Excel del borrador y un
+        PDF con 2 anexos (detalle de ingresos/INCRNGO/deducciones/exentas, y detalle de activos/pasivos).
+        Es un documento de apoyo — no reemplaza la revisión profesional.
       </p>
 
       <Button
@@ -1319,8 +1340,19 @@ function Borrador210Card({ rentaClienteId, anioGravable }: { rentaClienteId: num
         className="gap-2 bg-[#EDA011] hover:bg-[#d48f0f] text-white"
       >
         {generarMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Calculator className="w-4 h-4" />}
-        Generar borrador
+        Generar borrador y anexos
       </Button>
+
+      {urls && (
+        <div className="flex flex-wrap gap-2">
+          <Button size="sm" variant="outline" className="gap-1.5" onClick={() => window.open(urls.excel, "_blank")}>
+            <Download className="w-3.5 h-3.5" /> Descargar Excel (borrador 210)
+          </Button>
+          <Button size="sm" variant="outline" className="gap-1.5" onClick={() => window.open(urls.pdf, "_blank")}>
+            <Download className="w-3.5 h-3.5" /> Descargar PDF (anexos)
+          </Button>
+        </div>
+      )}
 
       {ultimoResultado && (
         <div className="border rounded-md p-3 space-y-1.5 text-sm">
@@ -1348,9 +1380,9 @@ function Borrador210Card({ rentaClienteId, anioGravable }: { rentaClienteId: num
 
       {!!reportesQuery.data?.length && (
         <div className="space-y-1 pt-2 border-t">
-          <span className="text-xs text-muted-foreground">Borradores generados anteriormente</span>
+          <span className="text-xs text-muted-foreground">Generados anteriormente</span>
           {reportesQuery.data.map((r: any) => (
-            <ReporteRentaDownloadLink key={r.id} fileKey={r.fileKey} fecha={r.createdAt} />
+            <ReporteRentaDownloadLink key={r.id} fileKey={r.fileKey} fecha={r.createdAt} etiqueta={nombreTipo(r.tipo)} />
           ))}
         </div>
       )}
@@ -1358,7 +1390,7 @@ function Borrador210Card({ rentaClienteId, anioGravable }: { rentaClienteId: num
   );
 }
 
-function ReporteRentaDownloadLink({ fileKey, fecha }: { fileKey: string; fecha: string }) {
+function ReporteRentaDownloadLink({ fileKey, fecha, etiqueta }: { fileKey: string; fecha: string; etiqueta?: string }) {
   const urlQuery = trpc.renta.reportes.getDownloadUrl.useQuery({ fileKey }, { enabled: false });
   const handleClick = async () => {
     const result = await urlQuery.refetch();
@@ -1366,7 +1398,7 @@ function ReporteRentaDownloadLink({ fileKey, fecha }: { fileKey: string; fecha: 
   };
   return (
     <button onClick={handleClick} className="flex items-center justify-between text-sm border-b py-1.5 w-full text-left hover:bg-muted/50 rounded px-1">
-      <span className="flex items-center gap-1.5"><Download className="w-3.5 h-3.5" /> {new Date(fecha).toLocaleString("es-CO")}</span>
+      <span className="flex items-center gap-1.5"><Download className="w-3.5 h-3.5" /> {etiqueta ? `${etiqueta} — ` : ""}{new Date(fecha).toLocaleString("es-CO")}</span>
     </button>
   );
 }

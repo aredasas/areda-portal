@@ -2208,15 +2208,24 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           if (!datos) throw new Error("No se pudo reunir la información de liquidación.");
 
           const resultado = rentaDb.armarLiquidacion(datos);
-          const buffer = await rentaDb.generarBorrador210(resultado, cliente.nombre, cliente.cedula, input.anioGravable);
 
-          const key = `renta/borrador210/${input.rentaClienteId}_${Date.now()}.xlsx`;
-          const { key: fileKey } = await storagePut(
-            key, buffer, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          // Excel — el borrador con la numeración real de casillas.
+          const bufferExcel = await rentaDb.generarBorrador210(resultado, cliente.nombre, cliente.cedula, input.anioGravable);
+          const keyExcel = `renta/borrador210/${input.rentaClienteId}_${Date.now()}.xlsx`;
+          const { key: fileKeyExcel } = await storagePut(
+            keyExcel, bufferExcel, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
           );
-          await db.guardarRentaReporte(input.rentaClienteId, fileKey, ctx.user.id);
-          const signedUrl = await storageGetSignedUrl(fileKey);
-          return { signedUrl, fileKey, resultado };
+          await db.guardarRentaReporte(input.rentaClienteId, fileKeyExcel, ctx.user.id, "BORRADOR_210");
+
+          // PDF — los 2 anexos (detalle de renta + detalle de patrimonio).
+          const bufferPdf = await rentaDb.generarAnexosRenta(datos, resultado, cliente.nombre, cliente.cedula, input.anioGravable);
+          const keyPdf = `renta/anexos/${input.rentaClienteId}_${Date.now()}.pdf`;
+          const { key: fileKeyPdf } = await storagePut(keyPdf, bufferPdf, "application/pdf");
+          await db.guardarRentaReporte(input.rentaClienteId, fileKeyPdf, ctx.user.id, "ANEXOS_PDF");
+
+          const signedUrl = await storageGetSignedUrl(fileKeyExcel);
+          const signedUrlPdf = await storageGetSignedUrl(fileKeyPdf);
+          return { signedUrl, fileKey: fileKeyExcel, signedUrlPdf, fileKeyPdf, resultado };
         }),
     }),
     dependientes: router({

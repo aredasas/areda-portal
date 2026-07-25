@@ -2336,10 +2336,10 @@ export async function getDatosLiquidacion(rentaClienteId: number) {
   };
 }
 
-export async function guardarRentaReporte(rentaClienteId: number, fileKey: string, generadoPorId: number): Promise<number> {
+export async function guardarRentaReporte(rentaClienteId: number, fileKey: string, generadoPorId: number, tipo: string = "BORRADOR_210"): Promise<number> {
   const db = await getDb();
   if (!db) throw new Error("Base de datos no disponible");
-  const result = await db.insert(rentaReportes).values({ rentaClienteId, fileKey, generadoPorId });
+  const result = await db.insert(rentaReportes).values({ rentaClienteId, fileKey, generadoPorId, tipo });
   return Number((result as any).insertId ?? (result as any)[0]?.insertId);
 }
 
