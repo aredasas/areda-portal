@@ -645,10 +645,17 @@ export async function generarAnexosRenta(
   }
 
   function filaTexto(label: string, valor: string, opciones?: { negrita?: boolean; color?: string; indent?: number }) {
+    const anchoLabel = anchoUtil - 150 - (opciones?.indent || 0);
     const y = doc.y;
     doc.font(opciones?.negrita ? "Helvetica-Bold" : "Helvetica").fontSize(9.5).fillColor(opciones?.color || "#000000");
-    doc.text(label, xLabel + (opciones?.indent || 0), y, { width: anchoUtil - 150 - (opciones?.indent || 0) });
+    // height:12 obliga a pdfkit a truncar con "…" en una sola línea en vez
+    // de saltar de línea — sin el height explícito, ellipsis no truncaba
+    // (seguía envolviendo el texto y desalineaba las filas siguientes).
+    doc.text(label, xLabel + (opciones?.indent || 0), y, { width: anchoLabel, height: 12, ellipsis: true });
+    const yTrasLabel = doc.y;
     doc.text(valor, xLabel, y, { width: anchoUtil, align: "right" });
+    const yTrasValor = doc.y;
+    doc.y = Math.max(yTrasLabel, yTrasValor);
     doc.fillColor("#000000");
   }
 
