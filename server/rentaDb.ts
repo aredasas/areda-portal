@@ -159,13 +159,21 @@ export const TOPES_DEDUCCION_2025 = {
  * queda sin tope automático para conceptos que no encajan en el catálogo
  * (el contador debe verificarlo manualmente). */
 export const TIPOS_DEDUCCION_RENTA_EXENTA: {
-  tipo: string; nombre: string; tipoValor: "deduccion" | "renta_exenta"; topeUVT: number | null;
+  tipo: string; nombre: string; tipoValor: "deduccion" | "renta_exenta"; topeUVT: number | null; nota?: string;
 }[] = [
   { tipo: "renta_exenta_25_laboral", nombre: "25% renta exenta de rentas de trabajo", tipoValor: "renta_exenta", topeUVT: TOPES_DEDUCCION_2025.rentaExentaLaboral25 },
+  { tipo: "cesantias_intereses", nombre: "Cesantías e intereses de cesantías (Art. 206 num. 4 E.T.)", tipoValor: "renta_exenta", topeUVT: null,
+    nota: "Exenta si el salario promedio de los últimos 6 meses no supera 350 UVT ($17.429.650) — si lo supera, aplica una tabla decreciente. Verificar manualmente el salario promedio antes de tomar el valor completo." },
+  { tipo: "indemnizacion_accidente_enfermedad", nombre: "Indemnización por accidente de trabajo o enfermedad (Art. 206 num. 1 E.T.)", tipoValor: "renta_exenta", topeUVT: null,
+    nota: "Exenta en su totalidad — verificar que corresponda efectivamente a esta indemnización." },
+  { tipo: "auxilio_funerario", nombre: "Auxilio funerario / gastos de entierro del trabajador (Art. 206 num. 3 E.T.)", tipoValor: "renta_exenta", topeUVT: null,
+    nota: "Exenta en su totalidad." },
   { tipo: "aportes_voluntarios_pension_afc", nombre: "Aportes voluntarios pensión / cuentas AFC", tipoValor: "renta_exenta", topeUVT: TOPES_DEDUCCION_2025.aportesVoluntariosPensionAFC },
   { tipo: "salud_prepagada", nombre: "Medicina prepagada / seguros de salud", tipoValor: "deduccion", topeUVT: TOPES_DEDUCCION_2025.saludPrepagada },
   { tipo: "dependientes_economicos", nombre: "Dependientes económicos", tipoValor: "deduccion", topeUVT: TOPES_DEDUCCION_2025.dependientes },
   { tipo: "intereses_vivienda", nombre: "Intereses de vivienda (crédito hipotecario/leasing)", tipoValor: "deduccion", topeUVT: TOPES_DEDUCCION_2025.interesesVivienda },
+  { tipo: "gmf_25", nombre: "GMF (4×1000) — 25% deducible (Art. 115 E.T.)", tipoValor: "deduccion", topeUVT: null,
+    nota: "Solo el 25% del GMF efectivamente pagado y certificado por el banco es deducible — digitar ya ese 25%, no el GMF total." },
   { tipo: "otro", nombre: "Otra deducción/renta exenta (verificar manualmente)", tipoValor: "deduccion", topeUVT: null },
 ];
 
@@ -376,6 +384,110 @@ export function armarLiquidacion(datos: DatosLiquidacion): ResultadoLiquidacion 
     anticipoAnioActual: datos.anticipoAnioActual ?? null,
     anticipoMetodo1, anticipoMetodo2,
   };
+}
+
+export type HallazgoValidacion = {
+  severidad: "error" | "advertencia" | "info";
+  categoria: string;
+  mensaje: string;
+};
+
+/** Revisa la liquidación completa contra los topes individuales y
+ * generales, y genera recomendaciones — esta lista se piensa para ir
+ * creciendo con el tiempo a medida que surjan más validaciones útiles,
+ * no es un checklist cerrado. `contexto` trae datos externos (de la
+ * exógena) que no vienen en DatosLiquidacion, para poder conciliar. */
+export function validarRenta(
+  datos: DatosLiquidacion, resultado: ResultadoLiquidacion,
+  contexto?: { exogenaIngresoBruto?: number | null; tieneDependientes?: boolean },
+): HallazgoValidacion[] {
+  const hallazgos: HallazgoValidacion[] = [];
+  const fmt = (n: number) => `$${Math.round(n).toLocaleString("es-CO")}`;
+
+  // 1. Tope individual de cada deducción/renta exenta ya cargada.
+  for (const [cedula, c] of Object.entries(datos.cedulas)) {
+    for (const it of [...c.deduccion, ...c.rentaExenta]) {
+      if (!it.tipoDeduccion) continue;
+      const { excedeTope, tope, topeUVT } = validarTopeDeduccion(it.tipoDeduccion, it.valor);
+      if (excedeTope) {
+        hallazgos.push({
+          severidad: "error", categoria: "Tope individual",
+          mensaje: `"${it.concepto}" (${NOMBRE_CEDULA[cedula] || cedula}) supera el tope de ${topeUVT} UVT (${fmt(tope!)}) — valor cargado: ${fmt(it.valor)}.`,
+        });
+      }
+      const catalogo = TIPOS_DEDUCCION_RENTA_EXENTA.find(t => t.tipo === it.tipoDeduccion);
+      if (catalogo?.nota) {
+        hallazgos.push({ severidad: "info", categoria: "Verificar manualmente", mensaje: `"${it.concepto}": ${catalogo.nota}` });
+      }
+    }
+  }
+
+  // 2. Tope global de la Cédula General (40% / 1.340 UVT).
+  const topeGlobalPesos = TOPES_DEDUCCION_2025.limiteGlobalDeduccionesRentasExentas * UVT_2025;
+  const totalGeneralSinCapear = SUBRENTAS_GENERAL.reduce(
+    (a, n) => a + datos.cedulas[n]?.deduccion.reduce((s, it) => s + it.valor, 0) + (datos.cedulas[n]?.rentaExenta.reduce((s, it) => s + it.valor, 0) || 0), 0,
+  );
+  if (totalGeneralSinCapear > resultado.limite40PorcientoOMil340UVT) {
+    hallazgos.push({
+      severidad: "advertencia", categoria: "Tope global Cédula General",
+      mensaje: `Las deducciones y rentas exentas cargadas (${fmt(totalGeneralSinCapear)}) superan el límite calculado (${fmt(resultado.limite40PorcientoOMil340UVT)}) — el sistema ya repartió el máximo permitido entre las sub-rentas, pero el excedente no se aprovecha.`,
+    });
+  }
+
+  // 3. Costos/deducciones imputables > 60% en trabajo por honorarios.
+  const srHonorarios = resultado.subRentas["trabajo_honorarios"];
+  if (srHonorarios && srHonorarios.ingresoBruto > 0) {
+    const pct = (srHonorarios.costoDeduccionProcedente / srHonorarios.ingresoBruto) * 100;
+    if (pct > 60) {
+      hallazgos.push({
+        severidad: "advertencia", categoria: "Costos honorarios",
+        mensaje: `Los costos/deducciones procedentes en Rentas de trabajo por honorarios son ${pct.toFixed(1)}% de los ingresos brutos — supera el 60% de referencia habitual, verificar soportes.`,
+      });
+    }
+  }
+
+  // 4. Dependientes registrados sin la deducción correspondiente.
+  if (contexto?.tieneDependientes) {
+    const yaTiene = Object.values(datos.cedulas).some(c => c.deduccion.some(it => it.tipoDeduccion === "dependientes_economicos"));
+    if (!yaTiene) {
+      hallazgos.push({
+        severidad: "info", categoria: "Dependientes",
+        mensaje: "Hay dependientes económicos registrados pero todavía no se agregó la deducción del 10% correspondiente en ninguna cédula.",
+      });
+    }
+  }
+
+  // 5. Conciliación con los ingresos brutos que la propia exógena reporta.
+  if (contexto?.exogenaIngresoBruto != null) {
+    const totalIngresosCargados = SUBRENTAS_GENERAL.reduce((a, n) => a + resultado.subRentas[n].ingresoBruto, 0)
+      + resultado.ingresoBrutoPensiones + resultado.ingresoBrutoDividendos;
+    const diferencia = Math.abs(totalIngresosCargados - contexto.exogenaIngresoBruto);
+    if (diferencia > 100000) {
+      hallazgos.push({
+        severidad: "advertencia", categoria: "Conciliación exógena",
+        mensaje: `Los ingresos brutos cargados en las cédulas (${fmt(totalIngresosCargados)}) difieren de los reportados en la exógena (${fmt(contexto.exogenaIngresoBruto)}) por ${fmt(diferencia)} — revisar si falta importar algún ingreso.`,
+      });
+    }
+  }
+
+  // 6. Obligación de declarar (mismos topes que se muestran en la tarjeta de Topes).
+  const patrimonioObligaTope = TOPES_DEDUCCION_2025.patrimonio * UVT_2025;
+  if (resultado.patrimonioBruto >= patrimonioObligaTope) {
+    hallazgos.push({ severidad: "info", categoria: "Obligación de declarar", mensaje: `El patrimonio bruto (${fmt(resultado.patrimonioBruto)}) supera el tope de 4.500 UVT (${fmt(patrimonioObligaTope)}) — obligado a declarar por este criterio.` });
+  }
+
+  // 7. Sin retenciones cargadas, teniendo ingresos.
+  const hayIngresos = SUBRENTAS_GENERAL.some(n => resultado.subRentas[n].ingresoBruto > 0) || resultado.ingresoBrutoPensiones > 0;
+  if (hayIngresos && resultado.totalRetenciones === 0) {
+    hallazgos.push({ severidad: "info", categoria: "Retenciones", mensaje: "No hay retenciones practicadas cargadas — confirmar si el cliente no tuvo, o si falta cargarlas (afecta el cálculo del anticipo)." });
+  }
+
+  // 8. Dividendos — recordatorio de tarifa especial no calculada aquí.
+  if (resultado.ingresoBrutoDividendos > 0) {
+    hallazgos.push({ severidad: "info", categoria: "Dividendos", mensaje: "Hay dividendos registrados — su tarifa especial (Art. 242 E.T.) no se calcula en este módulo, liquidar aparte." });
+  }
+
+  return hallazgos;
 }
 
 export async function parseExogenaDian(filePathOrBuffer: string | Buffer): Promise<ResultadoExogena> {

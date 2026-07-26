@@ -439,6 +439,7 @@ function LiquidacionTab({ anioGravable }: { anioGravable: number }) {
           <SeccionItemsCard key={`pasivo-${rentaClienteId}`} rentaClienteId={rentaClienteId} seccion="pasivo" titulo="Pasivos" puedeImportar />
           <IngresosDeduccionesPorCedulaCard key={`ced-${rentaClienteId}`} rentaClienteId={rentaClienteId} />
           <ResumenPendiente210Card key={`resumen-${rentaClienteId}`} rentaClienteId={rentaClienteId} />
+          <ValidarRentaCard key={`validar-${rentaClienteId}`} rentaClienteId={rentaClienteId} />
           <Borrador210Card key={`borrador-${rentaClienteId}`} rentaClienteId={rentaClienteId} anioGravable={anioGravable} />
 
           <Card className="border-dashed">
@@ -1123,6 +1124,12 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId }: { rentaClienteId: 
             <Plus className="w-3.5 h-3.5" /> Agregar
           </Button>
         </div>
+        {catalogoQuery.data?.tipos.find((t: any) => t.tipo === tipoDeduccion && t.tipoValor === "deduccion")?.nota && (
+          <p className="text-xs text-amber-700 flex items-start gap-1.5 bg-amber-50 rounded p-1.5 mt-1">
+            <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+            {catalogoQuery.data.tipos.find((t: any) => t.tipo === tipoDeduccion)?.nota}
+          </p>
+        )}
       </div>
 
       {/* Rentas Exentas */}
@@ -1163,6 +1170,12 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId }: { rentaClienteId: 
             <Plus className="w-3.5 h-3.5" /> Agregar
           </Button>
         </div>
+        {catalogoQuery.data?.tipos.find((t: any) => t.tipo === tipoDeduccion && t.tipoValor === "renta_exenta")?.nota && (
+          <p className="text-xs text-amber-700 flex items-start gap-1.5 bg-amber-50 rounded p-1.5 mt-1">
+            <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+            {catalogoQuery.data.tipos.find((t: any) => t.tipo === tipoDeduccion)?.nota}
+          </p>
+        )}
       </div>
 
       {/* Retenciones Practicadas */}
@@ -1331,6 +1344,68 @@ function ResumenPendiente210Card({ rentaClienteId }: { rentaClienteId: number })
             Resumen de seguimiento — para el documento formal, usa "Generar borrador" más abajo.
           </p>
         </div>
+      )}
+    </ColapsableCard>
+  );
+}
+
+const ICONO_SEVERIDAD: Record<string, { icon: any; color: string }> = {
+  error: { icon: AlertTriangle, color: "text-red-700 bg-red-50 border-red-200" },
+  advertencia: { icon: AlertTriangle, color: "text-amber-700 bg-amber-50 border-amber-200" },
+  info: { icon: CheckCircle2, color: "text-blue-700 bg-blue-50 border-blue-200" },
+};
+
+/** Corre las validaciones de topes (individuales y generales) y muestra
+ * las recomendaciones que se han ido incorporando — pensado para ir
+ * creciendo con el tiempo, no es un control cerrado. */
+function ValidarRentaCard({ rentaClienteId }: { rentaClienteId: number }) {
+  const [ejecutado, setEjecutado] = useState(false);
+  const query = trpc.renta.reportes.validarRenta.useQuery({ rentaClienteId }, { enabled: ejecutado });
+
+  const hallazgos = query.data?.hallazgos || [];
+  const errores = hallazgos.filter((h: any) => h.severidad === "error");
+  const advertencias = hallazgos.filter((h: any) => h.severidad === "advertencia");
+  const infos = hallazgos.filter((h: any) => h.severidad === "info");
+
+  return (
+    <ColapsableCard titulo="Validar Renta" defaultOpen={false}>
+      <p className="text-sm text-muted-foreground">
+        Revisa los topes individuales de cada deducción/renta exenta, el tope global de la Cédula General,
+        y genera recomendaciones sobre lo que ya está cargado — esta lista se irá ampliando con el tiempo.
+      </p>
+      <Button
+        onClick={() => { setEjecutado(true); query.refetch(); }}
+        disabled={query.isFetching}
+        className="gap-2 bg-[#EDA011] hover:bg-[#d48f0f] text-white"
+      >
+        {query.isFetching ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
+        Validar Renta
+      </Button>
+
+      {ejecutado && !query.isFetching && (
+        hallazgos.length === 0 ? (
+          <p className="text-sm text-green-700 flex items-center gap-1.5">
+            <CheckCircle2 className="w-4 h-4" /> Sin hallazgos por ahora con lo cargado hasta el momento.
+          </p>
+        ) : (
+          <div className="space-y-2">
+            <p className="text-xs text-muted-foreground">
+              {errores.length} tope(s) excedido(s) · {advertencias.length} advertencia(s) · {infos.length} recomendación(es)
+            </p>
+            {[...errores, ...advertencias, ...infos].map((h: any, i: number) => {
+              const { icon: Icon, color } = ICONO_SEVERIDAD[h.severidad] || ICONO_SEVERIDAD.info;
+              return (
+                <div key={i} className={`flex items-start gap-2 text-sm border rounded-md p-2.5 ${color}`}>
+                  <Icon className="w-4 h-4 shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-medium text-xs uppercase tracking-wide block">{h.categoria}</span>
+                    {h.mensaje}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )
       )}
     </ColapsableCard>
   );

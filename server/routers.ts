@@ -2204,6 +2204,26 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           if (!datos) return null;
           return rentaDb.armarLiquidacion(datos);
         }),
+      // Corre las validaciones de topes individuales y generales, más las
+      // recomendaciones que se han ido incorporando — lista pensada para
+      // seguir creciendo, no un checklist cerrado.
+      validarRenta: protectedProcedure
+        .input(z.object({ rentaClienteId: z.number() }))
+        .query(async ({ input, ctx }) => {
+          assertInformesAccess(ctx.user.cedula);
+          const datos = await db.getDatosLiquidacion(input.rentaClienteId);
+          if (!datos) return { hallazgos: [] };
+          const resultado = rentaDb.armarLiquidacion(datos);
+          const [exogena, dependientes] = await Promise.all([
+            db.getExogenaRenta(input.rentaClienteId),
+            db.getDependientes(input.rentaClienteId),
+          ]);
+          const hallazgos = rentaDb.validarRenta(datos, resultado, {
+            exogenaIngresoBruto: exogena?.topeIngresos ?? null,
+            tieneDependientes: dependientes.length > 0,
+          });
+          return { hallazgos };
+        }),
       // gravable por cédula con el tope aplicado, impuesto según Art. 241,
       // anticipo de referencia), y genera el Excel del borrador.
       generarBorrador210: protectedProcedure
