@@ -225,6 +225,7 @@ function LiquidacionTab({ anioGravable }: { anioGravable: number }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const utils = trpc.useUtils();
   const [renglonDetalle, setRenglonDetalle] = useState<string | null>(null);
+  const catalogoQuery = trpc.renta.liquidacion.catalogoTopes.useQuery();
 
   const exogenaQuery = trpc.renta.exogena.get.useQuery(
     { rentaClienteId: rentaClienteId as number },
@@ -325,11 +326,30 @@ function LiquidacionTab({ anioGravable }: { anioGravable: number }) {
                 </CardHeader>
                 <CardContent>
                   <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 text-sm">
-                    <div><div className="text-muted-foreground text-xs">Ingresos</div><div className="font-medium">{fmt(exogenaQuery.data.topeIngresos)}</div></div>
-                    <div><div className="text-muted-foreground text-xs">Patrimonio</div><div className="font-medium">{fmt(exogenaQuery.data.topePatrimonio)}</div></div>
-                    <div><div className="text-muted-foreground text-xs">Consumo TC</div><div className="font-medium">{fmt(exogenaQuery.data.topeConsumoTC)}</div></div>
-                    <div><div className="text-muted-foreground text-xs">Movimiento</div><div className="font-medium">{fmt(exogenaQuery.data.topeMovimiento)}</div></div>
-                    <div><div className="text-muted-foreground text-xs">Compras</div><div className="font-medium">{fmt(exogenaQuery.data.topeCompras)}</div></div>
+                    {([
+                      ["Ingresos", exogenaQuery.data.topeIngresos, catalogoQuery.data?.topesObligacionUVT.ingresos],
+                      ["Patrimonio", exogenaQuery.data.topePatrimonio, catalogoQuery.data?.topesObligacionUVT.patrimonio],
+                      ["Consumo TC", exogenaQuery.data.topeConsumoTC, catalogoQuery.data?.topesObligacionUVT.consumoTC],
+                      ["Movimiento", exogenaQuery.data.topeMovimiento, catalogoQuery.data?.topesObligacionUVT.movimiento],
+                      ["Compras", exogenaQuery.data.topeCompras, catalogoQuery.data?.topesObligacionUVT.compras],
+                    ] as [string, number | null, number | undefined][]).map(([etiqueta, valorCalculado, topeUVT]) => {
+                      const topePesos = topeUVT && catalogoQuery.data ? topeUVT * catalogoQuery.data.uvt : null;
+                      const obligado = topePesos != null && valorCalculado != null && valorCalculado >= topePesos;
+                      return (
+                        <div key={etiqueta}>
+                          <div className="text-muted-foreground text-xs">{etiqueta}</div>
+                          <div className="font-medium">{fmt(valorCalculado)}</div>
+                          {topePesos != null && (
+                            <>
+                              <div className="text-muted-foreground text-[11px] mt-1">Tope 2025: {fmt(topePesos)}</div>
+                              <Badge variant="outline" className={`text-[10px] mt-0.5 ${obligado ? "bg-red-50 text-red-700 border-red-200" : "bg-green-50 text-green-700 border-green-200"}`}>
+                                {obligado ? "Obligado" : "No obligado"}
+                              </Badge>
+                            </>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                   <p className="text-xs text-muted-foreground mt-3">
                     Archivo: {exogenaQuery.data.nombreArchivo} · {exogenaQuery.data.items.length} ítems procesados
@@ -413,13 +433,13 @@ function LiquidacionTab({ anioGravable }: { anioGravable: number }) {
             </p>
           )}
 
-          <DeclaracionAnteriorCard rentaClienteId={rentaClienteId} />
-          <DependientesCard rentaClienteId={rentaClienteId} />
-          <SeccionItemsCard rentaClienteId={rentaClienteId} seccion="activo" titulo="Activos" puedeImportar />
-          <SeccionItemsCard rentaClienteId={rentaClienteId} seccion="pasivo" titulo="Pasivos" puedeImportar />
-          <IngresosDeduccionesPorCedulaCard rentaClienteId={rentaClienteId} />
-          <ResumenPendiente210Card rentaClienteId={rentaClienteId} />
-          <Borrador210Card rentaClienteId={rentaClienteId} anioGravable={anioGravable} />
+          <DeclaracionAnteriorCard key={`decl-${rentaClienteId}`} rentaClienteId={rentaClienteId} />
+          <DependientesCard key={`dep-${rentaClienteId}`} rentaClienteId={rentaClienteId} />
+          <SeccionItemsCard key={`activo-${rentaClienteId}`} rentaClienteId={rentaClienteId} seccion="activo" titulo="Activos" puedeImportar />
+          <SeccionItemsCard key={`pasivo-${rentaClienteId}`} rentaClienteId={rentaClienteId} seccion="pasivo" titulo="Pasivos" puedeImportar />
+          <IngresosDeduccionesPorCedulaCard key={`ced-${rentaClienteId}`} rentaClienteId={rentaClienteId} />
+          <ResumenPendiente210Card key={`resumen-${rentaClienteId}`} rentaClienteId={rentaClienteId} />
+          <Borrador210Card key={`borrador-${rentaClienteId}`} rentaClienteId={rentaClienteId} anioGravable={anioGravable} />
 
           <Card className="border-dashed">
             <CardContent className="py-10 flex flex-col items-center text-center gap-3">
@@ -503,27 +523,37 @@ function DeclaracionAnteriorCard({ rentaClienteId }: { rentaClienteId: number })
     });
   };
 
+  // Máscara de miles: el estado guarda solo dígitos (sin puntos), y se
+  // muestra formateado — así el valor que se envía al guardar sigue siendo
+  // un número limpio.
+  const conMascara = (setter: (v: string) => void) => (e: React.ChangeEvent<HTMLInputElement>) => {
+    const soloDigitos = e.target.value.replace(/\D/g, "");
+    setter(soloDigitos);
+    setEditado(true);
+  };
+  const formateado = (v: string) => v ? Number(v).toLocaleString("es-CO") : "";
+
   return (
-    <ColapsableCard titulo="Declaración anterior">
+    <ColapsableCard titulo="Declaración anterior" defaultOpen={false}>
       <p className="text-sm text-muted-foreground">
         El impuesto neto de renta del año anterior es necesario para calcular el nuevo anticipo de renta.
       </p>
       <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
         <div className="space-y-1.5">
           <Label className="text-xs">Patrimonio líquido año anterior</Label>
-          <Input type="number" value={patrimonio} onChange={(e) => { setPatrimonio(e.target.value); setEditado(true); }} />
+          <Input type="text" inputMode="numeric" value={formateado(patrimonio)} onChange={conMascara(setPatrimonio)} />
         </div>
         <div className="space-y-1.5">
           <Label className="text-xs">Impuesto neto de renta año anterior</Label>
-          <Input type="number" value={impuestoNeto} onChange={(e) => { setImpuestoNeto(e.target.value); setEditado(true); }} />
+          <Input type="text" inputMode="numeric" value={formateado(impuestoNeto)} onChange={conMascara(setImpuestoNeto)} />
         </div>
         <div className="space-y-1.5">
           <Label className="text-xs">Saldo a favor anterior</Label>
-          <Input type="number" value={saldoAFavor} onChange={(e) => { setSaldoAFavor(e.target.value); setEditado(true); }} />
+          <Input type="text" inputMode="numeric" value={formateado(saldoAFavor)} onChange={conMascara(setSaldoAFavor)} />
         </div>
         <div className="space-y-1.5">
           <Label className="text-xs">Anticipo anterior</Label>
-          <Input type="number" value={anticipoActual} onChange={(e) => { setAnticipoActual(e.target.value); setEditado(true); }} />
+          <Input type="text" inputMode="numeric" value={formateado(anticipoActual)} onChange={conMascara(setAnticipoActual)} />
         </div>
       </div>
       <Button size="sm" onClick={handleGuardar} disabled={guardarMutation.isPending} className="bg-[#EDA011] hover:bg-[#d48f0f] text-white">
@@ -558,7 +588,7 @@ function DependientesCard({ rentaClienteId }: { rentaClienteId: number }) {
   };
 
   return (
-    <ColapsableCard titulo={`Dependientes económicos (${query.data?.length || 0})`}>
+    <ColapsableCard titulo={`Dependientes económicos (${query.data?.length || 0})`} defaultOpen={false}>
       {!!query.data?.length && (
         <div className="space-y-1">
           {query.data.map((d: any) => (
@@ -645,6 +675,7 @@ function SeccionItemsCard({ rentaClienteId, seccion, titulo, puedeImportar }: {
   return (
     <ColapsableCard
       titulo={titulo}
+      defaultOpen={false}
       extra={puedeImportar && (
         <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setShowImportarDialog(true)}>
           <FileSpreadsheet className="w-3.5 h-3.5" />
@@ -931,7 +962,7 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId }: { rentaClienteId: 
   };
 
   return (
-    <ColapsableCard titulo="Ingresos, Deducciones y Rentas Exentas por Cédula">
+    <ColapsableCard titulo="Ingresos, Deducciones y Rentas Exentas por Cédula" defaultOpen={false}>
       <div className="space-y-1.5">
         <Label className="text-xs">Cédula</Label>
         <Select value={cedulaSeleccionada} onValueChange={setCedulaSeleccionada}>
@@ -1216,7 +1247,7 @@ function ResumenPendiente210Card({ rentaClienteId }: { rentaClienteId: number })
 
   return (
     <ColapsableCard
-      titulo="Resumen pendiente del Formulario 210"
+      titulo="Resumen Declaración Renta 2025"
       extra={
         <Button size="sm" variant="ghost" className="h-7 gap-1.5 text-xs" onClick={refetch} disabled={isFetching}>
           {isFetching ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Calculator className="w-3.5 h-3.5" />}
@@ -1325,7 +1356,7 @@ function Borrador210Card({ rentaClienteId, anioGravable }: { rentaClienteId: num
   const nombreTipo = (tipo: string) => tipo === "ANEXOS_PDF" ? "Anexos (PDF)" : "Borrador Formulario 210 (Excel)";
 
   return (
-    <ColapsableCard titulo="Borrador Formulario 210 y Anexos">
+    <ColapsableCard titulo="Borrador Formulario 210 y Anexos" defaultOpen={false}>
       <p className="text-sm text-muted-foreground">
         Reúne los activos, pasivos, ingresos y deducciones/rentas exentas ya cargados, calcula el
         patrimonio líquido, la renta líquida gravable por cédula (con el tope de 1.340 UVT aplicado a la

@@ -2096,7 +2096,15 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
       // muestre el tope de cada tipo sin duplicar esos números ahí.
       catalogoTopes: protectedProcedure.query(async ({ ctx }) => {
         assertInformesAccess(ctx.user.cedula);
-        return { uvt: rentaDb.UVT_2025, tipos: rentaDb.TIPOS_DEDUCCION_RENTA_EXENTA, topeGlobalUVT: rentaDb.TOPES_DEDUCCION_2025.limiteGlobalDeduccionesRentasExentas, cedulas: rentaDb.CEDULAS };
+        return {
+          uvt: rentaDb.UVT_2025, tipos: rentaDb.TIPOS_DEDUCCION_RENTA_EXENTA,
+          topeGlobalUVT: rentaDb.TOPES_DEDUCCION_2025.limiteGlobalDeduccionesRentasExentas, cedulas: rentaDb.CEDULAS,
+          topesObligacionUVT: {
+            ingresos: rentaDb.TOPES_DEDUCCION_2025.ingresos, patrimonio: rentaDb.TOPES_DEDUCCION_2025.patrimonio,
+            consumoTC: rentaDb.TOPES_DEDUCCION_2025.consumoTC, movimiento: rentaDb.TOPES_DEDUCCION_2025.movimiento,
+            compras: rentaDb.TOPES_DEDUCCION_2025.compras,
+          },
+        };
       }),
       list: protectedProcedure
         .input(z.object({ rentaClienteId: z.number(), seccion: z.string().optional() }))
@@ -2218,7 +2226,8 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           await db.guardarRentaReporte(input.rentaClienteId, fileKeyExcel, ctx.user.id, "BORRADOR_210");
 
           // PDF — los 2 anexos (detalle de renta + detalle de patrimonio).
-          const bufferPdf = await rentaDb.generarAnexosRenta(datos, resultado, cliente.nombre, cliente.cedula, input.anioGravable);
+          const dependientes = await db.getDependientes(input.rentaClienteId);
+          const bufferPdf = await rentaDb.generarAnexosRenta(datos, resultado, cliente.nombre, cliente.cedula, input.anioGravable, dependientes);
           const keyPdf = `renta/anexos/${input.rentaClienteId}_${Date.now()}.pdf`;
           const { key: fileKeyPdf } = await storagePut(keyPdf, bufferPdf, "application/pdf");
           await db.guardarRentaReporte(input.rentaClienteId, fileKeyPdf, ctx.user.id, "ANEXOS_PDF");

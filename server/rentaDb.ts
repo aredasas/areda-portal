@@ -143,6 +143,7 @@ export const TOPES_DEDUCCION_2025 = {
   ingresos: 1400, // tope de ingresos brutos para obligación de declarar (referencia)
   patrimonio: 4500,
   consumoTC: 1400,
+  movimiento: 1400, // consignaciones bancarias, depósitos o inversiones financieras
   compras: 1400,
   rentaExentaLaboral25: 790, // Art. 206 num. 10 E.T. — 25% rentas de trabajo
   aportesVoluntariosPensionAFC: 3800, // renta exenta, hasta 30% del ingreso
@@ -625,6 +626,7 @@ const SUBRENTAS_ANEXO: { key: string; titulo: string }[] = [
  * diligenciamiento oficial. */
 export async function generarAnexosRenta(
   datos: DatosLiquidacion, resultado: ResultadoLiquidacion, clienteNombre: string, clienteCedula: string, anioGravable: number,
+  dependientes: { nombre: string; tipoDocumento: string; numeroDocumento: string }[] = [],
 ): Promise<Buffer> {
   const fmt = (n: number) => `$${Math.round(n).toLocaleString("es-CO")}`;
   const chunks: Buffer[] = [];
@@ -748,6 +750,19 @@ export async function generarAnexosRenta(
   lineaDivisoria();
   doc.fontSize(11);
   filaTexto("PATRIMONIO LÍQUIDO", fmt(resultado.patrimonioLiquido), { negrita: true });
+
+  if (dependientes.length > 0) {
+    doc.moveDown(1.5);
+    doc.font("Helvetica-Bold").fontSize(11).text("Dependientes económicos");
+    doc.moveDown(0.2);
+    for (const d of dependientes) {
+      const y = doc.y;
+      doc.font("Helvetica").fontSize(9.5).fillColor("#000000");
+      doc.text(d.nombre, xLabel + 8, y, { width: anchoUtil - 200, height: 12, ellipsis: true });
+      doc.text(`${d.tipoDocumento} ${d.numeroDocumento}`, xLabel, y, { width: anchoUtil, align: "right" });
+      doc.y = Math.max(doc.y, y + 12);
+    }
+  }
 
   doc.end();
   return done;
