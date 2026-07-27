@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react";
+import { useAuth } from "@/_core/hooks/useAuth";
 import DashboardLayout from "@/components/DashboardLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -13,7 +14,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { trpc } from "@/lib/trpc";
 import {
   UserSquare2, Construction, Plus, Loader2, Pencil, Trash2, CheckCircle2, Clock, Users, FileSpreadsheet,
-  Upload, AlertTriangle, Wallet, ChevronDown, Download, Calculator, Eye, FolderOpen, File, Send, ThumbsUp, ThumbsDown, ShieldCheck,
+  Upload, AlertTriangle, Wallet, ChevronDown, Download, Calculator, Eye, FolderOpen, File, Send, ThumbsUp, ThumbsDown, ShieldCheck, Search,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -66,7 +67,10 @@ export default function RentaPersonaNatural() {
           </TabsList>
 
           <TabsContent value="clientes" className="mt-4">
-            <ClientesRentaTab anioGravable={anioGravable} />
+            <ClientesRentaTab
+              anioGravable={anioGravable}
+              onIrALiquidacion={(id) => { setRentaClienteIdDesdeUrl(id); setTab("liquidacion"); }}
+            />
           </TabsContent>
 
           <TabsContent value="liquidacion" className="mt-4">
@@ -78,9 +82,10 @@ export default function RentaPersonaNatural() {
   );
 }
 
-function ClientesRentaTab({ anioGravable }: { anioGravable: number }) {
+function ClientesRentaTab({ anioGravable, onIrALiquidacion }: { anioGravable: number; onIrALiquidacion: (id: number) => void }) {
   const utils = trpc.useUtils();
   const clientesQuery = trpc.renta.clientes.list.useQuery({ anioGravable });
+  const [busqueda, setBusqueda] = useState("");
 
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<any | null>(null);
@@ -127,9 +132,17 @@ function ClientesRentaTab({ anioGravable }: { anioGravable: number }) {
     deleteMutation.mutate({ id: c.id });
   };
 
+  const clientesFiltrados = (clientesQuery.data || []).filter((c: any) =>
+    c.nombre.toLowerCase().includes(busqueda.trim().toLowerCase()),
+  );
+
   return (
     <div className="space-y-4">
-      <div className="flex justify-end">
+      <div className="flex justify-between items-center gap-3">
+        <div className="relative w-full max-w-xs">
+          <Search className="w-4 h-4 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+          <Input value={busqueda} onChange={(e) => setBusqueda(e.target.value)} placeholder="Buscar por nombre..." className="pl-8" />
+        </div>
         <Button onClick={openNew} className="gap-2 bg-[#EDA011] hover:bg-[#d48f0f] text-white">
           <Plus className="w-4 h-4" /> Agregar cliente
         </Button>
@@ -139,9 +152,9 @@ function ClientesRentaTab({ anioGravable }: { anioGravable: number }) {
         <CardContent className="p-0">
           {clientesQuery.isLoading ? (
             <div className="flex items-center justify-center py-12"><Loader2 className="w-6 h-6 animate-spin" /></div>
-          ) : !clientesQuery.data?.length ? (
+          ) : !clientesFiltrados.length ? (
             <p className="text-sm text-muted-foreground py-8 text-center">
-              Sin clientes de renta para {anioGravable} todavía.
+              {busqueda ? "Ningún cliente coincide con la búsqueda." : `Sin clientes de renta para ${anioGravable} todavía.`}
             </p>
           ) : (
             <table className="w-full text-sm">
@@ -157,7 +170,7 @@ function ClientesRentaTab({ anioGravable }: { anioGravable: number }) {
                 </tr>
               </thead>
               <tbody>
-                {clientesQuery.data.map((c: any) => (
+                {clientesFiltrados.map((c: any) => (
                   <tr key={c.id} className={`border-b ${c.noObligado ? "opacity-60" : ""}`}>
                     <td className="p-3 font-medium">{c.nombre}</td>
                     <td className="p-3 font-mono text-xs">{c.cedula}</td>
@@ -181,6 +194,12 @@ function ClientesRentaTab({ anioGravable }: { anioGravable: number }) {
                         <Badge className="bg-green-100 text-green-800 border-green-200"><CheckCircle2 className="w-3 h-3 mr-1" /> Terminado</Badge>
                       ) : c.noObligado ? (
                         <Badge variant="outline">No obligado</Badge>
+                      ) : c.tieneExogena ? (
+                        <button onClick={() => onIrALiquidacion(c.id)}>
+                          <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100 cursor-pointer gap-1">
+                            <FileSpreadsheet className="w-3 h-3" /> En proceso
+                          </Badge>
+                        </button>
                       ) : (
                         <Badge variant="outline" className="bg-yellow-50 text-yellow-700 border-yellow-200">Pendiente</Badge>
                       )}
@@ -299,6 +318,7 @@ function LiquidacionTab({ anioGravable, rentaClienteIdInicial }: { anioGravable:
         <p className="text-sm text-muted-foreground">Selecciona un cliente para continuar.</p>
       ) : (
         <>
+          <DriveCard key={`drive-${rentaClienteId}`} rentaClienteId={rentaClienteId} anioGravable={anioGravable} />
           <Card>
             <CardHeader>
               <CardTitle className="text-base flex items-center gap-2">
@@ -458,7 +478,6 @@ function LiquidacionTab({ anioGravable, rentaClienteIdInicial }: { anioGravable:
           <ResumenPendiente210Card key={`resumen-${rentaClienteId}`} rentaClienteId={rentaClienteId} />
           <ValidarRentaCard key={`validar-${rentaClienteId}`} rentaClienteId={rentaClienteId} />
           <Borrador210Card key={`borrador-${rentaClienteId}`} rentaClienteId={rentaClienteId} anioGravable={anioGravable} />
-          <DriveCard key={`drive-${rentaClienteId}`} rentaClienteId={rentaClienteId} anioGravable={anioGravable} />
           <RevisionFinalizacionCard key={`revision-${rentaClienteId}`} rentaClienteId={rentaClienteId} anioGravable={anioGravable} />
 
           <Card className="border-dashed">
@@ -1432,6 +1451,7 @@ function ValidarRentaCard({ rentaClienteId }: { rentaClienteId: number }) {
 
 function Borrador210Card({ rentaClienteId, anioGravable }: { rentaClienteId: number; anioGravable: number }) {
   const utils = trpc.useUtils();
+  const { user } = useAuth();
   const reportesQuery = trpc.renta.reportes.list.useQuery({ rentaClienteId });
   const [ultimoResultado, setUltimoResultado] = useState<any | null>(null);
   const [urls, setUrls] = useState<{ excel: string; pdf: string } | null>(null);
@@ -1507,7 +1527,10 @@ function Borrador210Card({ rentaClienteId, anioGravable }: { rentaClienteId: num
         <div className="space-y-1 pt-2 border-t">
           <span className="text-xs text-muted-foreground">Generados anteriormente</span>
           {reportesQuery.data.map((r: any) => (
-            <ReporteRentaDownloadLink key={r.id} fileKey={r.fileKey} fecha={r.createdAt} etiqueta={nombreTipo(r.tipo)} />
+            <ReporteRentaDownloadLink
+              key={r.id} id={r.id} fileKey={r.fileKey} fecha={r.createdAt} etiqueta={nombreTipo(r.tipo)}
+              esAdmin={user?.role === "admin"} onEliminado={() => utils.renta.reportes.list.invalidate({ rentaClienteId })}
+            />
           ))}
         </div>
       )}
@@ -1515,16 +1538,34 @@ function Borrador210Card({ rentaClienteId, anioGravable }: { rentaClienteId: num
   );
 }
 
-function ReporteRentaDownloadLink({ fileKey, fecha, etiqueta }: { fileKey: string; fecha: string; etiqueta?: string }) {
+function ReporteRentaDownloadLink({ id, fileKey, fecha, etiqueta, esAdmin, onEliminado }: {
+  id: number; fileKey: string; fecha: string; etiqueta?: string; esAdmin: boolean; onEliminado: () => void;
+}) {
   const urlQuery = trpc.renta.reportes.getDownloadUrl.useQuery({ fileKey }, { enabled: false });
+  const eliminarMutation = trpc.renta.reportes.eliminar.useMutation({
+    onSuccess: () => { toast.success("Eliminado"); onEliminado(); },
+    onError: (err) => toast.error(err.message || "No se pudo eliminar"),
+  });
   const handleClick = async () => {
     const result = await urlQuery.refetch();
     if (result.data?.signedUrl) window.open(result.data.signedUrl, "_blank");
   };
+  const handleEliminar = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!window.confirm("¿Eliminar este archivo del historial?")) return;
+    eliminarMutation.mutate({ id });
+  };
   return (
-    <button onClick={handleClick} className="flex items-center justify-between text-sm border-b py-1.5 w-full text-left hover:bg-muted/50 rounded px-1">
-      <span className="flex items-center gap-1.5"><Download className="w-3.5 h-3.5" /> {etiqueta ? `${etiqueta} — ` : ""}{new Date(fecha).toLocaleString("es-CO")}</span>
-    </button>
+    <div className="flex items-center justify-between text-sm border-b py-1.5 gap-2">
+      <button onClick={handleClick} className="flex items-center gap-1.5 flex-1 min-w-0 text-left hover:bg-muted/50 rounded px-1">
+        <Download className="w-3.5 h-3.5 shrink-0" /> <span className="truncate">{etiqueta ? `${etiqueta} — ` : ""}{new Date(fecha).toLocaleString("es-CO")}</span>
+      </button>
+      {esAdmin && (
+        <Button variant="ghost" size="icon" className="h-7 w-7 text-red-600 shrink-0" onClick={handleEliminar} disabled={eliminarMutation.isPending}>
+          <Trash2 className="w-3.5 h-3.5" />
+        </Button>
+      )}
+    </div>
   );
 }
 
@@ -1536,36 +1577,27 @@ const fileToBase64 = (file: File): Promise<string> => new Promise((resolve, reje
 });
 
 /** Carpeta de Drive con los soportes que envía el cliente (ej. el Excel de
- * la exógena) — se puede asignar/editar el enlace, ver los archivos que ya
- * hay ahí, y subir uno nuevo directo desde acá. */
+ * la exógena) — el enlace se asigna dentro de un diálogo (no queda visible
+ * como texto plano); una vez asignado, quedan solo los botones "Cargar
+ * soporte" y "Ver carpeta". */
 function DriveCard({ rentaClienteId, anioGravable }: { rentaClienteId: number; anioGravable: number }) {
   const utils = trpc.useUtils();
+  const [showAsignar, setShowAsignar] = useState(false);
   const [driveUrl, setDriveUrl] = useState("");
-  const [editado, setEditado] = useState(false);
+  const [showSubir, setShowSubir] = useState(false);
   const [archivo, setArchivo] = useState<File | null>(null);
   const [subiendo, setSubiendo] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  // Se lee el driveFolderUrl actual desde el listado de clientes (ya
-  // cargado en ClientesRentaTab/LiquidacionTab) — para no duplicar la
-  // consulta, se pide directo aquí filtrando por id.
   const rentaClienteQuery = trpc.renta.clientes.list.useQuery({ anioGravable });
   const clienteActual = rentaClienteQuery.data?.find((c: any) => c.id === rentaClienteId);
 
-  useEffect(() => {
-    if (clienteActual && !editado) setDriveUrl(clienteActual.driveFolderUrl || "");
-  }, [clienteActual, editado]);
-
-  const archivosQuery = trpc.renta.clientes.listarArchivosDrive.useQuery(
-    { rentaClienteId }, { enabled: !!clienteActual?.driveFolderUrl },
-  );
-
   const guardarMutation = trpc.renta.clientes.guardarDrive.useMutation({
-    onSuccess: () => { toast.success("Carpeta guardada"); utils.renta.clientes.list.invalidate(); setEditado(false); },
+    onSuccess: () => { toast.success("Carpeta guardada"); utils.renta.clientes.list.invalidate(); setShowAsignar(false); },
     onError: (err) => toast.error(err.message || "No se pudo guardar"),
   });
   const subirMutation = trpc.renta.clientes.subirArchivoDrive.useMutation({
-    onSuccess: () => { toast.success("Archivo subido a Drive"); setArchivo(null); if (fileRef.current) fileRef.current.value = ""; archivosQuery.refetch(); },
+    onSuccess: () => { toast.success("Archivo subido a Drive"); setArchivo(null); setShowSubir(false); if (fileRef.current) fileRef.current.value = ""; },
     onError: (err) => toast.error(err.message || "No se pudo subir el archivo"),
   });
 
@@ -1582,55 +1614,67 @@ function DriveCard({ rentaClienteId, anioGravable }: { rentaClienteId: number; a
     }
   };
 
-  return (
-    <ColapsableCard titulo="Carpeta de Drive (soportes del cliente)" defaultOpen={false}>
-      <p className="text-sm text-muted-foreground">
-        Enlace a la carpeta de Drive donde el cliente envía sus soportes (ej. el Excel de la exógena) —
-        consulta lo ya cargado o sube un archivo nuevo directo desde acá.
-      </p>
-      <div className="flex items-end gap-2">
-        <div className="flex-1 space-y-1">
-          <Label className="text-xs">Enlace de la carpeta de Drive</Label>
-          <Input
-            value={driveUrl} placeholder="https://drive.google.com/drive/folders/..."
-            onChange={(e) => { setDriveUrl(e.target.value); setEditado(true); }}
-          />
-        </div>
-        <Button size="sm" onClick={() => guardarMutation.mutate({ rentaClienteId, driveFolderUrl: driveUrl })} disabled={guardarMutation.isPending || !driveUrl}>
-          {guardarMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Guardar"}
-        </Button>
-        {clienteActual?.driveFolderUrl && (
-          <Button size="sm" variant="outline" onClick={() => window.open(clienteActual.driveFolderUrl as string, "_blank")}>
-            <FolderOpen className="w-3.5 h-3.5" />
-          </Button>
-        )}
-      </div>
+  const abrirAsignar = () => { setDriveUrl(clienteActual?.driveFolderUrl || ""); setShowAsignar(true); };
 
-      {clienteActual?.driveFolderUrl && (
-        <>
-          <div className="space-y-1 pt-2 border-t">
-            <span className="text-xs text-muted-foreground">Archivos en la carpeta</span>
-            {archivosQuery.isLoading ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
-            ) : !archivosQuery.data?.length ? (
-              <p className="text-sm text-muted-foreground">Sin archivos todavía (o Drive no está configurado en el servidor).</p>
-            ) : (
-              archivosQuery.data.map((f: any) => (
-                <div key={f.id} className="flex items-center justify-between text-sm border-b py-1.5 gap-2">
-                  <span className="flex items-center gap-1.5 flex-1 min-w-0 truncate"><File className="w-3.5 h-3.5 shrink-0" /> {f.path}</span>
-                  <a href={`https://drive.google.com/file/d/${f.id}/view`} target="_blank" rel="noreferrer" className="text-xs text-blue-600 hover:underline shrink-0">Abrir</a>
-                </div>
-              ))
-            )}
-          </div>
-          <div className="flex items-center gap-2 pt-2 border-t">
-            <input ref={fileRef} type="file" onChange={(e) => setArchivo(e.target.files?.[0] || null)} className="text-sm flex-1" />
-            <Button size="sm" variant="outline" className="gap-1.5" onClick={handleSubir} disabled={!archivo || subiendo}>
-              {subiendo ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />} Subir
-            </Button>
-          </div>
-        </>
+  return (
+    <ColapsableCard titulo="Carpeta de Drive (soportes del cliente)">
+      <p className="text-sm text-muted-foreground">
+        Carpeta donde el cliente envía sus soportes (ej. el Excel de la exógena).
+      </p>
+      {!clienteActual?.driveFolderUrl ? (
+        <Button size="sm" variant="outline" className="gap-1.5" onClick={abrirAsignar}>
+          <FolderOpen className="w-3.5 h-3.5" /> Asignar carpeta de Drive
+        </Button>
+      ) : (
+        <div className="flex flex-wrap gap-2">
+          <Button size="sm" className="gap-1.5 bg-[#EDA011] hover:bg-[#d48f0f] text-white" onClick={() => setShowSubir(true)}>
+            <Upload className="w-3.5 h-3.5" /> Cargar soporte
+          </Button>
+          <Button size="sm" variant="outline" className="gap-1.5" onClick={() => window.open(clienteActual.driveFolderUrl as string, "_blank")}>
+            <FolderOpen className="w-3.5 h-3.5" /> Ver carpeta
+          </Button>
+          <Button size="sm" variant="ghost" className="gap-1.5 text-muted-foreground" onClick={abrirAsignar}>
+            <Pencil className="w-3.5 h-3.5" /> Cambiar carpeta
+          </Button>
+        </div>
       )}
+
+      <Dialog open={showAsignar} onOpenChange={setShowAsignar}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader><DialogTitle>Carpeta de Drive del cliente</DialogTitle></DialogHeader>
+          <div className="space-y-2 py-2">
+            <Label className="text-xs">Enlace de la carpeta</Label>
+            <Input value={driveUrl} placeholder="https://drive.google.com/drive/folders/..." onChange={(e) => setDriveUrl(e.target.value)} />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowAsignar(false)}>Cancelar</Button>
+            <Button
+              onClick={() => guardarMutation.mutate({ rentaClienteId, driveFolderUrl: driveUrl })}
+              disabled={guardarMutation.isPending || !driveUrl}
+              className="bg-[#EDA011] hover:bg-[#d48f0f] text-white"
+            >
+              {guardarMutation.isPending && <Loader2 className="w-3.5 h-3.5 animate-spin mr-2" />}
+              Guardar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showSubir} onOpenChange={setShowSubir}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader><DialogTitle>Cargar soporte a la carpeta de Drive</DialogTitle></DialogHeader>
+          <div className="py-2">
+            <input ref={fileRef} type="file" onChange={(e) => setArchivo(e.target.files?.[0] || null)} className="text-sm w-full" />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowSubir(false)}>Cancelar</Button>
+            <Button onClick={handleSubir} disabled={!archivo || subiendo} className="bg-[#EDA011] hover:bg-[#d48f0f] text-white">
+              {subiendo && <Loader2 className="w-3.5 h-3.5 animate-spin mr-2" />}
+              Subir
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </ColapsableCard>
   );
 }

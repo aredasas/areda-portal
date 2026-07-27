@@ -2042,7 +2042,12 @@ export async function getBoardContextForAssistant(limite: number = 15) {
 export async function getRentaClientes(anioGravable: number) {
   const db = await getDb();
   if (!db) return [];
-  return db.select().from(rentaClientes).where(eq(rentaClientes.anioGravable, anioGravable));
+  const filas = await db.select().from(rentaClientes).where(eq(rentaClientes.anioGravable, anioGravable));
+  if (filas.length === 0) return [];
+  const idsConExogena = await db.select({ rentaClienteId: rentaExogena.rentaClienteId }).from(rentaExogena)
+    .where(inArray(rentaExogena.rentaClienteId, filas.map(f => f.id)));
+  const setConExogena = new Set(idsConExogena.map(r => r.rentaClienteId));
+  return filas.map(f => ({ ...f, tieneExogena: setConExogena.has(f.id) }));
 }
 
 export async function createRentaCliente(data: InsertRentaCliente): Promise<number> {
@@ -2362,6 +2367,12 @@ export async function getRentaReportes(rentaClienteId: number) {
   const db = await getDb();
   if (!db) return [];
   return db.select().from(rentaReportes).where(eq(rentaReportes.rentaClienteId, rentaClienteId)).orderBy(desc(rentaReportes.createdAt));
+}
+
+export async function eliminarRentaReporte(id: number) {
+  const db = await getDb();
+  if (!db) return;
+  await db.delete(rentaReportes).where(eq(rentaReportes.id, id));
 }
 
 

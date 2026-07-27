@@ -2265,6 +2265,17 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           assertInformesAccess(ctx.user.cedula);
           return { signedUrl: await storageGetSignedUrl(input.fileKey) };
         }),
+      // Solo el administrador puede borrar del historial de generados.
+      eliminar: protectedProcedure
+        .input(z.object({ id: z.number() }))
+        .mutation(async ({ input, ctx }) => {
+          assertInformesAccess(ctx.user.cedula);
+          if (ctx.user.role !== "admin") {
+            throw new TRPCError({ code: "FORBIDDEN", message: "Solo el administrador puede eliminar reportes generados." });
+          }
+          await db.eliminarRentaReporte(input.id);
+          return { success: true };
+        }),
       // Reúne activos/pasivos/ingresos/deducciones/declaración anterior ya
       // cargados, calcula la liquidación (patrimonio líquido, renta líquida
       // Calcula la liquidación en vivo con lo que haya cargado hasta el
