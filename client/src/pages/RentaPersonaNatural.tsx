@@ -511,21 +511,6 @@ function LiquidacionTab({ anioGravable, rentaClienteIdInicial }: { anioGravable:
           <ValidarRentaCard key={`validar-${rentaClienteId}`} rentaClienteId={rentaClienteId} />
           <Borrador210Card key={`borrador-${rentaClienteId}`} rentaClienteId={rentaClienteId} anioGravable={anioGravable} />
           <RevisionFinalizacionCard key={`revision-${rentaClienteId}`} rentaClienteId={rentaClienteId} anioGravable={anioGravable} />
-
-          <Card className="border-dashed">
-            <CardContent className="py-10 flex flex-col items-center text-center gap-3">
-              <div className="flex items-center gap-2 text-muted-foreground">
-                <UserSquare2 className="w-5 h-5" />
-                <Construction className="w-4 h-4" />
-              </div>
-              <h3 className="font-medium">En construcción</h3>
-              <p className="text-sm text-muted-foreground max-w-md">
-                Validación del 60% de costos en rentas de trabajo, anexo ejecutivo, carpeta de Drive
-                para soportes, y finalización (subir el 210 con sello de recibido).
-              </p>
-              <Badge variant="outline" className="text-xs">Próxima entrega</Badge>
-            </CardContent>
-          </Card>
         </>
       )}
     </div>

@@ -603,9 +603,13 @@ function RentaResumenDialog({ cliente, onClose, onAprobar, onRechazar, aprobando
   const itemsQuery = trpc.renta.liquidacion.list.useQuery(
     { rentaClienteId: cliente?.id, seccion: "cedula" }, { enabled: !!cliente },
   );
+  const validacionQuery = trpc.renta.reportes.validarRenta.useQuery(
+    { rentaClienteId: cliente?.id }, { enabled: !!cliente },
+  );
   const fmt = (n: number | null | undefined) => n == null ? "—" : `$${n.toLocaleString("es-CO")}`;
   const r = resumenQuery.data;
   const items = itemsQuery.data || [];
+  const hallazgos = validacionQuery.data?.hallazgos || [];
   const CEDULAS_ORDEN = ["trabajo", "trabajo_honorarios", "capital", "no_laboral"];
 
   return (
@@ -663,6 +667,28 @@ function RentaResumenDialog({ cliente, onClose, onAprobar, onRechazar, aprobando
               <div className="border rounded-md p-2.5"><div className="text-xs text-muted-foreground">Retenciones</div><div className="font-semibold">{fmt(r.totalRetenciones)}</div></div>
               <div className="border rounded-md p-2.5"><div className="text-xs text-muted-foreground">Anticipo Método 1</div><div className="font-semibold">{fmt(r.anticipoMetodo1)}</div></div>
               <div className="border rounded-md p-2.5"><div className="text-xs text-muted-foreground">Anticipo Método 2</div><div className="font-semibold">{fmt(r.anticipoMetodo2)}</div></div>
+            </div>
+
+            <div className="border-t pt-3">
+              <p className="text-sm font-semibold mb-2">Validación actual</p>
+              {hallazgos.length === 0 ? (
+                <p className="text-sm text-green-700 flex items-center gap-1.5">
+                  <CheckSquare className="w-4 h-4" /> Sin hallazgos con lo cargado hasta el momento.
+                </p>
+              ) : (
+                <div className="space-y-1.5">
+                  {hallazgos.map((h: any, i: number) => (
+                    <div key={i} className={`text-xs border rounded-md p-2 ${
+                      h.severidad === "error" ? "bg-red-50 text-red-700 border-red-200"
+                        : h.severidad === "advertencia" ? "bg-amber-50 text-amber-700 border-amber-200"
+                        : "bg-blue-50 text-blue-700 border-blue-200"
+                    }`}>
+                      <span className="font-medium uppercase tracking-wide block">{h.categoria}</span>
+                      {h.mensaje}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         )}
