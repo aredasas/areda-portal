@@ -2077,6 +2077,15 @@ export async function getRentaClientesPendientesRevision() {
   return db.select().from(rentaClientes).where(eq(rentaClientes.estadoRevision, "solicitada"));
 }
 
+/** Clientes de renta ya terminados (declaración final subida) — se
+ * muestran en la pestaña Revisión para poder reabrirlos si hace falta
+ * corregir algo después de aprobados. */
+export async function getRentaClientesTerminados() {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(rentaClientes).where(eq(rentaClientes.terminado, true)).orderBy(desc(rentaClientes.createdAt));
+}
+
 export async function getRentaClienteById(id: number) {
   const db = await getDb();
   if (!db) return null;

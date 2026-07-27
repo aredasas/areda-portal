@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { trpc } from "@/lib/trpc";
 import {
   CheckSquare,
@@ -25,6 +25,8 @@ import {
   ThumbsDown,
   ArrowRight,
   RotateCcw,
+  Download,
+  RefreshCw,
   History,
   Search,
   Upload,
@@ -64,12 +66,18 @@ export default function Revision() {
   const [, setLocation] = useLocation();
 
   const rentaPendienteQuery = trpc.renta.clientes.pendientesRevision.useQuery(undefined, { retry: false });
+  const rentaTerminadosQuery = trpc.renta.clientes.terminados.useQuery(undefined, { retry: false });
   const utilsRenta = trpc.useUtils();
+  const [rentaClienteRevisando, setRentaClienteRevisando] = useState<any | null>(null);
   const aprobarRentaMutation = trpc.renta.clientes.aprobarRevision.useMutation({
-    onSuccess: () => { toast.success("Revisión de renta aprobada"); rentaPendienteQuery.refetch(); },
+    onSuccess: () => { toast.success("Revisión de renta aprobada"); rentaPendienteQuery.refetch(); setRentaClienteRevisando(null); },
   });
   const rechazarRentaMutation = trpc.renta.clientes.rechazarRevision.useMutation({
-    onSuccess: () => { toast.success("Revisión de renta rechazada"); rentaPendienteQuery.refetch(); },
+    onSuccess: () => { toast.success("Revisión de renta rechazada"); rentaPendienteQuery.refetch(); setRentaClienteRevisando(null); },
+  });
+  const reabrirRentaMutation = trpc.renta.clientes.reabrir.useMutation({
+    onSuccess: () => { toast.success("Renta reabierta — vuelve a quedar editable"); rentaTerminadosQuery.refetch(); },
+    onError: (err) => toast.error(err.message || "No se pudo reabrir"),
   });
 
   const now = new Date();
@@ -205,7 +213,7 @@ export default function Revision() {
                 <div key={c.id} className="flex items-center justify-between border rounded-md p-3 gap-2">
                   <button
                     className="flex items-center gap-2 text-left flex-1 min-w-0 hover:underline"
-                    onClick={() => setLocation(`/renta?rentaClienteId=${c.id}&anioGravable=${c.anioGravable}`)}
+                    onClick={() => setRentaClienteRevisando(c)}
                   >
                     <span className="font-medium truncate">Renta de {c.nombre} — año gravable {c.anioGravable}</span>
                     <ArrowRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
@@ -223,6 +231,30 @@ export default function Revision() {
             </CardContent>
           </Card>
         )}
+
+        {!!rentaTerminadosQuery.data?.length && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base flex items-center gap-2">
+                <FileText className="h-4 w-4" /> Renta terminada
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              {rentaTerminadosQuery.data.map((c: any) => (
+                <RentaTerminadaRow key={c.id} cliente={c} onReabrir={() => reabrirRentaMutation.mutate({ rentaClienteId: c.id })} reabriendo={reabrirRentaMutation.isPending} />
+              ))}
+            </CardContent>
+          </Card>
+        )}
+
+        <RentaResumenDialog
+          cliente={rentaClienteRevisando}
+          onClose={() => setRentaClienteRevisando(null)}
+          onAprobar={() => aprobarRentaMutation.mutate({ rentaClienteId: rentaClienteRevisando.id })}
+          onRechazar={(comentario) => rechazarRentaMutation.mutate({ rentaClienteId: rentaClienteRevisando.id, comentario })}
+          aprobando={aprobarRentaMutation.isPending}
+          rechazando={rechazarRentaMutation.isPending}
+        />
 
         {/* Filters */}
         <div className="flex flex-wrap items-center gap-2">
@@ -521,5 +553,129 @@ export default function Revision() {
         </DialogContent>
       </Dialog>
     </DashboardLayout>
+  );
+}
+
+const NOMBRE_SUBRENTA_REVISION: Record<string, string> = {
+  trabajo: "Trabajo (relación laboral)", trabajo_honorarios: "Trabajo por honorarios",
+  capital: "Capital", no_laboral: "No laborales",
+};
+
+/** Fila de una renta ya terminada — el nombre/click abre (o descarga) la
+ * declaración final subida con el sello de recibido, y aparte hay un
+ * botón para reabrirla si hace falta corregir algo. */
+function RentaTerminadaRow({ cliente, onReabrir, reabriendo }: { cliente: any; onReabrir: () => void; reabriendo: boolean }) {
+  const urlQuery = trpc.renta.reportes.getDownloadUrl.useQuery(
+    { fileKey: cliente.declaracionFileKey || "" }, { enabled: false },
+  );
+  const handleVerDeclaracion = async () => {
+    if (!cliente.declaracionFileKey) {
+      toast.error("Este cliente no tiene la declaración final subida todavía.");
+      return;
+    }
+    const result = await urlQuery.refetch();
+    if (result.data?.signedUrl) window.open(result.data.signedUrl, "_blank");
+  };
+  return (
+    <div className="flex items-center justify-between border rounded-md p-3 gap-2">
+      <button className="flex items-center gap-2 text-left flex-1 min-w-0 hover:underline" onClick={handleVerDeclaracion}>
+        <Download className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        <span className="font-medium truncate">Renta de {cliente.nombre} — año gravable {cliente.anioGravable}</span>
+      </button>
+      <Button size="sm" variant="outline" className="gap-1.5 shrink-0" onClick={onReabrir} disabled={reabriendo}>
+        {reabriendo ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />} Reabrir
+      </Button>
+    </div>
+  );
+}
+
+/** Diálogo que se abre al hacer clic sobre una renta pendiente de
+ * revisión — muestra el mismo Resumen Declaración Renta 2025 que se ve en
+ * Liquidación (patrimonio, cada cédula con su detalle, retenciones y
+ * anticipo), para aprobar o rechazar sin tener que salir de esta pantalla. */
+function RentaResumenDialog({ cliente, onClose, onAprobar, onRechazar, aprobando, rechazando }: {
+  cliente: any | null; onClose: () => void; onAprobar: () => void; onRechazar: (comentario: string) => void;
+  aprobando: boolean; rechazando: boolean;
+}) {
+  const resumenQuery = trpc.renta.reportes.resumenActual.useQuery(
+    { rentaClienteId: cliente?.id }, { enabled: !!cliente },
+  );
+  const itemsQuery = trpc.renta.liquidacion.list.useQuery(
+    { rentaClienteId: cliente?.id, seccion: "cedula" }, { enabled: !!cliente },
+  );
+  const fmt = (n: number | null | undefined) => n == null ? "—" : `$${n.toLocaleString("es-CO")}`;
+  const r = resumenQuery.data;
+  const items = itemsQuery.data || [];
+  const CEDULAS_ORDEN = ["trabajo", "trabajo_honorarios", "capital", "no_laboral"];
+
+  return (
+    <Dialog open={!!cliente} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="sm:max-w-2xl max-h-[85vh] overflow-y-auto overflow-x-hidden min-w-0">
+        <DialogHeader>
+          <DialogTitle>Resumen Declaración Renta 2025 — {cliente?.nombre} (año gravable {cliente?.anioGravable})</DialogTitle>
+        </DialogHeader>
+        {!r ? (
+          <p className="text-sm text-muted-foreground py-4">
+            {resumenQuery.isLoading ? "Cargando..." : "Sin información cargada todavía para este cliente."}
+          </p>
+        ) : (
+          <div className="space-y-4 text-sm py-2">
+            <div className="grid sm:grid-cols-3 gap-2">
+              <div className="border rounded-md p-2.5"><div className="text-xs text-muted-foreground">Activos</div><div className="font-semibold">{fmt(r.patrimonioBruto)}</div></div>
+              <div className="border rounded-md p-2.5"><div className="text-xs text-muted-foreground">Pasivos</div><div className="font-semibold">{fmt(r.deudas)}</div></div>
+              <div className="border rounded-md p-2.5 bg-muted/40"><div className="text-xs text-muted-foreground">Patrimonio líquido</div><div className="font-semibold">{fmt(r.patrimonioLiquido)}</div></div>
+            </div>
+
+            {CEDULAS_ORDEN.filter(k => items.some((it: any) => (it.cedula || "trabajo") === k && it.tipoValor === "ingreso_bruto")).map((k) => {
+              const deEstaCedula = items.filter((it: any) => (it.cedula || "trabajo") === k);
+              const linea = (it: any, signo: 1 | -1) => (
+                <div key={it.id} className="flex items-center justify-between py-0.5">
+                  <span className="text-muted-foreground">{it.concepto}</span>
+                  <span className={signo < 0 ? "text-red-600" : ""}>{signo < 0 ? "−" : ""}{fmt(it.valor)}</span>
+                </div>
+              );
+              const sr = r.subRentas[k];
+              return (
+                <div key={k} className="border rounded-md p-3">
+                  <p className="font-semibold text-sm mb-1.5">{NOMBRE_SUBRENTA_REVISION[k] || k}</p>
+                  <div className="pl-1">
+                    {deEstaCedula.filter((it: any) => it.tipoValor === "ingreso_bruto").map((it: any) => linea(it, 1))}
+                    {deEstaCedula.filter((it: any) => it.tipoValor === "ingreso_no_constitutivo").map((it: any) => linea(it, -1))}
+                    {deEstaCedula.filter((it: any) => it.tipoValor === "costo_deduccion_procedente").map((it: any) => linea(it, -1))}
+                    {deEstaCedula.filter((it: any) => it.tipoValor === "deduccion").map((it: any) => linea(it, -1))}
+                    {deEstaCedula.filter((it: any) => it.tipoValor === "renta_exenta").map((it: any) => linea(it, -1))}
+                  </div>
+                  <div className="flex items-center justify-between border-t mt-1.5 pt-1.5 font-bold">
+                    <span>Total renta cédula</span>
+                    <span>{fmt(sr?.rentaLiquidaOrdinaria)}</span>
+                  </div>
+                </div>
+              );
+            })}
+
+            <div className="flex items-center justify-between border-t pt-2 font-semibold text-base">
+              <span>Renta líquida gravable total</span><span>{fmt(r.rentaLiquidaGravableTotal)}</span>
+            </div>
+            <div className="flex items-center justify-between font-semibold text-base">
+              <span>Impuesto de renta ({(r.impuestoRenta.tarifaMarginal * 100).toFixed(0)}%)</span><span>{fmt(r.impuestoRenta.impuesto)}</span>
+            </div>
+            <div className="grid sm:grid-cols-3 gap-2 border-t pt-2">
+              <div className="border rounded-md p-2.5"><div className="text-xs text-muted-foreground">Retenciones</div><div className="font-semibold">{fmt(r.totalRetenciones)}</div></div>
+              <div className="border rounded-md p-2.5"><div className="text-xs text-muted-foreground">Anticipo Método 1</div><div className="font-semibold">{fmt(r.anticipoMetodo1)}</div></div>
+              <div className="border rounded-md p-2.5"><div className="text-xs text-muted-foreground">Anticipo Método 2</div><div className="font-semibold">{fmt(r.anticipoMetodo2)}</div></div>
+            </div>
+          </div>
+        )}
+        <DialogFooter className="gap-2">
+          <Button variant="outline" onClick={onClose}>Cerrar</Button>
+          <Button variant="outline" className="gap-1.5 text-red-700 border-red-300" onClick={() => onRechazar("Revisar valores cargados")} disabled={rechazando}>
+            <ThumbsDown className="h-3.5 w-3.5" /> Rechazar
+          </Button>
+          <Button className="gap-1.5 bg-[#EDA011] hover:bg-[#d48f0f] text-white" onClick={onAprobar} disabled={aprobando}>
+            <ThumbsUp className="h-3.5 w-3.5" /> Aprobar
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

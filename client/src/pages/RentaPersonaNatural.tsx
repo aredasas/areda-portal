@@ -82,6 +82,24 @@ export default function RentaPersonaNatural() {
   );
 }
 
+/** Badge "Terminado" clickeable — al hacer clic abre la declaración final
+ * que se subió con el sello de recibido. */
+function TerminadoBadge({ fileKey }: { fileKey: string | null }) {
+  const urlQuery = trpc.renta.reportes.getDownloadUrl.useQuery({ fileKey: fileKey || "" }, { enabled: false });
+  const handleClick = async () => {
+    if (!fileKey) { toast.error("No se encontró el archivo de la declaración final."); return; }
+    const result = await urlQuery.refetch();
+    if (result.data?.signedUrl) window.open(result.data.signedUrl, "_blank");
+  };
+  return (
+    <button onClick={handleClick}>
+      <Badge className="bg-green-100 text-green-800 border-green-200 hover:bg-green-200 cursor-pointer gap-1">
+        <CheckCircle2 className="w-3 h-3" /> Terminado
+      </Badge>
+    </button>
+  );
+}
+
 function ClientesRentaTab({ anioGravable, onIrALiquidacion }: { anioGravable: number; onIrALiquidacion: (id: number) => void }) {
   const utils = trpc.useUtils();
   const clientesQuery = trpc.renta.clientes.list.useQuery({ anioGravable });
@@ -191,7 +209,7 @@ function ClientesRentaTab({ anioGravable, onIrALiquidacion }: { anioGravable: nu
                     </td>
                     <td className="p-3">
                       {c.terminado ? (
-                        <Badge className="bg-green-100 text-green-800 border-green-200"><CheckCircle2 className="w-3 h-3 mr-1" /> Terminado</Badge>
+                        <TerminadoBadge fileKey={c.declaracionFileKey} />
                       ) : c.noObligado ? (
                         <Badge variant="outline">No obligado</Badge>
                       ) : c.tieneExogena ? (
@@ -298,6 +316,7 @@ function LiquidacionTab({ anioGravable, rentaClienteIdInicial }: { anioGravable:
   };
 
   const clienteSeleccionado = clientesQuery.data?.find((c: any) => c.id === rentaClienteId);
+  const soloLectura = !!clienteSeleccionado?.terminado;
   const fmt = (n: number | null | undefined) => n == null ? "—" : `$${n.toLocaleString("es-CO")}`;
 
   return (
@@ -318,7 +337,14 @@ function LiquidacionTab({ anioGravable, rentaClienteIdInicial }: { anioGravable:
         <p className="text-sm text-muted-foreground">Selecciona un cliente para continuar.</p>
       ) : (
         <>
-          <DriveCard key={`drive-${rentaClienteId}`} rentaClienteId={rentaClienteId} anioGravable={anioGravable} />
+          {soloLectura && (
+            <div className="flex items-center gap-2 bg-blue-50 border border-blue-200 text-blue-800 rounded-md p-3 text-sm">
+              <CheckCircle2 className="w-4 h-4 shrink-0" />
+              Esta renta está <strong>terminada</strong> — solo se puede generar el borrador y los anexos. Para
+              volver a editarla, reábrela desde la pestaña Revisión.
+            </div>
+          )}
+          <DriveCard key={`drive-${rentaClienteId}`} rentaClienteId={rentaClienteId} anioGravable={anioGravable} soloLectura={soloLectura} />
           <Card>
             <CardHeader>
               <CardTitle className="text-base flex items-center gap-2">
@@ -326,28 +352,34 @@ function LiquidacionTab({ anioGravable, rentaClienteIdInicial }: { anioGravable:
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
-              <p className="text-sm text-muted-foreground">
-                Sube el archivo de "Consulta de Información Exógena" descargado del portal de la DIAN para
-                este cliente. Si ya habías subido uno antes, este lo reemplaza.
-              </p>
-              <input
-                ref={fileRef} type="file" accept=".xlsx" className="hidden"
-                onChange={(e) => { const f = e.target.files?.[0]; if (f) setArchivoExogena(f); }}
-              />
-              <div className="flex items-center gap-2">
-                <Button variant="outline" size="sm" className="gap-2" onClick={() => fileRef.current?.click()}>
-                  <Upload className="w-3.5 h-3.5" /> {archivoExogena?.name || "Seleccionar archivo"}
-                </Button>
-                {archivoExogena && (
-                  <Button
-                    size="sm" onClick={handleUpload} disabled={subiendo || uploadMutation.isPending}
-                    className="gap-2 bg-[#EDA011] hover:bg-[#d48f0f] text-white"
-                  >
-                    {(subiendo || uploadMutation.isPending) && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                    Procesar
-                  </Button>
-                )}
-              </div>
+              {soloLectura ? (
+                <p className="text-sm text-muted-foreground">Renta terminada — no se puede reemplazar la exógena.</p>
+              ) : (
+                <>
+                  <p className="text-sm text-muted-foreground">
+                    Sube el archivo de "Consulta de Información Exógena" descargado del portal de la DIAN para
+                    este cliente. Si ya habías subido uno antes, este lo reemplaza.
+                  </p>
+                  <input
+                    ref={fileRef} type="file" accept=".xlsx" className="hidden"
+                    onChange={(e) => { const f = e.target.files?.[0]; if (f) setArchivoExogena(f); }}
+                  />
+                  <div className="flex items-center gap-2">
+                    <Button variant="outline" size="sm" className="gap-2" onClick={() => fileRef.current?.click()}>
+                      <Upload className="w-3.5 h-3.5" /> {archivoExogena?.name || "Seleccionar archivo"}
+                    </Button>
+                    {archivoExogena && (
+                      <Button
+                        size="sm" onClick={handleUpload} disabled={subiendo || uploadMutation.isPending}
+                        className="gap-2 bg-[#EDA011] hover:bg-[#d48f0f] text-white"
+                      >
+                        {(subiendo || uploadMutation.isPending) && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                        Procesar
+                      </Button>
+                    )}
+                  </div>
+                </>
+              )}
             </CardContent>
           </Card>
 
@@ -470,11 +502,11 @@ function LiquidacionTab({ anioGravable, rentaClienteIdInicial }: { anioGravable:
             </p>
           )}
 
-          <DeclaracionAnteriorCard key={`decl-${rentaClienteId}`} rentaClienteId={rentaClienteId} />
-          <DependientesCard key={`dep-${rentaClienteId}`} rentaClienteId={rentaClienteId} />
-          <SeccionItemsCard key={`activo-${rentaClienteId}`} rentaClienteId={rentaClienteId} seccion="activo" titulo="Activos" puedeImportar />
-          <SeccionItemsCard key={`pasivo-${rentaClienteId}`} rentaClienteId={rentaClienteId} seccion="pasivo" titulo="Pasivos" puedeImportar />
-          <IngresosDeduccionesPorCedulaCard key={`ced-${rentaClienteId}`} rentaClienteId={rentaClienteId} />
+          <DeclaracionAnteriorCard key={`decl-${rentaClienteId}`} rentaClienteId={rentaClienteId} soloLectura={soloLectura} />
+          <DependientesCard key={`dep-${rentaClienteId}`} rentaClienteId={rentaClienteId} soloLectura={soloLectura} />
+          <SeccionItemsCard key={`activo-${rentaClienteId}`} rentaClienteId={rentaClienteId} seccion="activo" titulo="Activos" puedeImportar soloLectura={soloLectura} />
+          <SeccionItemsCard key={`pasivo-${rentaClienteId}`} rentaClienteId={rentaClienteId} seccion="pasivo" titulo="Pasivos" puedeImportar soloLectura={soloLectura} />
+          <IngresosDeduccionesPorCedulaCard key={`ced-${rentaClienteId}`} rentaClienteId={rentaClienteId} soloLectura={soloLectura} />
           <ResumenPendiente210Card key={`resumen-${rentaClienteId}`} rentaClienteId={rentaClienteId} />
           <ValidarRentaCard key={`validar-${rentaClienteId}`} rentaClienteId={rentaClienteId} />
           <Borrador210Card key={`borrador-${rentaClienteId}`} rentaClienteId={rentaClienteId} anioGravable={anioGravable} />
@@ -529,7 +561,7 @@ function ColapsableCard({ titulo, extra, children, defaultOpen = true }: {
   );
 }
 
-function DeclaracionAnteriorCard({ rentaClienteId }: { rentaClienteId: number }) {
+function DeclaracionAnteriorCard({ rentaClienteId, soloLectura }: { rentaClienteId: number; soloLectura?: boolean }) {
   const utils = trpc.useUtils();
   const query = trpc.renta.declaracionAnterior.get.useQuery({ rentaClienteId });
   const [patrimonio, setPatrimonio] = useState("");
@@ -580,30 +612,32 @@ function DeclaracionAnteriorCard({ rentaClienteId }: { rentaClienteId: number })
       <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
         <div className="space-y-1.5">
           <Label className="text-xs">Patrimonio líquido año anterior</Label>
-          <Input type="text" inputMode="numeric" value={formateado(patrimonio)} onChange={conMascara(setPatrimonio)} />
+          <Input type="text" inputMode="numeric" value={formateado(patrimonio)} onChange={conMascara(setPatrimonio)} disabled={soloLectura} />
         </div>
         <div className="space-y-1.5">
           <Label className="text-xs">Impuesto neto de renta año anterior</Label>
-          <Input type="text" inputMode="numeric" value={formateado(impuestoNeto)} onChange={conMascara(setImpuestoNeto)} />
+          <Input type="text" inputMode="numeric" value={formateado(impuestoNeto)} onChange={conMascara(setImpuestoNeto)} disabled={soloLectura} />
         </div>
         <div className="space-y-1.5">
           <Label className="text-xs">Saldo a favor anterior</Label>
-          <Input type="text" inputMode="numeric" value={formateado(saldoAFavor)} onChange={conMascara(setSaldoAFavor)} />
+          <Input type="text" inputMode="numeric" value={formateado(saldoAFavor)} onChange={conMascara(setSaldoAFavor)} disabled={soloLectura} />
         </div>
         <div className="space-y-1.5">
           <Label className="text-xs">Anticipo anterior</Label>
-          <Input type="text" inputMode="numeric" value={formateado(anticipoActual)} onChange={conMascara(setAnticipoActual)} />
+          <Input type="text" inputMode="numeric" value={formateado(anticipoActual)} onChange={conMascara(setAnticipoActual)} disabled={soloLectura} />
         </div>
       </div>
-      <Button size="sm" onClick={handleGuardar} disabled={guardarMutation.isPending} className="bg-[#EDA011] hover:bg-[#d48f0f] text-white">
-        {guardarMutation.isPending && <Loader2 className="w-3.5 h-3.5 animate-spin mr-2" />}
-        Guardar
-      </Button>
+      {!soloLectura && (
+        <Button size="sm" onClick={handleGuardar} disabled={guardarMutation.isPending} className="bg-[#EDA011] hover:bg-[#d48f0f] text-white">
+          {guardarMutation.isPending && <Loader2 className="w-3.5 h-3.5 animate-spin mr-2" />}
+          Guardar
+        </Button>
+      )}
     </ColapsableCard>
   );
 }
 
-function DependientesCard({ rentaClienteId }: { rentaClienteId: number }) {
+function DependientesCard({ rentaClienteId, soloLectura }: { rentaClienteId: number; soloLectura?: boolean }) {
   const utils = trpc.useUtils();
   const query = trpc.renta.dependientes.list.useQuery({ rentaClienteId });
   const [nombre, setNombre] = useState("");
@@ -633,45 +667,49 @@ function DependientesCard({ rentaClienteId }: { rentaClienteId: number }) {
           {query.data.map((d: any) => (
             <div key={d.id} className="flex items-center justify-between text-sm border-b py-1.5">
               <span>{d.nombre} <span className="text-muted-foreground text-xs">— {d.tipoDocumento} {d.numeroDocumento}</span></span>
-              <Button variant="ghost" size="icon" className="h-7 w-7 text-red-600" onClick={() => eliminarMutation.mutate({ id: d.id })}>
-                <Trash2 className="w-3.5 h-3.5" />
-              </Button>
+              {!soloLectura && (
+                <Button variant="ghost" size="icon" className="h-7 w-7 text-red-600" onClick={() => eliminarMutation.mutate({ id: d.id })}>
+                  <Trash2 className="w-3.5 h-3.5" />
+                </Button>
+              )}
             </div>
           ))}
         </div>
       )}
-      <div className="grid sm:grid-cols-[1fr_100px_140px_auto] gap-2 items-end">
-        <div className="space-y-1">
-          <Label className="text-xs">Nombre</Label>
-          <Input value={nombre} onChange={(e) => setNombre(e.target.value)} className="h-8" />
+      {!soloLectura && (
+        <div className="grid sm:grid-cols-[1fr_100px_140px_auto] gap-2 items-end">
+          <div className="space-y-1">
+            <Label className="text-xs">Nombre</Label>
+            <Input value={nombre} onChange={(e) => setNombre(e.target.value)} className="h-8" />
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">Tipo doc.</Label>
+            <Select value={tipoDocumento} onValueChange={setTipoDocumento}>
+              <SelectTrigger className="h-8"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="CC">CC</SelectItem>
+                <SelectItem value="TI">TI</SelectItem>
+                <SelectItem value="RC">RC</SelectItem>
+                <SelectItem value="CE">CE</SelectItem>
+                <SelectItem value="PA">Pasaporte</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">Número</Label>
+            <Input value={numeroDocumento} onChange={(e) => setNumeroDocumento(e.target.value)} className="h-8" />
+          </div>
+          <Button size="sm" variant="outline" className="gap-1" onClick={handleAgregar} disabled={agregarMutation.isPending}>
+            <Plus className="w-3.5 h-3.5" /> Agregar
+          </Button>
         </div>
-        <div className="space-y-1">
-          <Label className="text-xs">Tipo doc.</Label>
-          <Select value={tipoDocumento} onValueChange={setTipoDocumento}>
-            <SelectTrigger className="h-8"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="CC">CC</SelectItem>
-              <SelectItem value="TI">TI</SelectItem>
-              <SelectItem value="RC">RC</SelectItem>
-              <SelectItem value="CE">CE</SelectItem>
-              <SelectItem value="PA">Pasaporte</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="space-y-1">
-          <Label className="text-xs">Número</Label>
-          <Input value={numeroDocumento} onChange={(e) => setNumeroDocumento(e.target.value)} className="h-8" />
-        </div>
-        <Button size="sm" variant="outline" className="gap-1" onClick={handleAgregar} disabled={agregarMutation.isPending}>
-          <Plus className="w-3.5 h-3.5" /> Agregar
-        </Button>
-      </div>
+      )}
     </ColapsableCard>
   );
 }
 
-function SeccionItemsCard({ rentaClienteId, seccion, titulo, puedeImportar }: {
-  rentaClienteId: number; seccion: string; titulo: string; puedeImportar?: boolean;
+function SeccionItemsCard({ rentaClienteId, seccion, titulo, puedeImportar, soloLectura }: {
+  rentaClienteId: number; seccion: string; titulo: string; puedeImportar?: boolean; soloLectura?: boolean;
 }) {
   const utils = trpc.useUtils();
   const query = trpc.renta.liquidacion.list.useQuery({ rentaClienteId, seccion });
@@ -716,7 +754,7 @@ function SeccionItemsCard({ rentaClienteId, seccion, titulo, puedeImportar }: {
       titulo={titulo}
       defaultOpen={false}
       extra={puedeImportar && (
-        <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setShowImportarDialog(true)}>
+        <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setShowImportarDialog(true)} disabled={soloLectura}>
           <FileSpreadsheet className="w-3.5 h-3.5" />
           Importar desde exógena
         </Button>
@@ -735,7 +773,7 @@ function SeccionItemsCard({ rentaClienteId, seccion, titulo, puedeImportar }: {
                     <span className="flex-1 min-w-0 truncate">{it.concepto}</span>
                     {it.origen === "exogena" && <Badge variant="outline" className="text-[10px] shrink-0">Exógena</Badge>}
                     <span className="font-medium shrink-0">{fmt(it.valor)}</span>
-                    <Button variant="ghost" size="icon" className="h-7 w-7 text-red-600 shrink-0" onClick={() => eliminarMutation.mutate({ id: it.id })}>
+                    <Button variant="ghost" size="icon" className="h-7 w-7 text-red-600 shrink-0" onClick={() => eliminarMutation.mutate({ id: it.id })} disabled={soloLectura}>
                       <Trash2 className="w-3.5 h-3.5" />
                     </Button>
                   </div>
@@ -771,7 +809,7 @@ function SeccionItemsCard({ rentaClienteId, seccion, titulo, puedeImportar }: {
         )}
         <Input value={concepto} onChange={(e) => setConcepto(e.target.value)} placeholder="Concepto" className="h-8" />
         <Input value={valor} onChange={(e) => setValor(e.target.value)} placeholder="Valor" type="number" className="h-8" />
-        <Button size="sm" variant="outline" className="gap-1" onClick={handleAgregar} disabled={crearMutation.isPending}>
+        <Button size="sm" variant="outline" className="gap-1" onClick={handleAgregar} disabled={crearMutation.isPending || soloLectura}>
           <Plus className="w-3.5 h-3.5" /> Agregar
         </Button>
       </div>
@@ -868,7 +906,7 @@ function ImportarExogenaDialog({ rentaClienteId, seccion, cedula, open, onOpenCh
  * sobre TODAS las cédulas de la Cédula General juntas (trabajo + capital +
  * no laboral), no solo la que esté seleccionada en pantalla. */
 
-function IngresosDeduccionesPorCedulaCard({ rentaClienteId }: { rentaClienteId: number }) {
+function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { rentaClienteId: number; soloLectura?: boolean }) {
   const utils = trpc.useUtils();
   const catalogoQuery = trpc.renta.liquidacion.catalogoTopes.useQuery();
   const dependientesQuery = trpc.renta.dependientes.list.useQuery({ rentaClienteId });
@@ -1018,7 +1056,7 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId }: { rentaClienteId: 
       <div className="border-2 border-green-200 rounded-md p-3 space-y-2 bg-green-50/30">
         <div className="flex items-center justify-between">
           <span className="text-sm font-semibold text-green-800">Ingresos</span>
-          <Button size="sm" variant="outline" className="gap-1.5 h-7 text-xs" onClick={() => setShowImportarDialog(true)}>
+          <Button size="sm" variant="outline" className="gap-1.5 h-7 text-xs" onClick={() => setShowImportarDialog(true)} disabled={soloLectura}>
             <FileSpreadsheet className="w-3.5 h-3.5" /> Importar desde exógena
           </Button>
         </div>
@@ -1029,7 +1067,7 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId }: { rentaClienteId: 
                 <span className="flex-1 min-w-0 truncate">{it.concepto}</span>
                 {it.origen === "exogena" && <Badge variant="outline" className="text-[10px] shrink-0">Exógena</Badge>}
                 <span className="shrink-0">{fmt(it.valor)}</span>
-                <Button variant="ghost" size="icon" className="h-6 w-6 text-red-600 shrink-0" onClick={() => eliminarMutation.mutate({ id: it.id })}><Trash2 className="w-3.5 h-3.5" /></Button>
+                <Button variant="ghost" size="icon" className="h-6 w-6 text-red-600 shrink-0" onClick={() => eliminarMutation.mutate({ id: it.id })} disabled={soloLectura}><Trash2 className="w-3.5 h-3.5" /></Button>
               </div>
             ))}
           </div>
@@ -1040,7 +1078,7 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId }: { rentaClienteId: 
         <div className="grid sm:grid-cols-[1fr_140px_auto] gap-2 items-end pt-1">
           <Input value={conceptoIngresoBruto} onChange={(e) => setConceptoIngresoBruto(e.target.value)} placeholder="Concepto" className="h-8" />
           <Input value={valorIngresoBruto} onChange={(e) => setValorIngresoBruto(e.target.value)} placeholder="Valor" type="number" className="h-8" />
-          <Button size="sm" variant="outline" className="gap-1" onClick={handleAgregarIngresoBruto} disabled={crearMutation.isPending}>
+          <Button size="sm" variant="outline" className="gap-1" onClick={handleAgregarIngresoBruto} disabled={crearMutation.isPending || soloLectura}>
             <Plus className="w-3.5 h-3.5" /> Agregar
           </Button>
         </div>
@@ -1055,7 +1093,7 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId }: { rentaClienteId: 
               <div key={it.id} className="flex items-center justify-between text-sm border-b py-1 gap-2">
                 <span className="flex-1 min-w-0 truncate">{it.concepto}</span>
                 <span className="shrink-0">{fmt(it.valor)}</span>
-                <Button variant="ghost" size="icon" className="h-6 w-6 text-red-600 shrink-0" onClick={() => eliminarMutation.mutate({ id: it.id })}><Trash2 className="w-3.5 h-3.5" /></Button>
+                <Button variant="ghost" size="icon" className="h-6 w-6 text-red-600 shrink-0" onClick={() => eliminarMutation.mutate({ id: it.id })} disabled={soloLectura}><Trash2 className="w-3.5 h-3.5" /></Button>
               </div>
             ))}
           </div>
@@ -1066,7 +1104,7 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId }: { rentaClienteId: 
         <div className="grid sm:grid-cols-[1fr_140px_auto] gap-2 items-end pt-1">
           <Input value={conceptoIncrngo} onChange={(e) => setConceptoIncrngo(e.target.value)} placeholder="Concepto" className="h-8" />
           <Input value={valorIncrngo} onChange={(e) => setValorIncrngo(e.target.value)} placeholder="Valor" type="number" className="h-8" />
-          <Button size="sm" variant="outline" className="gap-1" onClick={handleAgregarIncrngo} disabled={crearMutation.isPending}>
+          <Button size="sm" variant="outline" className="gap-1" onClick={handleAgregarIncrngo} disabled={crearMutation.isPending || soloLectura}>
             <Plus className="w-3.5 h-3.5" /> Agregar
           </Button>
         </div>
@@ -1082,7 +1120,7 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId }: { rentaClienteId: 
                 <div key={it.id} className="flex items-center justify-between text-sm border-b py-1 gap-2">
                   <span className="flex-1 min-w-0 truncate">{it.concepto}</span>
                   <span className="shrink-0">{fmt(it.valor)}</span>
-                  <Button variant="ghost" size="icon" className="h-6 w-6 text-red-600 shrink-0" onClick={() => eliminarMutation.mutate({ id: it.id })}><Trash2 className="w-3.5 h-3.5" /></Button>
+                  <Button variant="ghost" size="icon" className="h-6 w-6 text-red-600 shrink-0" onClick={() => eliminarMutation.mutate({ id: it.id })} disabled={soloLectura}><Trash2 className="w-3.5 h-3.5" /></Button>
                 </div>
               ))}
             </div>
@@ -1104,7 +1142,7 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId }: { rentaClienteId: 
           <div className="grid sm:grid-cols-[1fr_140px_auto] gap-2 items-end pt-1">
             <Input value={conceptoCostos} onChange={(e) => setConceptoCostos(e.target.value)} placeholder="Concepto" className="h-8" />
             <Input value={valorCostos} onChange={(e) => setValorCostos(e.target.value)} placeholder="Valor" type="number" className="h-8" />
-            <Button size="sm" variant="outline" className="gap-1" onClick={handleAgregarCostos} disabled={crearMutation.isPending}>
+            <Button size="sm" variant="outline" className="gap-1" onClick={handleAgregarCostos} disabled={crearMutation.isPending || soloLectura}>
               <Plus className="w-3.5 h-3.5" /> Agregar
             </Button>
           </div>
@@ -1128,7 +1166,7 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId }: { rentaClienteId: 
                   <div className="text-xs text-muted-foreground">{nombreCatalogo(it.tipoDeduccion)}</div>
                 </div>
                 <span className="shrink-0">{fmt(it.valor)}</span>
-                <Button variant="ghost" size="icon" className="h-6 w-6 text-red-600 shrink-0" onClick={() => eliminarMutation.mutate({ id: it.id })}><Trash2 className="w-3.5 h-3.5" /></Button>
+                <Button variant="ghost" size="icon" className="h-6 w-6 text-red-600 shrink-0" onClick={() => eliminarMutation.mutate({ id: it.id })} disabled={soloLectura}><Trash2 className="w-3.5 h-3.5" /></Button>
               </div>
             ))}
           </div>
@@ -1136,7 +1174,7 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId }: { rentaClienteId: 
         {mostrarSugerenciaDependientes && (
           <div className="flex items-center justify-between gap-2 bg-purple-100 rounded px-2.5 py-1.5 text-xs">
             <span>Sugerencia: 10% de ingresos por {dependientesQuery.data?.length} dependiente(s), tope aplicado → {fmt(sugerenciaDependientes)}</span>
-            <Button size="sm" variant="outline" className="h-6 text-xs shrink-0" onClick={handleAgregarDependientes} disabled={crearMutation.isPending}>
+            <Button size="sm" variant="outline" className="h-6 text-xs shrink-0" onClick={handleAgregarDependientes} disabled={crearMutation.isPending || soloLectura}>
               <Plus className="w-3 h-3 mr-1" /> Agregar
             </Button>
           </div>
@@ -1158,7 +1196,7 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId }: { rentaClienteId: 
           </div>
           <Input value={conceptoDeduccion} onChange={(e) => setConceptoDeduccion(e.target.value)} placeholder="Concepto" className="h-8" />
           <Input value={valorDeduccion} onChange={(e) => setValorDeduccion(e.target.value)} placeholder="Valor" type="number" className="h-8" />
-          <Button size="sm" variant="outline" className="gap-1" onClick={handleAgregarDeduccion} disabled={crearMutation.isPending}>
+          <Button size="sm" variant="outline" className="gap-1" onClick={handleAgregarDeduccion} disabled={crearMutation.isPending || soloLectura}>
             <Plus className="w-3.5 h-3.5" /> Agregar
           </Button>
         </div>
@@ -1182,7 +1220,7 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId }: { rentaClienteId: 
                   <div className="text-xs text-muted-foreground">{nombreCatalogo(it.tipoDeduccion)}</div>
                 </div>
                 <span className="shrink-0">{fmt(it.valor)}</span>
-                <Button variant="ghost" size="icon" className="h-6 w-6 text-red-600 shrink-0" onClick={() => eliminarMutation.mutate({ id: it.id })}><Trash2 className="w-3.5 h-3.5" /></Button>
+                <Button variant="ghost" size="icon" className="h-6 w-6 text-red-600 shrink-0" onClick={() => eliminarMutation.mutate({ id: it.id })} disabled={soloLectura}><Trash2 className="w-3.5 h-3.5" /></Button>
               </div>
             ))}
           </div>
@@ -1204,7 +1242,7 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId }: { rentaClienteId: 
           </div>
           <Input value={conceptoDeduccion} onChange={(e) => setConceptoDeduccion(e.target.value)} placeholder="Concepto" className="h-8" />
           <Input value={valorDeduccion} onChange={(e) => setValorDeduccion(e.target.value)} placeholder="Valor" type="number" className="h-8" />
-          <Button size="sm" variant="outline" className="gap-1" onClick={handleAgregarDeduccion} disabled={crearMutation.isPending}>
+          <Button size="sm" variant="outline" className="gap-1" onClick={handleAgregarDeduccion} disabled={crearMutation.isPending || soloLectura}>
             <Plus className="w-3.5 h-3.5" /> Agregar
           </Button>
         </div>
@@ -1225,7 +1263,7 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId }: { rentaClienteId: 
               <div key={it.id} className="flex items-center justify-between text-sm border-b py-1 gap-2">
                 <span className="flex-1 min-w-0 truncate">{it.concepto}</span>
                 <span className="shrink-0">{fmt(it.valor)}</span>
-                <Button variant="ghost" size="icon" className="h-6 w-6 text-red-600 shrink-0" onClick={() => eliminarMutation.mutate({ id: it.id })}><Trash2 className="w-3.5 h-3.5" /></Button>
+                <Button variant="ghost" size="icon" className="h-6 w-6 text-red-600 shrink-0" onClick={() => eliminarMutation.mutate({ id: it.id })} disabled={soloLectura}><Trash2 className="w-3.5 h-3.5" /></Button>
               </div>
             ))}
           </div>
@@ -1236,7 +1274,7 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId }: { rentaClienteId: 
         <div className="grid sm:grid-cols-[1fr_140px_auto] gap-2 items-end pt-1">
           <Input value={conceptoRetencion} onChange={(e) => setConceptoRetencion(e.target.value)} placeholder="Concepto" className="h-8" />
           <Input value={valorRetencion} onChange={(e) => setValorRetencion(e.target.value)} placeholder="Valor" type="number" className="h-8" />
-          <Button size="sm" variant="outline" className="gap-1" onClick={handleAgregarRetencion} disabled={crearMutation.isPending}>
+          <Button size="sm" variant="outline" className="gap-1" onClick={handleAgregarRetencion} disabled={crearMutation.isPending || soloLectura}>
             <Plus className="w-3.5 h-3.5" /> Agregar
           </Button>
         </div>
@@ -1580,7 +1618,7 @@ const fileToBase64 = (file: File): Promise<string> => new Promise((resolve, reje
  * la exógena) — el enlace se asigna dentro de un diálogo (no queda visible
  * como texto plano); una vez asignado, quedan solo los botones "Cargar
  * soporte" y "Ver carpeta". */
-function DriveCard({ rentaClienteId, anioGravable }: { rentaClienteId: number; anioGravable: number }) {
+function DriveCard({ rentaClienteId, anioGravable, soloLectura }: { rentaClienteId: number; anioGravable: number; soloLectura?: boolean }) {
   const utils = trpc.useUtils();
   const [showAsignar, setShowAsignar] = useState(false);
   const [driveUrl, setDriveUrl] = useState("");
@@ -1622,20 +1660,28 @@ function DriveCard({ rentaClienteId, anioGravable }: { rentaClienteId: number; a
         Carpeta donde el cliente envía sus soportes (ej. el Excel de la exógena).
       </p>
       {!clienteActual?.driveFolderUrl ? (
-        <Button size="sm" variant="outline" className="gap-1.5" onClick={abrirAsignar}>
-          <FolderOpen className="w-3.5 h-3.5" /> Asignar carpeta de Drive
-        </Button>
+        soloLectura ? (
+          <p className="text-sm text-muted-foreground">Sin carpeta asignada.</p>
+        ) : (
+          <Button size="sm" variant="outline" className="gap-1.5" onClick={abrirAsignar}>
+            <FolderOpen className="w-3.5 h-3.5" /> Asignar carpeta de Drive
+          </Button>
+        )
       ) : (
         <div className="flex flex-wrap gap-2">
-          <Button size="sm" className="gap-1.5 bg-[#EDA011] hover:bg-[#d48f0f] text-white" onClick={() => setShowSubir(true)}>
-            <Upload className="w-3.5 h-3.5" /> Cargar soporte
-          </Button>
+          {!soloLectura && (
+            <Button size="sm" className="gap-1.5 bg-[#EDA011] hover:bg-[#d48f0f] text-white" onClick={() => setShowSubir(true)}>
+              <Upload className="w-3.5 h-3.5" /> Cargar soporte
+            </Button>
+          )}
           <Button size="sm" variant="outline" className="gap-1.5" onClick={() => window.open(clienteActual.driveFolderUrl as string, "_blank")}>
             <FolderOpen className="w-3.5 h-3.5" /> Ver carpeta
           </Button>
-          <Button size="sm" variant="ghost" className="gap-1.5 text-muted-foreground" onClick={abrirAsignar}>
-            <Pencil className="w-3.5 h-3.5" /> Cambiar carpeta
-          </Button>
+          {!soloLectura && (
+            <Button size="sm" variant="ghost" className="gap-1.5 text-muted-foreground" onClick={abrirAsignar}>
+              <Pencil className="w-3.5 h-3.5" /> Cambiar carpeta
+            </Button>
+          )}
         </div>
       )}
 
@@ -1765,7 +1811,9 @@ function RevisionFinalizacionCard({ rentaClienteId, anioGravable }: { rentaClien
         <p className="text-sm font-medium flex items-center gap-1.5">
           <ShieldCheck className="w-4 h-4" /> Subir declaración final (sello de recibido)
         </p>
-        {estado !== "aprobada" ? (
+        {clienteActual?.terminado ? (
+          <p className="text-xs text-muted-foreground">Renta terminada — para subir una nueva declaración, reábrela primero desde la pestaña Revisión.</p>
+        ) : estado !== "aprobada" ? (
           <p className="text-xs text-muted-foreground">Se habilita una vez la revisión esté aprobada.</p>
         ) : (
           <div className="flex items-center gap-2">

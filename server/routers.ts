@@ -2084,6 +2084,24 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
         assertInformesAccess(ctx.user.cedula);
         return db.getRentaClientesPendientesRevision();
       }),
+      terminados: protectedProcedure.query(async ({ ctx }) => {
+        assertInformesAccess(ctx.user.cedula);
+        return db.getRentaClientesTerminados();
+      }),
+      // Reabre una renta ya terminada — vuelve a quedar editable en
+      // Liquidación (se resetea el estado de revisión, el cliente deja de
+      // estar "terminado"). El archivo de la declaración final ya subida
+      // NO se borra — si se sube una nueva reemplaza la referencia.
+      reabrir: protectedProcedure
+        .input(z.object({ rentaClienteId: z.number() }))
+        .mutation(async ({ input, ctx }) => {
+          assertInformesAccess(ctx.user.cedula);
+          if (ctx.user.role !== "admin") {
+            throw new TRPCError({ code: "FORBIDDEN", message: "Solo el administrador puede reabrir una renta terminada." });
+          }
+          await db.updateRentaCliente(input.rentaClienteId, { terminado: false, estadoRevision: null, revisionComentario: null });
+          return { success: true };
+        }),
       // ---- Finalización: subir la declaración con sello de recibido ----
       subirDeclaracionFinal: protectedProcedure
         .input(z.object({ rentaClienteId: z.number(), fileName: z.string(), fileBase64: z.string(), contentType: z.string() }))
