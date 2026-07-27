@@ -2064,6 +2064,21 @@ export async function deleteRentaCliente(id: number) {
   await db.delete(rentaClientes).where(eq(rentaClientes.id, id));
 }
 
+/** Clientes de renta con revisión solicitada, de cualquier año gravable —
+ * para la pestaña Revisión del menú general. */
+export async function getRentaClientesPendientesRevision() {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(rentaClientes).where(eq(rentaClientes.estadoRevision, "solicitada"));
+}
+
+export async function getRentaClienteById(id: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const filas = await db.select().from(rentaClientes).where(eq(rentaClientes.id, id)).limit(1);
+  return filas[0] || null;
+}
+
 /** Busca el vencimiento de Renta Personas Naturales para una cédula,
  * reutilizando el calendario ya cargado en Configuración (dianCalendar) —
  * no se guarda ninguna fecha aparte, siempre se calcula en vivo contra el

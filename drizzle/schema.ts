@@ -606,6 +606,21 @@ export const rentaClientes = mysqlTable("rentaClientes", {
   terminado: boolean("terminado").default(false).notNull(),
   createdById: int("createdById"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
+  /** Carpeta de Drive con los soportes que envía el cliente (ej. el Excel
+   * de la exógena) — mismo patrón que `clients.driveFolderUrl`, pero para
+   * clientes de renta, que son una tabla aparte. */
+  driveFolderUrl: text("driveFolderUrl"),
+  /** Flujo de revisión: null = sin solicitar, "solicitada" = pendiente de
+   * aprobación (aparece en la pestaña Revisión), "aprobada" = habilita el
+   * botón de subir la declaración final, "rechazada" = vuelve a
+   * liquidación con el comentario de qué corregir. */
+  estadoRevision: mysqlEnum("estadoRevision", ["solicitada", "aprobada", "rechazada"]),
+  revisionSolicitadaPorId: int("revisionSolicitadaPorId"),
+  revisionSolicitadaAt: timestamp("revisionSolicitadaAt"),
+  revisionComentario: text("revisionComentario"),
+  /** Archivo de la declaración ya presentada con el sello/marca de agua
+   * de "recibido" — se sube una vez aprobada la revisión. */
+  declaracionFileKey: varchar("declaracionFileKey", { length: 500 }),
 }, (table) => ({
   cedulaAnioIdx: uniqueIndex("rentaClientes_cedula_anio_idx").on(table.cedula, table.anioGravable),
 }));

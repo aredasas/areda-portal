@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useLocation } from "wouter";
 import { toast } from "sonner";
 import { useAuth } from "@/_core/hooks/useAuth";
 import DashboardLayout from "@/components/DashboardLayout";
@@ -21,6 +22,8 @@ import {
   Calendar as CalendarIcon,
   AlertCircle,
   ThumbsUp,
+  ThumbsDown,
+  ArrowRight,
   RotateCcw,
   History,
   Search,
@@ -58,6 +61,16 @@ const monthNames = [
 export default function Revision() {
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
+  const [, setLocation] = useLocation();
+
+  const rentaPendienteQuery = trpc.renta.clientes.pendientesRevision.useQuery(undefined, { retry: false });
+  const utilsRenta = trpc.useUtils();
+  const aprobarRentaMutation = trpc.renta.clientes.aprobarRevision.useMutation({
+    onSuccess: () => { toast.success("Revisión de renta aprobada"); rentaPendienteQuery.refetch(); },
+  });
+  const rechazarRentaMutation = trpc.renta.clientes.rechazarRevision.useMutation({
+    onSuccess: () => { toast.success("Revisión de renta rechazada"); rentaPendienteQuery.refetch(); },
+  });
 
   const now = new Date();
   const [monthFilter, setMonthFilter] = useState<string>(`${now.getFullYear()}-${pad2(now.getMonth() + 1)}`);
@@ -179,6 +192,37 @@ export default function Revision() {
             Tareas y vencimientos tributarios ya marcados como completados, con sus soportes adjuntos
           </p>
         </div>
+
+        {!!rentaPendienteQuery.data?.length && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base flex items-center gap-2">
+                <FileText className="h-4 w-4" /> Renta pendiente de revisión
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              {rentaPendienteQuery.data.map((c: any) => (
+                <div key={c.id} className="flex items-center justify-between border rounded-md p-3 gap-2">
+                  <button
+                    className="flex items-center gap-2 text-left flex-1 min-w-0 hover:underline"
+                    onClick={() => setLocation(`/renta?rentaClienteId=${c.id}&anioGravable=${c.anioGravable}`)}
+                  >
+                    <span className="font-medium truncate">Renta de {c.nombre} — año gravable {c.anioGravable}</span>
+                    <ArrowRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                  </button>
+                  <div className="flex gap-2 shrink-0">
+                    <Button size="sm" variant="outline" className="gap-1.5 text-green-700 border-green-300" onClick={() => aprobarRentaMutation.mutate({ rentaClienteId: c.id })} disabled={aprobarRentaMutation.isPending}>
+                      <ThumbsUp className="h-3.5 w-3.5" /> Aprobar
+                    </Button>
+                    <Button size="sm" variant="outline" className="gap-1.5 text-red-700 border-red-300" onClick={() => rechazarRentaMutation.mutate({ rentaClienteId: c.id, comentario: "Revisar valores cargados" })} disabled={rechazarRentaMutation.isPending}>
+                      <ThumbsDown className="h-3.5 w-3.5" /> Rechazar
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+        )}
 
         {/* Filters */}
         <div className="flex flex-wrap items-center gap-2">

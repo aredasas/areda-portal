@@ -13,7 +13,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { trpc } from "@/lib/trpc";
 import {
   UserSquare2, Construction, Plus, Loader2, Pencil, Trash2, CheckCircle2, Clock, Users, FileSpreadsheet,
-  Upload, AlertTriangle, Wallet, ChevronDown, Download, Calculator, Eye,
+  Upload, AlertTriangle, Wallet, ChevronDown, Download, Calculator, Eye, FolderOpen, File, Send, ThumbsUp, ThumbsDown, ShieldCheck,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -22,6 +22,19 @@ export default function RentaPersonaNatural() {
   // Año gravable que se está declarando (el año de la exógena consultada,
   // ej. 2025 se declara durante 2026) — no el año calendario actual.
   const [anioGravable, setAnioGravable] = useState(now.getFullYear() - 1);
+  const [tab, setTab] = useState("clientes");
+  const [rentaClienteIdDesdeUrl, setRentaClienteIdDesdeUrl] = useState<number | null>(null);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const idParam = params.get("rentaClienteId");
+    const anioParam = params.get("anioGravable");
+    if (idParam) {
+      setRentaClienteIdDesdeUrl(Number(idParam));
+      setTab("liquidacion");
+      if (anioParam) setAnioGravable(Number(anioParam));
+    }
+  }, []);
 
   return (
     <DashboardLayout>
@@ -46,7 +59,7 @@ export default function RentaPersonaNatural() {
           </Select>
         </div>
 
-        <Tabs defaultValue="clientes">
+        <Tabs value={tab} onValueChange={setTab}>
           <TabsList>
             <TabsTrigger value="clientes" className="gap-1.5"><Users className="w-3.5 h-3.5" /> Listado Clientes Renta</TabsTrigger>
             <TabsTrigger value="liquidacion" className="gap-1.5"><FileSpreadsheet className="w-3.5 h-3.5" /> Liquidación</TabsTrigger>
@@ -57,7 +70,7 @@ export default function RentaPersonaNatural() {
           </TabsContent>
 
           <TabsContent value="liquidacion" className="mt-4">
-            <LiquidacionTab anioGravable={anioGravable} />
+            <LiquidacionTab anioGravable={anioGravable} rentaClienteIdInicial={rentaClienteIdDesdeUrl} />
           </TabsContent>
         </Tabs>
       </div>
@@ -217,7 +230,7 @@ function ClientesRentaTab({ anioGravable }: { anioGravable: number }) {
   );
 }
 
-function LiquidacionTab({ anioGravable }: { anioGravable: number }) {
+function LiquidacionTab({ anioGravable, rentaClienteIdInicial }: { anioGravable: number; rentaClienteIdInicial?: number | null }) {
   const clientesQuery = trpc.renta.clientes.list.useQuery({ anioGravable });
   const [rentaClienteId, setRentaClienteId] = useState<number | null>(null);
   const [archivoExogena, setArchivoExogena] = useState<File | null>(null);
@@ -226,6 +239,10 @@ function LiquidacionTab({ anioGravable }: { anioGravable: number }) {
   const utils = trpc.useUtils();
   const [renglonDetalle, setRenglonDetalle] = useState<string | null>(null);
   const catalogoQuery = trpc.renta.liquidacion.catalogoTopes.useQuery();
+
+  useEffect(() => {
+    if (rentaClienteIdInicial != null) setRentaClienteId(rentaClienteIdInicial);
+  }, [rentaClienteIdInicial]);
 
   const exogenaQuery = trpc.renta.exogena.get.useQuery(
     { rentaClienteId: rentaClienteId as number },
@@ -441,6 +458,8 @@ function LiquidacionTab({ anioGravable }: { anioGravable: number }) {
           <ResumenPendiente210Card key={`resumen-${rentaClienteId}`} rentaClienteId={rentaClienteId} />
           <ValidarRentaCard key={`validar-${rentaClienteId}`} rentaClienteId={rentaClienteId} />
           <Borrador210Card key={`borrador-${rentaClienteId}`} rentaClienteId={rentaClienteId} anioGravable={anioGravable} />
+          <DriveCard key={`drive-${rentaClienteId}`} rentaClienteId={rentaClienteId} anioGravable={anioGravable} />
+          <RevisionFinalizacionCard key={`revision-${rentaClienteId}`} rentaClienteId={rentaClienteId} anioGravable={anioGravable} />
 
           <Card className="border-dashed">
             <CardContent className="py-10 flex flex-col items-center text-center gap-3">
@@ -1505,6 +1524,230 @@ function ReporteRentaDownloadLink({ fileKey, fecha, etiqueta }: { fileKey: strin
   return (
     <button onClick={handleClick} className="flex items-center justify-between text-sm border-b py-1.5 w-full text-left hover:bg-muted/50 rounded px-1">
       <span className="flex items-center gap-1.5"><Download className="w-3.5 h-3.5" /> {etiqueta ? `${etiqueta} — ` : ""}{new Date(fecha).toLocaleString("es-CO")}</span>
+    </button>
+  );
+}
+
+const fileToBase64 = (file: File): Promise<string> => new Promise((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onload = () => resolve((reader.result as string).split(",")[1]);
+  reader.onerror = reject;
+  reader.readAsDataURL(file);
+});
+
+/** Carpeta de Drive con los soportes que envía el cliente (ej. el Excel de
+ * la exógena) — se puede asignar/editar el enlace, ver los archivos que ya
+ * hay ahí, y subir uno nuevo directo desde acá. */
+function DriveCard({ rentaClienteId, anioGravable }: { rentaClienteId: number; anioGravable: number }) {
+  const utils = trpc.useUtils();
+  const [driveUrl, setDriveUrl] = useState("");
+  const [editado, setEditado] = useState(false);
+  const [archivo, setArchivo] = useState<File | null>(null);
+  const [subiendo, setSubiendo] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  // Se lee el driveFolderUrl actual desde el listado de clientes (ya
+  // cargado en ClientesRentaTab/LiquidacionTab) — para no duplicar la
+  // consulta, se pide directo aquí filtrando por id.
+  const rentaClienteQuery = trpc.renta.clientes.list.useQuery({ anioGravable });
+  const clienteActual = rentaClienteQuery.data?.find((c: any) => c.id === rentaClienteId);
+
+  useEffect(() => {
+    if (clienteActual && !editado) setDriveUrl(clienteActual.driveFolderUrl || "");
+  }, [clienteActual, editado]);
+
+  const archivosQuery = trpc.renta.clientes.listarArchivosDrive.useQuery(
+    { rentaClienteId }, { enabled: !!clienteActual?.driveFolderUrl },
+  );
+
+  const guardarMutation = trpc.renta.clientes.guardarDrive.useMutation({
+    onSuccess: () => { toast.success("Carpeta guardada"); utils.renta.clientes.list.invalidate(); setEditado(false); },
+    onError: (err) => toast.error(err.message || "No se pudo guardar"),
+  });
+  const subirMutation = trpc.renta.clientes.subirArchivoDrive.useMutation({
+    onSuccess: () => { toast.success("Archivo subido a Drive"); setArchivo(null); if (fileRef.current) fileRef.current.value = ""; archivosQuery.refetch(); },
+    onError: (err) => toast.error(err.message || "No se pudo subir el archivo"),
+  });
+
+  const handleSubir = async () => {
+    if (!archivo) return;
+    setSubiendo(true);
+    try {
+      const fileBase64 = await fileToBase64(archivo);
+      await subirMutation.mutateAsync({ rentaClienteId, fileName: archivo.name, fileBase64, contentType: archivo.type || "application/octet-stream" });
+    } catch (e: any) {
+      toast.error(e.message || "Error al leer el archivo");
+    } finally {
+      setSubiendo(false);
+    }
+  };
+
+  return (
+    <ColapsableCard titulo="Carpeta de Drive (soportes del cliente)" defaultOpen={false}>
+      <p className="text-sm text-muted-foreground">
+        Enlace a la carpeta de Drive donde el cliente envía sus soportes (ej. el Excel de la exógena) —
+        consulta lo ya cargado o sube un archivo nuevo directo desde acá.
+      </p>
+      <div className="flex items-end gap-2">
+        <div className="flex-1 space-y-1">
+          <Label className="text-xs">Enlace de la carpeta de Drive</Label>
+          <Input
+            value={driveUrl} placeholder="https://drive.google.com/drive/folders/..."
+            onChange={(e) => { setDriveUrl(e.target.value); setEditado(true); }}
+          />
+        </div>
+        <Button size="sm" onClick={() => guardarMutation.mutate({ rentaClienteId, driveFolderUrl: driveUrl })} disabled={guardarMutation.isPending || !driveUrl}>
+          {guardarMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Guardar"}
+        </Button>
+        {clienteActual?.driveFolderUrl && (
+          <Button size="sm" variant="outline" onClick={() => window.open(clienteActual.driveFolderUrl as string, "_blank")}>
+            <FolderOpen className="w-3.5 h-3.5" />
+          </Button>
+        )}
+      </div>
+
+      {clienteActual?.driveFolderUrl && (
+        <>
+          <div className="space-y-1 pt-2 border-t">
+            <span className="text-xs text-muted-foreground">Archivos en la carpeta</span>
+            {archivosQuery.isLoading ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : !archivosQuery.data?.length ? (
+              <p className="text-sm text-muted-foreground">Sin archivos todavía (o Drive no está configurado en el servidor).</p>
+            ) : (
+              archivosQuery.data.map((f: any) => (
+                <div key={f.id} className="flex items-center justify-between text-sm border-b py-1.5 gap-2">
+                  <span className="flex items-center gap-1.5 flex-1 min-w-0 truncate"><File className="w-3.5 h-3.5 shrink-0" /> {f.path}</span>
+                  <a href={`https://drive.google.com/file/d/${f.id}/view`} target="_blank" rel="noreferrer" className="text-xs text-blue-600 hover:underline shrink-0">Abrir</a>
+                </div>
+              ))
+            )}
+          </div>
+          <div className="flex items-center gap-2 pt-2 border-t">
+            <input ref={fileRef} type="file" onChange={(e) => setArchivo(e.target.files?.[0] || null)} className="text-sm flex-1" />
+            <Button size="sm" variant="outline" className="gap-1.5" onClick={handleSubir} disabled={!archivo || subiendo}>
+              {subiendo ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />} Subir
+            </Button>
+          </div>
+        </>
+      )}
+    </ColapsableCard>
+  );
+}
+
+const NOMBRE_ESTADO_REVISION: Record<string, { texto: string; color: string }> = {
+  solicitada: { texto: "Revisión solicitada", color: "bg-amber-50 text-amber-700 border-amber-200" },
+  aprobada: { texto: "Revisión aprobada", color: "bg-green-50 text-green-700 border-green-200" },
+  rechazada: { texto: "Revisión rechazada", color: "bg-red-50 text-red-700 border-red-200" },
+};
+
+/** Flujo de revisión y finalización — solicitar revisión (aparece en la
+ * pestaña Revisión del menú), aprobar/rechazar, y una vez aprobada,
+ * habilitar la subida de la declaración final con el sello de recibido. */
+function RevisionFinalizacionCard({ rentaClienteId, anioGravable }: { rentaClienteId: number; anioGravable: number }) {
+  const utils = trpc.useUtils();
+  const rentaClienteQuery = trpc.renta.clientes.list.useQuery({ anioGravable });
+  const clienteActual = rentaClienteQuery.data?.find((c: any) => c.id === rentaClienteId);
+  const [archivoFinal, setArchivoFinal] = useState<File | null>(null);
+  const [subiendo, setSubiendo] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const invalidar = () => utils.renta.clientes.list.invalidate();
+
+  const solicitarMutation = trpc.renta.clientes.solicitarRevision.useMutation({
+    onSuccess: () => { toast.success("Revisión solicitada"); invalidar(); },
+    onError: (err) => toast.error(err.message || "No se pudo solicitar"),
+  });
+  const aprobarMutation = trpc.renta.clientes.aprobarRevision.useMutation({
+    onSuccess: () => { toast.success("Revisión aprobada"); invalidar(); },
+  });
+  const rechazarMutation = trpc.renta.clientes.rechazarRevision.useMutation({
+    onSuccess: () => { toast.success("Revisión rechazada"); invalidar(); },
+  });
+  const subirFinalMutation = trpc.renta.clientes.subirDeclaracionFinal.useMutation({
+    onSuccess: () => { toast.success("Declaración final subida — cliente marcado como terminado"); setArchivoFinal(null); if (fileRef.current) fileRef.current.value = ""; invalidar(); },
+    onError: (err) => toast.error(err.message || "No se pudo subir la declaración"),
+  });
+
+  const handleSubirFinal = async () => {
+    if (!archivoFinal) return;
+    setSubiendo(true);
+    try {
+      const fileBase64 = await fileToBase64(archivoFinal);
+      await subirFinalMutation.mutateAsync({ rentaClienteId, fileName: archivoFinal.name, fileBase64, contentType: archivoFinal.type || "application/pdf" });
+    } catch (e: any) {
+      toast.error(e.message || "Error al leer el archivo");
+    } finally {
+      setSubiendo(false);
+    }
+  };
+
+  const estado = clienteActual?.estadoRevision;
+  const estadoInfo = estado ? NOMBRE_ESTADO_REVISION[estado] : null;
+
+  return (
+    <ColapsableCard titulo="Revisión y Finalización" defaultOpen={false}>
+      <div className="flex items-center gap-2">
+        {estadoInfo ? (
+          <Badge variant="outline" className={estadoInfo.color}>{estadoInfo.texto}</Badge>
+        ) : (
+          <Badge variant="outline" className="text-muted-foreground">Sin solicitar</Badge>
+        )}
+        {clienteActual?.terminado && <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200">Terminado</Badge>}
+      </div>
+
+      {estado === "rechazada" && clienteActual?.revisionComentario && (
+        <p className="text-sm text-red-700 bg-red-50 rounded p-2">Comentario: {clienteActual.revisionComentario}</p>
+      )}
+
+      {(!estado || estado === "rechazada") && (
+        <Button size="sm" className="gap-1.5 bg-[#EDA011] hover:bg-[#d48f0f] text-white" onClick={() => solicitarMutation.mutate({ rentaClienteId })} disabled={solicitarMutation.isPending}>
+          <Send className="w-3.5 h-3.5" /> Solicitar revisión
+        </Button>
+      )}
+
+      {estado === "solicitada" && (
+        <div className="flex gap-2">
+          <Button size="sm" variant="outline" className="gap-1.5 text-green-700 border-green-300" onClick={() => aprobarMutation.mutate({ rentaClienteId })} disabled={aprobarMutation.isPending}>
+            <ThumbsUp className="w-3.5 h-3.5" /> Aprobar
+          </Button>
+          <Button size="sm" variant="outline" className="gap-1.5 text-red-700 border-red-300" onClick={() => rechazarMutation.mutate({ rentaClienteId, comentario: "Revisar valores cargados" })} disabled={rechazarMutation.isPending}>
+            <ThumbsDown className="w-3.5 h-3.5" /> Rechazar
+          </Button>
+        </div>
+      )}
+
+      <div className="border-t pt-3 space-y-2">
+        <p className="text-sm font-medium flex items-center gap-1.5">
+          <ShieldCheck className="w-4 h-4" /> Subir declaración final (sello de recibido)
+        </p>
+        {estado !== "aprobada" ? (
+          <p className="text-xs text-muted-foreground">Se habilita una vez la revisión esté aprobada.</p>
+        ) : (
+          <div className="flex items-center gap-2">
+            <input ref={fileRef} type="file" onChange={(e) => setArchivoFinal(e.target.files?.[0] || null)} className="text-sm flex-1" />
+            <Button size="sm" className="gap-1.5 bg-[#EDA011] hover:bg-[#d48f0f] text-white" onClick={handleSubirFinal} disabled={!archivoFinal || subiendo}>
+              {subiendo ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />} Subir
+            </Button>
+          </div>
+        )}
+        {clienteActual?.declaracionFileKey && (
+          <DeclaracionFinalDownloadLink fileKey={clienteActual.declaracionFileKey} />
+        )}
+      </div>
+    </ColapsableCard>
+  );
+}
+
+function DeclaracionFinalDownloadLink({ fileKey }: { fileKey: string }) {
+  const urlQuery = trpc.renta.reportes.getDownloadUrl.useQuery({ fileKey }, { enabled: false });
+  const handleClick = async () => {
+    const result = await urlQuery.refetch();
+    if (result.data?.signedUrl) window.open(result.data.signedUrl, "_blank");
+  };
+  return (
+    <button onClick={handleClick} className="flex items-center gap-1.5 text-sm text-blue-600 hover:underline">
+      <Download className="w-3.5 h-3.5" /> Ver declaración final subida
     </button>
   );
 }

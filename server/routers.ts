@@ -2025,6 +2025,80 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           await db.deleteRentaCliente(input.id);
           return { success: true };
         }),
+      // ---- Carpeta de Drive con los soportes que envía el cliente ----
+      guardarDrive: protectedProcedure
+        .input(z.object({ rentaClienteId: z.number(), driveFolderUrl: z.string() }))
+        .mutation(async ({ input, ctx }) => {
+          assertInformesAccess(ctx.user.cedula);
+          await db.updateRentaCliente(input.rentaClienteId, { driveFolderUrl: input.driveFolderUrl });
+          return { success: true };
+        }),
+      listarArchivosDrive: protectedProcedure
+        .input(z.object({ rentaClienteId: z.number() }))
+        .query(async ({ input, ctx }) => {
+          assertInformesAccess(ctx.user.cedula);
+          const cliente = await db.getRentaClienteById(input.rentaClienteId);
+          if (!cliente?.driveFolderUrl || !isDriveConfigured()) return [];
+          const folderId = extractFolderIdFromUrl(cliente.driveFolderUrl);
+          if (!folderId) return [];
+          return listAllFilesRecursive(folderId);
+        }),
+      subirArchivoDrive: protectedProcedure
+        .input(z.object({ rentaClienteId: z.number(), fileName: z.string(), fileBase64: z.string(), contentType: z.string() }))
+        .mutation(async ({ input, ctx }) => {
+          assertInformesAccess(ctx.user.cedula);
+          if (!isDriveConfigured()) throw new Error("Google Drive no está configurado en este servidor.");
+          const cliente = await db.getRentaClienteById(input.rentaClienteId);
+          if (!cliente?.driveFolderUrl) throw new Error("Este cliente de renta no tiene una carpeta de Drive configurada.");
+          const folderId = extractFolderIdFromUrl(cliente.driveFolderUrl);
+          if (!folderId) throw new Error("No se pudo interpretar el enlace de la carpeta de Drive.");
+          const buffer = Buffer.from(input.fileBase64, "base64");
+          const archivo = await uploadFileToDrive(folderId, input.fileName, buffer, input.contentType);
+          return { id: archivo.id, name: archivo.name, webViewLink: (archivo as any).webViewLink };
+        }),
+      // ---- Flujo de revisión ----
+      solicitarRevision: protectedProcedure
+        .input(z.object({ rentaClienteId: z.number() }))
+        .mutation(async ({ input, ctx }) => {
+          assertInformesAccess(ctx.user.cedula);
+          await db.updateRentaCliente(input.rentaClienteId, {
+            estadoRevision: "solicitada", revisionSolicitadaPorId: ctx.user.id, revisionSolicitadaAt: new Date(), revisionComentario: null,
+          });
+          return { success: true };
+        }),
+      aprobarRevision: protectedProcedure
+        .input(z.object({ rentaClienteId: z.number() }))
+        .mutation(async ({ input, ctx }) => {
+          assertInformesAccess(ctx.user.cedula);
+          await db.updateRentaCliente(input.rentaClienteId, { estadoRevision: "aprobada" });
+          return { success: true };
+        }),
+      rechazarRevision: protectedProcedure
+        .input(z.object({ rentaClienteId: z.number(), comentario: z.string().optional() }))
+        .mutation(async ({ input, ctx }) => {
+          assertInformesAccess(ctx.user.cedula);
+          await db.updateRentaCliente(input.rentaClienteId, { estadoRevision: "rechazada", revisionComentario: input.comentario || null });
+          return { success: true };
+        }),
+      pendientesRevision: protectedProcedure.query(async ({ ctx }) => {
+        assertInformesAccess(ctx.user.cedula);
+        return db.getRentaClientesPendientesRevision();
+      }),
+      // ---- Finalización: subir la declaración con sello de recibido ----
+      subirDeclaracionFinal: protectedProcedure
+        .input(z.object({ rentaClienteId: z.number(), fileName: z.string(), fileBase64: z.string(), contentType: z.string() }))
+        .mutation(async ({ input, ctx }) => {
+          assertInformesAccess(ctx.user.cedula);
+          const cliente = await db.getRentaClienteById(input.rentaClienteId);
+          if (cliente?.estadoRevision !== "aprobada") {
+            throw new Error("La revisión debe estar aprobada antes de subir la declaración final.");
+          }
+          const buffer = Buffer.from(input.fileBase64, "base64");
+          const key = `renta/declaracion-final/${input.rentaClienteId}_${Date.now()}_${input.fileName}`;
+          const { key: fileKey } = await storagePut(key, buffer, input.contentType);
+          await db.updateRentaCliente(input.rentaClienteId, { declaracionFileKey: fileKey, terminado: true });
+          return { success: true };
+        }),
     }),
     exogena: router({
       get: protectedProcedure
