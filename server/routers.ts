@@ -1730,6 +1730,14 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           await informesDb.createCentroCosto(input.clienteId, input.codigo, input.nombre);
           return { success: true };
         }),
+      // Para clientes con saldos ya cargados antes de que el catálogo se
+      // empezara a sembrar automáticamente al subir el auxiliar.
+      detectarDesdeSaldos: protectedProcedure
+        .input(z.object({ clienteId: z.number() }))
+        .mutation(async ({ input, ctx }) => {
+          assertInformesAccess(ctx.user.cedula);
+          return informesDb.detectarCentrosCostoDesdeSaldos(input.clienteId);
+        }),
       // Conveniencia: siembra el catálogo conocido de Colfamil (23 puntos +
       // Adm) para el clienteId indicado. No hace nada si ese cliente ya
       // tiene centros cargados.

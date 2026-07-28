@@ -67,6 +67,31 @@ export async function createCentroCosto(clienteId: number, codigo: string, nombr
   await db.insert(informesCentrosCosto).values({ clienteId, codigo, nombre, activo: true });
 }
 
+/** Para clientes que ya tenían saldos cargados ANTES de que se empezara a
+ * sembrar el catálogo automáticamente al subir el auxiliar — revisa todo
+ * lo que ya está guardado en `informesSaldosMensuales` (de cualquier año)
+ * y crea las entradas de catálogo que falten. No duplica ni modifica las
+ * que ya existan. */
+export async function detectarCentrosCostoDesdeSaldos(clienteId: number): Promise<{ creados: number }> {
+  const db = await getDb();
+  if (!db) return { creados: 0 };
+  const filas = await db.selectDistinct({ centroCodigo: informesSaldosMensuales.centroCodigo }).from(informesSaldosMensuales)
+    .where(eq(informesSaldosMensuales.clienteId, clienteId));
+  const codigosEnSaldos = filas.map(f => f.centroCodigo).filter(c => c !== "SC");
+  if (codigosEnSaldos.length === 0) return { creados: 0 };
+
+  const existentes = await getCentrosCosto(clienteId);
+  const codigosExistentes = new Set(existentes.map(c => c.codigo));
+  let creados = 0;
+  for (const codigo of codigosEnSaldos) {
+    if (!codigosExistentes.has(codigo)) {
+      await createCentroCosto(clienteId, codigo, codigo);
+      creados++;
+    }
+  }
+  return { creados };
+}
+
 /** Lee un archivo de CATÁLOGO de centros de costo (código+nombre, formato
  * flexible igual que el de cuentas) y devuelve código -> nombre. */
 export async function parseCatalogoCentrosCosto(filePathOrBuffer: string | Buffer): Promise<Map<string, string>> {
@@ -516,6 +541,24 @@ export async function guardarSaldosMensuales(
           cargaId: sql`values(\`cargaId\`)`,
         },
       });
+  }
+
+  // Si el archivo trae centro de costo (cualquiera distinto de "SC", el
+  // valor por defecto para quien no maneja centros), se siembra el
+  // catálogo automáticamente con los códigos nuevos que aparezcan — así
+  // el informe por centro de costo (ERI) queda disponible sin depender
+  // de que alguien suba antes un catálogo aparte. El nombre queda igual
+  // al código por ahora; se puede renombrar después desde "Centros de
+  // costo" sin perder el código ni los datos ya guardados.
+  const codigosEnEsteArchivo = new Set(Object.keys(detalle).filter(c => c !== "SC"));
+  if (codigosEnEsteArchivo.size > 0) {
+    const existentes = await getCentrosCosto(clienteId);
+    const codigosExistentes = new Set(existentes.map(c => c.codigo));
+    for (const codigo of Array.from(codigosEnEsteArchivo)) {
+      if (!codigosExistentes.has(codigo)) {
+        await createCentroCosto(clienteId, codigo, codigo);
+      }
+    }
   }
 }
 

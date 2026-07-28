@@ -10,7 +10,7 @@ import { trpc } from "@/lib/trpc";
 import {
   Upload, FileSpreadsheet, Loader2, Download, CheckCircle2, XCircle, Clock, Plus,
   Sparkles, LineChart, Landmark, Banknote, Receipt, Construction,
-  BookOpen, Pencil, Check, X,
+  BookOpen, Pencil, Check, X, Search,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -173,6 +173,15 @@ export default function Informes() {
     xhr.onerror = () => { setSubiendoCentros(false); toast.error("Error de red al subir el catálogo"); };
     xhr.send(file);
   }
+
+  const detectarCentrosMutation = trpc.informes.centrosCosto.detectarDesdeSaldos.useMutation({
+    onSuccess: (data) => {
+      if (data.creados > 0) toast.success(`${data.creados} centro(s) de costo detectado(s) desde los datos ya cargados`);
+      else toast.info("No se encontraron centros de costo nuevos en los datos ya cargados");
+      utils.informes.centrosCosto.list.invalidate();
+    },
+    onError: (err) => toast.error(err.message || "No se pudo detectar"),
+  });
 
   const tieneCentros = !!centrosQuery.data?.length;
   const cuentasPendientes = cuentasPendientesQuery.data || [];
@@ -355,6 +364,14 @@ export default function Informes() {
                     className="hidden"
                     onChange={(e) => { const f = e.target.files?.[0]; if (f) subirCentrosCosto(f); }}
                   />
+                  <Button
+                    size="sm" variant="outline" className="gap-2"
+                    onClick={() => clienteId && detectarCentrosMutation.mutate({ clienteId })}
+                    disabled={detectarCentrosMutation.isPending || !clienteId}
+                  >
+                    {detectarCentrosMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
+                    Detectar desde datos ya cargados
+                  </Button>
                   <Button
                     size="sm" variant="outline" className="gap-2"
                     onClick={() => fileInputCentrosRef.current?.click()}

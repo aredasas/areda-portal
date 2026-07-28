@@ -307,7 +307,7 @@ function LimpiarDatosLiquidacionCard() {
     onError: (err) => toast.error(err.message || "No se pudo completar la limpieza"),
   });
 
-  if (user?.role !== "admin") return null;
+  if (user?.cedula !== "5820262") return null;
 
   return (
     <div className="border border-red-200 bg-red-50/40 rounded-md p-4 mt-6">
