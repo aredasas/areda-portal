@@ -27,6 +27,7 @@ import {
   RotateCcw,
   Download,
   RefreshCw,
+  AlertTriangle,
   History,
   Search,
   Upload,
@@ -659,6 +660,47 @@ function RentaResumenDialog({ cliente, onClose, onAprobar, onRechazar, aprobando
               <div className="border rounded-md p-2.5"><div className="text-xs text-muted-foreground">Anticipo Método 1</div><div className="font-semibold">{fmt(r.anticipoMetodo1)}</div></div>
               <div className="border rounded-md p-2.5"><div className="text-xs text-muted-foreground">Anticipo Método 2</div><div className="font-semibold">{fmt(r.anticipoMetodo2)}</div></div>
             </div>
+
+            {r.gananciaOcasional.totalIngresoBruto > 0 && (
+              <div className="border rounded-md p-3">
+                <p className="font-semibold text-sm mb-1.5">Ganancia Ocasional (tarifa aparte, no la tabla del Art. 241)</p>
+                <div className="space-y-1">
+                  {Object.entries(r.gananciaOcasional.porTipo).map(([tipo, v]: any) => (
+                    <div key={tipo} className="flex items-center justify-between text-xs">
+                      <span className="text-muted-foreground">{tipo} ({(v.tarifa * 100).toFixed(0)}%)</span>
+                      <span>Neto {fmt(v.netoGravable)} → Impuesto {fmt(v.impuesto)}</span>
+                    </div>
+                  ))}
+                </div>
+                <div className="flex items-center justify-between border-t mt-1.5 pt-1.5 font-bold">
+                  <span>Total impuesto ganancia ocasional</span>
+                  <span>{fmt(r.gananciaOcasional.totalImpuesto)}</span>
+                </div>
+              </div>
+            )}
+
+            {r.comparacionPatrimonial && (
+              <div className={`border rounded-md p-3 ${r.comparacionPatrimonial.excedente > 0 ? "border-amber-300 bg-amber-50/50" : ""}`}>
+                <p className="font-semibold text-sm mb-1.5 flex items-center gap-1.5">
+                  {r.comparacionPatrimonial.excedente > 0 && <AlertTriangle className="w-4 h-4 text-amber-600" />}
+                  Comparación patrimonial (Arts. 236-239 E.T.)
+                </p>
+                <div className="space-y-1 text-xs">
+                  <div className="flex items-center justify-between"><span className="text-muted-foreground">Diferencia patrimonial (este año − año anterior)</span><span>{fmt(r.comparacionPatrimonial.diferenciaPatrimonial)}</span></div>
+                  <div className="flex items-center justify-between"><span className="text-muted-foreground">+ Rentas exentas del año</span><span>{fmt(r.comparacionPatrimonial.totalRentasExentas)}</span></div>
+                  <div className="flex items-center justify-between"><span className="text-muted-foreground">− Impuesto pagado durante el año (retenciones + anticipo)</span><span>{fmt(r.comparacionPatrimonial.impuestoPagadoDuranteElAnio)}</span></div>
+                  <div className="flex items-center justify-between font-medium border-t pt-1"><span>Renta líquida ajustada</span><span>{fmt(r.comparacionPatrimonial.rentaLiquidaAjustada)}</span></div>
+                </div>
+                <div className={`flex items-center justify-between border-t mt-1.5 pt-1.5 font-bold ${r.comparacionPatrimonial.excedente > 0 ? "text-amber-700" : ""}`}>
+                  <span>{r.comparacionPatrimonial.excedente > 0 ? "Incremento patrimonial sin justificar" : "Sin incremento sin justificar"}</span>
+                  <span>{fmt(Math.max(0, r.comparacionPatrimonial.excedente))}</span>
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  No incluye ganancia ocasional (se liquida aparte). Si el excedente es mayor a 0, se considera
+                  renta gravable adicional salvo que se demuestre causa justificativa.
+                </p>
+              </div>
+            )}
 
             <div className="border-t pt-3">
               <p className="text-sm font-semibold mb-2">Validación actual</p>

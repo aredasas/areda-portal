@@ -925,11 +925,24 @@ export async function generarAnexosRenta(
   if (resultado.gananciaOcasional.totalIngresoBruto > 0) {
     doc.font("Helvetica-Bold").fontSize(11).text("Ganancia Ocasional (tarifa fija propia, no la tabla del Art. 241)");
     doc.moveDown(0.2);
-    for (const [tipo, v] of Object.entries(resultado.gananciaOcasional.porTipo)) {
-      const nombreTipo = TIPOS_GANANCIA_OCASIONAL.find(t => t.tipo === tipo)?.nombre || tipo;
-      filaTexto(`${nombreTipo} (${(v.tarifa * 100).toFixed(0)}%)`, fmt(v.impuesto), { indent: 8 });
-      doc.fontSize(8).font("Helvetica-Oblique").fillColor("#555555").text(`   Neto gravable: ${fmt(v.netoGravable)}`, xLabel + 8);
-      doc.fillColor("#000000");
+    const cGO = datos.cedulas["ganancia_ocasional"];
+    for (const tipoInfo of TIPOS_GANANCIA_OCASIONAL) {
+      const v = resultado.gananciaOcasional.porTipo[tipoInfo.tipo];
+      if (!v) continue;
+      doc.font("Helvetica-Bold").fontSize(9.5).text(`${tipoInfo.nombre} (${(v.tarifa * 100).toFixed(0)}%)`, xLabel + 8);
+      doc.moveDown(0.1);
+      for (const it of (cGO?.ingresoBruto || []).filter(it => it.tipoGananciaOcasional === tipoInfo.tipo)) {
+        filaTexto(it.concepto, fmt(it.valor), { indent: 16 });
+      }
+      for (const it of (cGO?.costoDeduccionProcedente || []).filter(it => it.tipoGananciaOcasional === tipoInfo.tipo)) {
+        filaTexto(it.concepto, `-${fmt(it.valor)}`, { indent: 16, color: "#b91c1c" });
+      }
+      for (const it of (cGO?.rentaExenta || []).filter(it => it.tipoGananciaOcasional === tipoInfo.tipo)) {
+        filaTexto(it.concepto, `-${fmt(it.valor)}`, { indent: 16, color: "#b91c1c" });
+      }
+      filaTexto("Neto gravable", fmt(v.netoGravable), { indent: 8 });
+      filaTexto(`Impuesto (${(v.tarifa * 100).toFixed(0)}%)`, fmt(v.impuesto), { indent: 8, negrita: true });
+      doc.moveDown(0.3);
     }
     lineaDivisoria();
     filaTexto("Total impuesto de ganancia ocasional", fmt(resultado.gananciaOcasional.totalImpuesto), { negrita: true });
@@ -947,25 +960,6 @@ export async function generarAnexosRenta(
   doc.fillColor("#000000");
   filaTexto("Método 1: impuesto actual × 75% - retenciones", fmt(resultado.anticipoMetodo1));
   filaTexto("Método 2: promedio(impuesto anterior, actual) × 75% - retenciones", fmt(resultado.anticipoMetodo2));
-
-  if (resultado.comparacionPatrimonial) {
-    doc.moveDown(1);
-    doc.font("Helvetica-Bold").fontSize(11).text("Comparación patrimonial (Arts. 236-239 E.T.)");
-    doc.moveDown(0.2);
-    filaTexto("Diferencia patrimonial (este año menos año anterior)", fmt(resultado.comparacionPatrimonial.diferenciaPatrimonial), { indent: 8 });
-    filaTexto("+ Rentas exentas del año", fmt(resultado.comparacionPatrimonial.totalRentasExentas), { indent: 8 });
-    filaTexto("- Impuesto pagado durante el año (retenciones + anticipo)", fmt(resultado.comparacionPatrimonial.impuestoPagadoDuranteElAnio), { indent: 8 });
-    filaTexto("Renta líquida ajustada", fmt(resultado.comparacionPatrimonial.rentaLiquidaAjustada), { indent: 8, negrita: true });
-    lineaDivisoria();
-    const excedente = Math.max(0, resultado.comparacionPatrimonial.excedente);
-    filaTexto(
-      excedente > 0 ? "Incremento patrimonial sin justificar" : "Sin incremento patrimonial sin justificar",
-      fmt(excedente), { negrita: true, color: excedente > 0 ? "#b91c1c" : undefined },
-    );
-    doc.fontSize(8).font("Helvetica-Oblique").fillColor("#555555")
-      .text("No incluye ganancia ocasional (se liquida aparte). Si el excedente es mayor a 0, se considera renta gravable adicional salvo que se demuestre causa justificativa.");
-    doc.fillColor("#000000");
-  }
 
   // ================= ANEXO 2: Activos y Pasivos =================
   dibujarPiePaginaAreda(doc);
