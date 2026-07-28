@@ -390,9 +390,11 @@ export const appRouter = router({
   }),
 
   clients: router({
-    list: protectedProcedure.query(async ({ ctx }) => {
-      return db.getAllClients(ctx.user.role === "admin" ? undefined : ctx.user.id);
-    }),
+    list: protectedProcedure
+      .input(z.object({ incluirInactivos: z.boolean().optional() }).optional())
+      .query(async ({ input, ctx }) => {
+        return db.getAllClients(ctx.user.role === "admin" ? undefined : ctx.user.id, input?.incluirInactivos);
+      }),
     getById: protectedProcedure
       .input(z.object({ id: z.number() }))
       .query(async ({ input, ctx }) => {
@@ -462,6 +464,12 @@ export const appRouter = router({
       .input(z.object({ id: z.number() }))
       .mutation(async ({ input }) => {
         await db.deactivateClient(input.id);
+        return { success: true };
+      }),
+    reactivate: adminProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ input }) => {
+        await db.reactivateClient(input.id);
         return { success: true };
       }),
     uploadRut: protectedProcedure
@@ -2084,6 +2092,24 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           const { key: fileKey } = await storagePut(key, buffer, "application/pdf");
           const signedUrl = await storageGetSignedUrl(fileKey);
           return { signedUrl };
+        }),
+      // ---- Limpieza de datos (antes de una capacitación, ej.) ----
+      // Borra todo lo cargado en Liquidación de TODOS los clientes de
+      // renta (exógena, declaración anterior, dependientes, cédulas,
+      // reportes) — conserva la lista de clientes. Acción irreversible,
+      // por eso exige escribir la frase de confirmación exacta además de
+      // ser administrador.
+      limpiarDatosLiquidacion: protectedProcedure
+        .input(z.object({ confirmacion: z.string() }))
+        .mutation(async ({ input, ctx }) => {
+          assertInformesAccess(ctx.user.cedula);
+          if (ctx.user.role !== "admin") {
+            throw new TRPCError({ code: "FORBIDDEN", message: "Solo el administrador puede limpiar los datos de Liquidación." });
+          }
+          if (input.confirmacion !== "BORRAR DATOS RENTA") {
+            throw new Error('Frase de confirmación incorrecta — escribe exactamente "BORRAR DATOS RENTA".');
+          }
+          return db.limpiarDatosLiquidacionRentaPN();
         }),
       // ---- Flujo de revisión ----
       solicitarRevision: protectedProcedure

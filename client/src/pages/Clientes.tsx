@@ -19,8 +19,10 @@ import { toast } from "sonner";
 export default function Clientes() {
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
+  const [mostrarInactivos, setMostrarInactivos] = useState(false);
 
-  const { data: clients, isLoading, refetch } = trpc.clients.list.useQuery();
+  const utils = trpc.useUtils();
+  const { data: clients, isLoading, refetch } = trpc.clients.list.useQuery({ incluirInactivos: mostrarInactivos });
   const { data: obligations } = trpc.obligations.list.useQuery();
   const { data: collaborators } = trpc.collaborators.getActive.useQuery();
   const createClient = trpc.clients.create.useMutation();
@@ -28,6 +30,21 @@ export default function Clientes() {
   const uploadRut = trpc.clients.uploadRut.useMutation();
   const extractRut = trpc.clients.extractRutData.useMutation();
   const setObligations = trpc.obligations.setClientObligations.useMutation();
+  const deactivateClient = trpc.clients.deactivate.useMutation({
+    onSuccess: () => { toast.success("Cliente inactivado"); utils.clients.list.invalidate(); },
+    onError: (err) => toast.error(err.message || "No se pudo inactivar"),
+  });
+  const reactivateClient = trpc.clients.reactivate.useMutation({
+    onSuccess: () => { toast.success("Cliente reactivado"); utils.clients.list.invalidate(); },
+    onError: (err) => toast.error(err.message || "No se pudo reactivar"),
+  });
+
+  const handleToggleActivo = (client: any) => {
+    const accion = client.isActive ? "inactivar" : "reactivar";
+    if (!window.confirm(`¿Seguro que quieres ${accion} a ${client.razonSocial}? Esto no afecta sus datos ya cargados en ningún módulo.`)) return;
+    if (client.isActive) deactivateClient.mutate({ id: client.id });
+    else reactivateClient.mutate({ id: client.id });
+  };
 
   const [showForm, setShowForm] = useState(false);
   const [editingClient, setEditingClient] = useState<any>(null);
@@ -285,9 +302,15 @@ export default function Clientes() {
       </div>
 
       {/* Search */}
-      <div className="relative max-w-sm">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-        <Input placeholder="Buscar por nombre o NIT..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="pl-9" />
+      <div className="flex items-center gap-4">
+        <div className="relative max-w-sm flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input placeholder="Buscar por nombre o NIT..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="pl-9" />
+        </div>
+        <label className="flex items-center gap-1.5 text-sm text-muted-foreground cursor-pointer shrink-0">
+          <Checkbox checked={mostrarInactivos} onCheckedChange={(v) => setMostrarInactivos(!!v)} />
+          Mostrar inactivos
+        </label>
       </div>
 
       <Card>
@@ -311,7 +334,10 @@ export default function Clientes() {
               <TableBody>
                 {filteredClients.map((client: any) => (
                   <TableRow key={client.id}>
-                    <TableCell className="font-medium">{client.razonSocial}</TableCell>
+                    <TableCell className="font-medium">
+                      {client.razonSocial}
+                      {!client.isActive && <Badge variant="outline" className="ml-2 text-[10px] bg-gray-100 text-gray-600 border-gray-300">Inactivo</Badge>}
+                    </TableCell>
                     <TableCell>{client.nit}{client.digitoVerificacion && `-${client.digitoVerificacion}`}</TableCell>
                     <TableCell className="text-sm">{client.ciudad || "-"}</TableCell>
                     <TableCell className="text-sm">
@@ -334,7 +360,15 @@ export default function Clientes() {
                       )}
                     </TableCell>
                     <TableCell className="text-right">
-                      <Button variant="outline" size="sm" onClick={() => handleEdit(client)}>Editar</Button>
+                      <div className="flex justify-end gap-2">
+                        <Button variant="outline" size="sm" onClick={() => handleEdit(client)}>Editar</Button>
+                        <Button
+                          variant="outline" size="sm" className={client.isActive ? "text-orange-600 border-orange-300" : "text-green-600 border-green-300"}
+                          onClick={() => handleToggleActivo(client)}
+                        >
+                          {client.isActive ? "Inactivar" : "Reactivar"}
+                        </Button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}

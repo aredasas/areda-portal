@@ -222,12 +222,13 @@ export async function createClient(data: InsertClient) {
   return result[0].insertId;
 }
 
-export async function getAllClients(managerId?: number) {
+export async function getAllClients(managerId?: number, incluirInactivos = false) {
   const db = await getDb();
   if (!db) return [];
-  const conditions = managerId
-    ? and(eq(clients.isActive, true), eq(clients.managerId, managerId))
-    : eq(clients.isActive, true);
+  const partes = [];
+  if (!incluirInactivos) partes.push(eq(clients.isActive, true));
+  if (managerId) partes.push(eq(clients.managerId, managerId));
+  const conditions = partes.length > 0 ? and(...partes) : undefined;
   return db.select({
     id: clients.id,
     razonSocial: clients.razonSocial,
@@ -275,6 +276,12 @@ export async function deactivateClient(id: number) {
   const db = await getDb();
   if (!db) return;
   await db.update(clients).set({ isActive: false }).where(eq(clients.id, id));
+}
+
+export async function reactivateClient(id: number) {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(clients).set({ isActive: true }).where(eq(clients.id, id));
 }
 
 // ==================== TAX OBLIGATIONS ====================
@@ -2384,6 +2391,37 @@ export async function eliminarRentaReporte(id: number) {
   const db = await getDb();
   if (!db) return;
   await db.delete(rentaReportes).where(eq(rentaReportes.id, id));
+}
+
+/** Borra TODOS los datos cargados en la pestaña Liquidación (exógena,
+ * declaración anterior, dependientes, ingresos/deducciones de cada
+ * cédula, y el historial de borradores/anexos generados) — de TODOS los
+ * clientes de renta, sin excepción. Los clientes en sí (nombre, cédula,
+ * año gravable, carpeta de Drive) NO se tocan, solo lo que se haya
+ * cargado dentro de su liquidación. También resetea el estado de
+ * revisión/finalización de cada cliente, ya que ese estado depende de
+ * los datos que se acaban de borrar. Pensado para dejar el módulo en
+ * blanco antes de una capacitación, sin perder la lista de clientes ya
+ * armada. Acción irreversible — no hay papelera. */
+export async function limpiarDatosLiquidacionRentaPN(): Promise<{ clientesAfectados: number }> {
+  const db = await getDb();
+  if (!db) return { clientesAfectados: 0 };
+
+  const todosLosClientes = await db.select({ id: rentaClientes.id }).from(rentaClientes);
+
+  await db.delete(rentaLiquidacionItems);
+  await db.delete(rentaDependientes);
+  await db.delete(rentaDeclaracionAnterior);
+  await db.delete(rentaExogenaItems);
+  await db.delete(rentaExogena);
+  await db.delete(rentaReportes);
+
+  await db.update(rentaClientes).set({
+    terminado: false, estadoRevision: null, revisionSolicitadaPorId: null,
+    revisionSolicitadaAt: null, revisionComentario: null, declaracionFileKey: null,
+  });
+
+  return { clientesAfectados: todosLosClientes.length };
 }
 
 

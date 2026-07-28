@@ -285,6 +285,66 @@ function ClientesRentaTab({ anioGravable, onIrALiquidacion }: { anioGravable: nu
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <LimpiarDatosLiquidacionCard />
+    </div>
+  );
+}
+
+function LimpiarDatosLiquidacionCard() {
+  const { user } = useAuth();
+  const utils = trpc.useUtils();
+  const [showConfirm, setShowConfirm] = useState(false);
+  const [textoConfirmacion, setTextoConfirmacion] = useState("");
+
+  const limpiarMutation = trpc.renta.clientes.limpiarDatosLiquidacion.useMutation({
+    onSuccess: (data) => {
+      toast.success(`Datos de Liquidación borrados en ${data.clientesAfectados} cliente(s) — la lista de clientes se conservó.`);
+      setShowConfirm(false);
+      setTextoConfirmacion("");
+      utils.renta.clientes.list.invalidate();
+    },
+    onError: (err) => toast.error(err.message || "No se pudo completar la limpieza"),
+  });
+
+  if (user?.role !== "admin") return null;
+
+  return (
+    <div className="border border-red-200 bg-red-50/40 rounded-md p-4 mt-6">
+      <p className="text-sm font-medium text-red-800 flex items-center gap-1.5 mb-1">
+        <AlertTriangle className="w-4 h-4" /> Zona de riesgo
+      </p>
+      <p className="text-xs text-red-700 mb-3">
+        Borra TODO lo cargado en la pestaña Liquidación de todos los clientes de renta (exógena, declaración
+        anterior, dependientes, cédulas, y el historial de borradores/anexos) — la lista de clientes y sus
+        carpetas de Drive se conservan. Acción irreversible, pensada para dejar el módulo en blanco antes de
+        una capacitación.
+      </p>
+      <Button size="sm" variant="outline" className="border-red-300 text-red-700 hover:bg-red-100" onClick={() => setShowConfirm(true)}>
+        Borrar datos de Liquidación (todos los clientes)
+      </Button>
+
+      <Dialog open={showConfirm} onOpenChange={(o) => { setShowConfirm(o); if (!o) setTextoConfirmacion(""); }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader><DialogTitle className="text-red-800">Confirmar borrado de datos</DialogTitle></DialogHeader>
+          <div className="space-y-3 py-2">
+            <p className="text-sm text-muted-foreground">
+              Esta acción no se puede deshacer. Para confirmar, escribe exactamente: <strong>BORRAR DATOS RENTA</strong>
+            </p>
+            <Input value={textoConfirmacion} onChange={(e) => setTextoConfirmacion(e.target.value)} placeholder="BORRAR DATOS RENTA" />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowConfirm(false)}>Cancelar</Button>
+            <Button
+              variant="destructive" disabled={textoConfirmacion !== "BORRAR DATOS RENTA" || limpiarMutation.isPending}
+              onClick={() => limpiarMutation.mutate({ confirmacion: textoConfirmacion })}
+            >
+              {limpiarMutation.isPending && <Loader2 className="w-3.5 h-3.5 animate-spin mr-2" />}
+              Borrar todo
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
