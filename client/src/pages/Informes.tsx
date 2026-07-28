@@ -267,14 +267,19 @@ export default function Informes() {
                         const badge = estadoBadge[c.estado] || estadoBadge.procesando;
                         const Icon = badge.icon;
                         return (
-                          <div key={c.id} className="flex items-center justify-between border rounded-md p-2 text-sm">
-                            <span>{MESES[c.mes - 1]} — {c.nombreArchivo}</span>
-                            <div className="flex items-center gap-2">
-                              {c.totalFilas && <span className="text-muted-foreground">{c.totalFilas.toLocaleString()} filas</span>}
-                              <Badge className={badge.className} title={c.estado === "error" ? c.mensajeError : undefined}>
-                                <Icon className="w-3 h-3 mr-1" />{badge.label}
-                              </Badge>
+                          <div key={c.id} className="border rounded-md p-2 text-sm space-y-1">
+                            <div className="flex items-center justify-between">
+                              <span>{MESES[c.mes - 1]} — {c.nombreArchivo}</span>
+                              <div className="flex items-center gap-2">
+                                {c.totalFilas && <span className="text-muted-foreground">{c.totalFilas.toLocaleString()} filas</span>}
+                                <Badge className={badge.className}>
+                                  <Icon className="w-3 h-3 mr-1" />{badge.label}
+                                </Badge>
+                              </div>
                             </div>
+                            {c.estado === "error" && c.mensajeError && (
+                              <p className="text-xs text-red-700 bg-red-50 rounded px-2 py-1">{c.mensajeError}</p>
+                            )}
                           </div>
                         );
                       })}

@@ -426,7 +426,7 @@ export type InsertTaskRecurrence = typeof taskRecurrences.$inferInsert;
 export const informesCentrosCosto = mysqlTable("informesCentrosCosto", {
   id: int("id").autoincrement().primaryKey(),
   clienteId: int("clienteId").notNull(),
-  codigo: varchar("codigo", { length: 4 }).notNull(),
+  codigo: varchar("codigo", { length: 40 }).notNull(),
   nombre: varchar("nombre", { length: 120 }).notNull(),
   activo: boolean("activo").default(true).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
@@ -512,7 +512,7 @@ export const informesSaldosMensuales = mysqlTable("informesSaldosMensuales", {
   clienteId: int("clienteId").notNull(),
   anio: int("anio").notNull(),
   mes: int("mes").notNull(),
-  centroCodigo: varchar("centroCodigo", { length: 4 }).notNull(),
+  centroCodigo: varchar("centroCodigo", { length: 40 }).notNull(),
   cuenta: varchar("cuenta", { length: 12 }).notNull(),
   tipo: mysqlEnum("tipo", ["ingreso", "costo", "gasto", "descuento_pp"]).notNull(),
   valor: double("valor").notNull(),
