@@ -218,6 +218,13 @@
       "when": 1785038915028,
       "tag": "0030_renta_drive_revision",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "5",
+      "when": 1785125373888,
+      "tag": "0031_ganancia_ocasional",
+      "breakpoints": true
     }
   ]
 }

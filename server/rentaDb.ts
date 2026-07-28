@@ -187,7 +187,7 @@ export function validarTopeDeduccion(tipoDeduccion: string, valor: number): { ex
   return { excedeTope: valor > tope, tope, topeUVT: catalogo.topeUVT };
 }
 
-export type ItemValor = { concepto: string; valor: number; tipoDeduccion?: string | null };
+export type ItemValor = { concepto: string; valor: number; tipoDeduccion?: string | null; tipoGananciaOcasional?: string | null };
 
 /** Los datos crudos de UNA de las 4 sub-rentas de la Cédula General, o de
  * Pensiones/Dividendos — cada casilla del Formulario 210 corresponde a uno
@@ -245,6 +245,22 @@ export const CASILLAS_210 = {
 
 const SUBRENTAS_GENERAL = ["trabajo", "trabajo_honorarios", "capital", "no_laboral"] as const;
 
+/** Tipos de ganancia ocasional con su tarifa vigente para el año gravable
+ * 2025 (confirmada contra el Art. 317 E.T. para loterías/rifas/apuestas, y
+ * la tarifa general del 15% para el resto) — hay una reforma tributaria en
+ * trámite que subiría estas tarifas a 33%/30%, pero NO es ley todavía para
+ * este año gravable; si se aprueba para años futuros, este es el único
+ * lugar que habría que actualizar. */
+export const TIPOS_GANANCIA_OCASIONAL: { tipo: string; nombre: string; tarifa: number }[] = [
+  { tipo: "loteria_rifa_apuesta", nombre: "Loterías, rifas, apuestas y similares (Art. 317 E.T.)", tarifa: 0.20 },
+  { tipo: "herencia_legado_donacion", nombre: "Herencias, legados y donaciones", tarifa: 0.15 },
+  { tipo: "venta_activos_2_anios", nombre: "Venta de activos fijos poseídos 2 años o más", tarifa: 0.15 },
+  { tipo: "liquidacion_sociedad", nombre: "Liquidación de sociedades", tarifa: 0.15 },
+  { tipo: "seguro_vida", nombre: "Indemnizaciones por seguro de vida", tarifa: 0.15 },
+  { tipo: "otro", nombre: "Otra ganancia ocasional", tarifa: 0.15 },
+];
+
+
 export type ResultadoSubRenta = {
   ingresoBruto: number; ingresoNoConstitutivo: number; costoDeduccionProcedente: number;
   rentaLiquida: number; rentaExentaDisponible: number; deduccionDisponible: number;
@@ -275,6 +291,24 @@ export type ResultadoLiquidacion = {
    * 0 si el resultado da negativo. */
   anticipoMetodo1: number;
   anticipoMetodo2: number;
+  /** Ganancia ocasional — cada tipo tiene su propia tarifa (20% loterías,
+   * 15% el resto), por eso se calcula el impuesto por tipo y se suma. */
+  gananciaOcasional: {
+    porTipo: Record<string, { ingresoBruto: number; costos: number; rentaExenta: number; netoGravable: number; impuesto: number; tarifa: number }>;
+    totalIngresoBruto: number;
+    totalNetoGravable: number;
+    totalImpuesto: number;
+  };
+  /** Renta por comparación patrimonial (Arts. 236-239 E.T.) — se calcula
+   * siempre que se conozca el patrimonio líquido del año anterior (no solo
+   * cuando hay un excedente sin justificar), para que el valor sea visible
+   * de referencia aunque no dispare una alerta. No incluye ganancia
+   * ocasional neta (no modelada como "renta gravable" en este cálculo,
+   * son regímenes separados) — si aplica, sumarla manualmente. */
+  comparacionPatrimonial: {
+    diferenciaPatrimonial: number; totalRentasExentas: number; impuestoPagadoDuranteElAnio: number;
+    rentaLiquidaAjustada: number; excedente: number;
+  } | null;
 };
 
 /** Reúne los datos crudos por cédula (ya obtenidos de la base de datos) y
@@ -371,6 +405,45 @@ export function armarLiquidacion(datos: DatosLiquidacion): ResultadoLiquidacion 
     anticipoMetodo2 = Math.max(0, Math.round(promedio * 0.75 - totalRetenciones));
   }
 
+  // Ganancia ocasional — se calcula el impuesto por tipo (cada uno con su
+  // propia tarifa) y se suma. netoGravable = ingreso bruto - costos -
+  // renta exenta, sin bajar de 0.
+  const cGananciaOcasional = datos.cedulas["ganancia_ocasional"] || vacio;
+  const porTipoGO: Record<string, { ingresoBruto: number; costos: number; rentaExenta: number; netoGravable: number; impuesto: number; tarifa: number }> = {};
+  for (const tipo of TIPOS_GANANCIA_OCASIONAL) {
+    const ingresoBrutoTipo = cGananciaOcasional.ingresoBruto.filter(it => it.tipoGananciaOcasional === tipo.tipo).reduce((a, it) => a + it.valor, 0);
+    const costosTipo = cGananciaOcasional.costoDeduccionProcedente.filter(it => it.tipoGananciaOcasional === tipo.tipo).reduce((a, it) => a + it.valor, 0);
+    const rentaExentaTipo = cGananciaOcasional.rentaExenta.filter(it => it.tipoGananciaOcasional === tipo.tipo).reduce((a, it) => a + it.valor, 0);
+    const netoGravable = Math.max(0, ingresoBrutoTipo - costosTipo - rentaExentaTipo);
+    const impuesto = Math.round(netoGravable * tipo.tarifa);
+    if (ingresoBrutoTipo > 0 || costosTipo > 0 || rentaExentaTipo > 0) {
+      porTipoGO[tipo.tipo] = { ingresoBruto: ingresoBrutoTipo, costos: costosTipo, rentaExenta: rentaExentaTipo, netoGravable, impuesto, tarifa: tipo.tarifa };
+    }
+  }
+  const gananciaOcasional = {
+    porTipo: porTipoGO,
+    totalIngresoBruto: Object.values(porTipoGO).reduce((a, v) => a + v.ingresoBruto, 0),
+    totalNetoGravable: Object.values(porTipoGO).reduce((a, v) => a + v.netoGravable, 0),
+    totalImpuesto: Object.values(porTipoGO).reduce((a, v) => a + v.impuesto, 0),
+  };
+
+  // Renta por comparación patrimonial (Arts. 236-239 E.T.) — siempre
+  // visible cuando se conoce el patrimonio líquido del año anterior, no
+  // solo cuando hay excedente sin justificar.
+  let comparacionPatrimonial: ResultadoLiquidacion["comparacionPatrimonial"] = null;
+  if (datos.patrimonioLiquidoAnioAnterior != null) {
+    const totalRentasExentasCP = Object.values(datos.cedulas).reduce(
+      (a, c) => a + c.rentaExenta.reduce((s, it) => s + it.valor, 0), 0,
+    );
+    const impuestoPagadoDuranteElAnio = totalRetenciones + (datos.anticipoAnioActual || 0);
+    const diferenciaPatrimonial = patrimonioLiquido - datos.patrimonioLiquidoAnioAnterior;
+    const rentaLiquidaAjustada = rentaLiquidaGravableTotal + totalRentasExentasCP - impuestoPagadoDuranteElAnio;
+    comparacionPatrimonial = {
+      diferenciaPatrimonial, totalRentasExentas: totalRentasExentasCP, impuestoPagadoDuranteElAnio,
+      rentaLiquidaAjustada, excedente: diferenciaPatrimonial - rentaLiquidaAjustada,
+    };
+  }
+
   return {
     patrimonioBruto, deudas, patrimonioLiquido, subRentas: subRentasBase,
     baseCalculoLimite, limite40PorcientoOMil340UVT, totalDisponibleGeneral, valorDistribuido,
@@ -383,6 +456,7 @@ export function armarLiquidacion(datos: DatosLiquidacion): ResultadoLiquidacion 
     saldoAFavorAnterior: datos.saldoAFavorAnterior ?? null,
     anticipoAnioActual: datos.anticipoAnioActual ?? null,
     anticipoMetodo1, anticipoMetodo2,
+    gananciaOcasional, comparacionPatrimonial,
   };
 }
 
@@ -487,28 +561,16 @@ export function validarRenta(
     hallazgos.push({ severidad: "info", categoria: "Dividendos", mensaje: "Hay dividendos registrados — su tarifa especial (Art. 242 E.T.) no se calcula en este módulo, liquidar aparte." });
   }
 
-  // 9. Renta por comparación patrimonial (Arts. 236-239 E.T.) — si el
-  // incremento del patrimonio líquido de un año a otro no se explica con
-  // la renta líquida gravable + rentas exentas del año (menos lo pagado
-  // de impuesto durante el año), el excedente se considera renta gravable
-  // adicional, salvo que se demuestre causa justificativa. Solo aplica si
-  // se conoce el patrimonio líquido del año anterior. Ganancias
-  // ocasionales no se modelan en este módulo — si el cliente tuvo alguna,
-  // hay que sumarla manualmente al ajustar este cálculo.
-  if (resultado.patrimonioLiquidoAnioAnterior != null) {
-    const totalRentasExentas = Object.values(datos.cedulas).reduce(
-      (a, c) => a + c.rentaExenta.reduce((s, it) => s + it.valor, 0), 0,
-    );
-    const impuestoPagadoDuranteElAnio = resultado.totalRetenciones + (resultado.anticipoAnioActual || 0);
-    const diferenciaPatrimonial = resultado.patrimonioLiquido - resultado.patrimonioLiquidoAnioAnterior;
-    const rentaLiquidaAjustada = resultado.rentaLiquidaGravableTotal + totalRentasExentas - impuestoPagadoDuranteElAnio;
-    const excedentePatrimonial = diferenciaPatrimonial - rentaLiquidaAjustada;
-    if (excedentePatrimonial > 0) {
-      hallazgos.push({
-        severidad: "advertencia", categoria: "Comparación patrimonial (Arts. 236-239 E.T.)",
-        mensaje: `El patrimonio líquido creció ${fmt(diferenciaPatrimonial)} pero la renta líquida gravable más rentas exentas menos impuesto pagado en el año solo explica ${fmt(rentaLiquidaAjustada)} — hay ${fmt(excedentePatrimonial)} de incremento patrimonial sin justificar, que debe declararse como renta gravable adicional salvo que se demuestre causa justificativa (no incluye ganancias ocasionales, que no se modelan en este módulo — sumarlas manualmente si aplica).`,
-      });
-    }
+  // 9. Renta por comparación patrimonial (Arts. 236-239 E.T.) — el cálculo
+  // en sí siempre se muestra en el resumen (visible aunque no haya
+  // problema); aquí solo se marca como hallazgo cuando hay un excedente
+  // sin justificar.
+  if (resultado.comparacionPatrimonial && resultado.comparacionPatrimonial.excedente > 0) {
+    const { diferenciaPatrimonial, rentaLiquidaAjustada, excedente } = resultado.comparacionPatrimonial;
+    hallazgos.push({
+      severidad: "advertencia", categoria: "Comparación patrimonial (Arts. 236-239 E.T.)",
+      mensaje: `El patrimonio líquido creció ${fmt(diferenciaPatrimonial)} pero la renta líquida gravable más rentas exentas menos impuesto pagado en el año solo explica ${fmt(rentaLiquidaAjustada)} — hay ${fmt(excedente)} de incremento patrimonial sin justificar, que debe declararse como renta gravable adicional salvo que se demuestre causa justificativa (no incluye ganancias ocasionales, que se liquidan aparte).`,
+    });
   }
 
   return hallazgos;
@@ -860,6 +922,20 @@ export async function generarAnexosRenta(
     doc.moveDown(0.8);
   }
 
+  if (resultado.gananciaOcasional.totalIngresoBruto > 0) {
+    doc.font("Helvetica-Bold").fontSize(11).text("Ganancia Ocasional (tarifa fija propia, no la tabla del Art. 241)");
+    doc.moveDown(0.2);
+    for (const [tipo, v] of Object.entries(resultado.gananciaOcasional.porTipo)) {
+      const nombreTipo = TIPOS_GANANCIA_OCASIONAL.find(t => t.tipo === tipo)?.nombre || tipo;
+      filaTexto(`${nombreTipo} (${(v.tarifa * 100).toFixed(0)}%)`, fmt(v.impuesto), { indent: 8 });
+      doc.fontSize(8).font("Helvetica-Oblique").fillColor("#555555").text(`   Neto gravable: ${fmt(v.netoGravable)}`, xLabel + 8);
+      doc.fillColor("#000000");
+    }
+    lineaDivisoria();
+    filaTexto("Total impuesto de ganancia ocasional", fmt(resultado.gananciaOcasional.totalImpuesto), { negrita: true });
+    doc.moveDown(0.8);
+  }
+
   lineaDivisoria();
   filaTexto("Renta líquida gravable total (Cédula General + Pensiones)", fmt(resultado.rentaLiquidaGravableTotal), { negrita: true });
   filaTexto(`Impuesto de renta (tarifa marginal ${(resultado.impuestoRenta.tarifaMarginal * 100).toFixed(0)}%, Art. 241 E.T.)`, fmt(resultado.impuestoRenta.impuesto), { negrita: true });
@@ -871,6 +947,25 @@ export async function generarAnexosRenta(
   doc.fillColor("#000000");
   filaTexto("Método 1: impuesto actual × 75% - retenciones", fmt(resultado.anticipoMetodo1));
   filaTexto("Método 2: promedio(impuesto anterior, actual) × 75% - retenciones", fmt(resultado.anticipoMetodo2));
+
+  if (resultado.comparacionPatrimonial) {
+    doc.moveDown(1);
+    doc.font("Helvetica-Bold").fontSize(11).text("Comparación patrimonial (Arts. 236-239 E.T.)");
+    doc.moveDown(0.2);
+    filaTexto("Diferencia patrimonial (este año menos año anterior)", fmt(resultado.comparacionPatrimonial.diferenciaPatrimonial), { indent: 8 });
+    filaTexto("+ Rentas exentas del año", fmt(resultado.comparacionPatrimonial.totalRentasExentas), { indent: 8 });
+    filaTexto("- Impuesto pagado durante el año (retenciones + anticipo)", fmt(resultado.comparacionPatrimonial.impuestoPagadoDuranteElAnio), { indent: 8 });
+    filaTexto("Renta líquida ajustada", fmt(resultado.comparacionPatrimonial.rentaLiquidaAjustada), { indent: 8, negrita: true });
+    lineaDivisoria();
+    const excedente = Math.max(0, resultado.comparacionPatrimonial.excedente);
+    filaTexto(
+      excedente > 0 ? "Incremento patrimonial sin justificar" : "Sin incremento patrimonial sin justificar",
+      fmt(excedente), { negrita: true, color: excedente > 0 ? "#b91c1c" : undefined },
+    );
+    doc.fontSize(8).font("Helvetica-Oblique").fillColor("#555555")
+      .text("No incluye ganancia ocasional (se liquida aparte). Si el excedente es mayor a 0, se considera renta gravable adicional salvo que se demuestre causa justificativa.");
+    doc.fillColor("#000000");
+  }
 
   // ================= ANEXO 2: Activos y Pasivos =================
   dibujarPiePaginaAreda(doc);

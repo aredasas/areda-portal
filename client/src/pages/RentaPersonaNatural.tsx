@@ -507,6 +507,7 @@ function LiquidacionTab({ anioGravable, rentaClienteIdInicial }: { anioGravable:
           <SeccionItemsCard key={`activo-${rentaClienteId}`} rentaClienteId={rentaClienteId} seccion="activo" titulo="Activos" puedeImportar soloLectura={soloLectura} />
           <SeccionItemsCard key={`pasivo-${rentaClienteId}`} rentaClienteId={rentaClienteId} seccion="pasivo" titulo="Pasivos" puedeImportar soloLectura={soloLectura} />
           <IngresosDeduccionesPorCedulaCard key={`ced-${rentaClienteId}`} rentaClienteId={rentaClienteId} soloLectura={soloLectura} />
+          <GananciaOcasionalCard key={`go-${rentaClienteId}`} rentaClienteId={rentaClienteId} soloLectura={soloLectura} />
           <ResumenPendiente210Card key={`resumen-${rentaClienteId}`} rentaClienteId={rentaClienteId} />
           <ValidarRentaCard key={`validar-${rentaClienteId}`} rentaClienteId={rentaClienteId} />
           <Borrador210Card key={`borrador-${rentaClienteId}`} rentaClienteId={rentaClienteId} anioGravable={anioGravable} />
@@ -812,6 +813,110 @@ function SeccionItemsCard({ rentaClienteId, seccion, titulo, puedeImportar, solo
 /** Diálogo para elegir manualmente cuáles ítems de la exógena se importan
  * a la cédula actualmente seleccionada — los que no se marquen quedan
  * disponibles para importarse después bajo otra cédula. */
+/** Ganancia ocasional — aparte de las 6 cédulas normales, porque cada
+ * tipo (loterías/rifas/apuestas 20%, el resto 15%) tiene su propia
+ * tarifa fija, no la tabla progresiva del Art. 241. Cada tipo puede
+ * tener ingreso bruto, costos, y renta exenta. */
+function GananciaOcasionalCard({ rentaClienteId, soloLectura }: { rentaClienteId: number; soloLectura?: boolean }) {
+  const utils = trpc.useUtils();
+  const catalogoQuery = trpc.renta.liquidacion.catalogoTopes.useQuery();
+  const itemsQuery = trpc.renta.liquidacion.list.useQuery({ rentaClienteId, seccion: "cedula" });
+  const [tipoGO, setTipoGO] = useState("");
+  const [tipoValorGO, setTipoValorGO] = useState("ingreso_bruto");
+  const [conceptoGO, setConceptoGO] = useState("");
+  const [valorGO, setValorGO] = useState("");
+
+  const invalidar = () => {
+    utils.renta.liquidacion.list.invalidate({ rentaClienteId, seccion: "cedula" });
+    utils.renta.reportes.resumenActual.invalidate({ rentaClienteId });
+  };
+  const crearMutation = trpc.renta.liquidacion.crear.useMutation({
+    onSuccess: () => { setConceptoGO(""); setValorGO(""); invalidar(); },
+    onError: (err) => toast.error(err.message || "No se pudo agregar"),
+  });
+  const eliminarMutation = trpc.renta.liquidacion.eliminar.useMutation({ onSuccess: invalidar });
+
+  const fmt = (n: number) => `$${n.toLocaleString("es-CO")}`;
+  const itemsGO = (itemsQuery.data || []).filter((it: any) => it.cedula === "ganancia_ocasional");
+  const nombreTipoGO = (tipo: string) => catalogoQuery.data?.tiposGananciaOcasional.find((t: any) => t.tipo === tipo)?.nombre || tipo;
+  const tarifaTipoGO = (tipo: string) => catalogoQuery.data?.tiposGananciaOcasional.find((t: any) => t.tipo === tipo)?.tarifa;
+
+  const handleAgregar = () => {
+    if (!tipoGO || !conceptoGO.trim() || !valorGO) {
+      toast.error("Selecciona el tipo de ganancia ocasional, y digita concepto y valor");
+      return;
+    }
+    crearMutation.mutate({
+      rentaClienteId, seccion: "cedula", cedula: "ganancia_ocasional" as any,
+      tipoValor: tipoValorGO as any, tipoGananciaOcasional: tipoGO,
+      concepto: conceptoGO.trim(), valor: Number(valorGO),
+    });
+  };
+
+  return (
+    <ColapsableCard titulo="Ganancia Ocasional" defaultOpen={false}>
+      <p className="text-sm text-muted-foreground">
+        Cada tipo tiene su propia tarifa fija (no la tabla progresiva del Art. 241): 20% para loterías,
+        rifas y apuestas; 15% para el resto (herencias, legados, donaciones, venta de activos de 2 años o
+        más, liquidación de sociedades). Cada uno puede tener ingreso bruto, costos, y renta exenta.
+      </p>
+      {!!itemsGO.length && (
+        <div className="space-y-1 max-h-56 overflow-y-auto">
+          {itemsGO.map((it: any) => (
+            <div key={it.id} className="flex items-center justify-between text-sm border-b py-1.5 gap-2">
+              <div className="flex-1 min-w-0">
+                <div className="truncate">{it.concepto}</div>
+                <div className="text-xs text-muted-foreground">
+                  {nombreTipoGO(it.tipoGananciaOcasional)} · {it.tipoValor === "ingreso_bruto" ? "Ingreso bruto" : it.tipoValor === "costo_deduccion_procedente" ? "Costo" : "Renta exenta"}
+                  {" "}(tarifa {((tarifaTipoGO(it.tipoGananciaOcasional) || 0) * 100).toFixed(0)}%)
+                </div>
+              </div>
+              <span className="font-medium shrink-0">{fmt(it.valor)}</span>
+              {!soloLectura && (
+                <Button variant="ghost" size="icon" className="h-7 w-7 text-red-600 shrink-0" onClick={() => eliminarMutation.mutate({ id: it.id })}>
+                  <Trash2 className="w-3.5 h-3.5" />
+                </Button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      {!soloLectura && (
+        <div className="grid sm:grid-cols-[1.3fr_1fr_1fr_140px_auto] gap-2 items-end pt-2 border-t">
+          <div className="space-y-1">
+            <Label className="text-xs">Tipo de ganancia ocasional</Label>
+            <Select value={tipoGO} onValueChange={setTipoGO}>
+              <SelectTrigger className="h-8"><SelectValue placeholder="Selecciona..." /></SelectTrigger>
+              <SelectContent>
+                {catalogoQuery.data?.tiposGananciaOcasional.map((t: any) => (
+                  <SelectItem key={t.tipo} value={t.tipo}>{t.nombre} — {(t.tarifa * 100).toFixed(0)}%</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">Valor de</Label>
+            <Select value={tipoValorGO} onValueChange={setTipoValorGO}>
+              <SelectTrigger className="h-8"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="ingreso_bruto">Ingreso bruto</SelectItem>
+                <SelectItem value="costo_deduccion_procedente">Costo</SelectItem>
+                <SelectItem value="renta_exenta">Renta exenta</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <Input value={conceptoGO} onChange={(e) => setConceptoGO(e.target.value)} placeholder="Concepto" className="h-8" />
+          <Input value={valorGO} onChange={(e) => setValorGO(e.target.value)} placeholder="Valor" type="number" className="h-8" />
+          <Button size="sm" variant="outline" className="gap-1" onClick={handleAgregar} disabled={crearMutation.isPending}>
+            <Plus className="w-3.5 h-3.5" /> Agregar
+          </Button>
+        </div>
+      )}
+    </ColapsableCard>
+  );
+}
+
+
 function ImportarExogenaDialog({ rentaClienteId, seccion, cedula, open, onOpenChange, onImportado }: {
   rentaClienteId: number; seccion: "activo" | "pasivo" | "ingreso"; cedula?: string; open: boolean; onOpenChange: (open: boolean) => void; onImportado: () => void;
 }) {
@@ -1386,6 +1491,24 @@ function ResumenPendiente210Card({ rentaClienteId }: { rentaClienteId: number })
             </div>
           )}
 
+          {r.gananciaOcasional.totalIngresoBruto > 0 && (
+            <div className="border rounded-md p-3">
+              <p className="font-semibold text-sm mb-1.5">Ganancia Ocasional (tarifa aparte, no la tabla del Art. 241)</p>
+              <div className="space-y-1">
+                {Object.entries(r.gananciaOcasional.porTipo).map(([tipo, v]: any) => (
+                  <div key={tipo} className="flex items-center justify-between text-xs">
+                    <span className="text-muted-foreground">{tipo} ({(v.tarifa * 100).toFixed(0)}%)</span>
+                    <span>Neto {fmt(v.netoGravable)} → Impuesto {fmt(v.impuesto)}</span>
+                  </div>
+                ))}
+              </div>
+              <div className="flex items-center justify-between border-t mt-1.5 pt-1.5 font-bold">
+                <span>Total impuesto ganancia ocasional</span>
+                <span>{fmt(r.gananciaOcasional.totalImpuesto)}</span>
+              </div>
+            </div>
+          )}
+
           <div className="flex items-center justify-between border-t pt-2 font-semibold text-base">
             <span>Renta líquida gravable total</span>
             <span>{fmt(r.rentaLiquidaGravableTotal)}</span>
@@ -1404,6 +1527,30 @@ function ResumenPendiente210Card({ rentaClienteId }: { rentaClienteId: number })
           <p className="text-xs text-muted-foreground">
             Resumen de seguimiento — para el documento formal, usa "Generar borrador" más abajo.
           </p>
+
+          {r.comparacionPatrimonial && (
+            <div className={`border rounded-md p-3 ${r.comparacionPatrimonial.excedente > 0 ? "border-amber-300 bg-amber-50/50" : ""}`}>
+              <p className="font-semibold text-sm mb-1.5 flex items-center gap-1.5">
+                {r.comparacionPatrimonial.excedente > 0 && <AlertTriangle className="w-4 h-4 text-amber-600" />}
+                Comparación patrimonial (Arts. 236-239 E.T.)
+              </p>
+              <div className="space-y-1 text-xs">
+                <div className="flex items-center justify-between"><span className="text-muted-foreground">Diferencia patrimonial (este año − año anterior)</span><span>{fmt(r.comparacionPatrimonial.diferenciaPatrimonial)}</span></div>
+                <div className="flex items-center justify-between"><span className="text-muted-foreground">+ Rentas exentas del año</span><span>{fmt(r.comparacionPatrimonial.totalRentasExentas)}</span></div>
+                <div className="flex items-center justify-between"><span className="text-muted-foreground">− Impuesto pagado durante el año (retenciones + anticipo)</span><span>{fmt(r.comparacionPatrimonial.impuestoPagadoDuranteElAnio)}</span></div>
+                <div className="flex items-center justify-between font-medium border-t pt-1"><span>Renta líquida ajustada</span><span>{fmt(r.comparacionPatrimonial.rentaLiquidaAjustada)}</span></div>
+              </div>
+              <div className={`flex items-center justify-between border-t mt-1.5 pt-1.5 font-bold ${r.comparacionPatrimonial.excedente > 0 ? "text-amber-700" : ""}`}>
+                <span>{r.comparacionPatrimonial.excedente > 0 ? "Incremento patrimonial sin justificar" : "Sin incremento sin justificar"}</span>
+                <span>{fmt(Math.max(0, r.comparacionPatrimonial.excedente))}</span>
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">
+                No incluye ganancia ocasional (se liquida aparte). Si el excedente es mayor a 0, se considera renta
+                gravable adicional salvo que se demuestre causa justificativa.
+              </p>
+            </div>
+          )}
+
         </div>
       )}
     </ColapsableCard>
@@ -1733,12 +1880,6 @@ function RevisionFinalizacionCard({ rentaClienteId, anioGravable }: { rentaClien
     onSuccess: () => { toast.success("Revisión solicitada"); invalidar(); },
     onError: (err) => toast.error(err.message || "No se pudo solicitar"),
   });
-  const aprobarMutation = trpc.renta.clientes.aprobarRevision.useMutation({
-    onSuccess: () => { toast.success("Revisión aprobada"); invalidar(); },
-  });
-  const rechazarMutation = trpc.renta.clientes.rechazarRevision.useMutation({
-    onSuccess: () => { toast.success("Revisión rechazada"); invalidar(); },
-  });
   const subirFinalMutation = trpc.renta.clientes.subirDeclaracionFinal.useMutation({
     onSuccess: () => { toast.success("Declaración final subida — cliente marcado como terminado"); setArchivoFinal(null); if (fileRef.current) fileRef.current.value = ""; invalidar(); },
     onError: (err) => toast.error(err.message || "No se pudo subir la declaración"),
@@ -1782,14 +1923,9 @@ function RevisionFinalizacionCard({ rentaClienteId, anioGravable }: { rentaClien
       )}
 
       {estado === "solicitada" && (
-        <div className="flex gap-2">
-          <Button size="sm" variant="outline" className="gap-1.5 text-green-700 border-green-300" onClick={() => aprobarMutation.mutate({ rentaClienteId })} disabled={aprobarMutation.isPending}>
-            <ThumbsUp className="w-3.5 h-3.5" /> Aprobar
-          </Button>
-          <Button size="sm" variant="outline" className="gap-1.5 text-red-700 border-red-300" onClick={() => rechazarMutation.mutate({ rentaClienteId, comentario: "Revisar valores cargados" })} disabled={rechazarMutation.isPending}>
-            <ThumbsDown className="w-3.5 h-3.5" /> Rechazar
-          </Button>
-        </div>
+        <p className="text-sm text-muted-foreground">
+          Pendiente de aprobación — se revisa y aprueba/rechaza desde la pestaña Revisión del menú.
+        </p>
       )}
 
       <div className="border-t pt-3 space-y-2">

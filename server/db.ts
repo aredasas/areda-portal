@@ -2322,7 +2322,7 @@ export async function eliminarDependiente(id: number) {
  * deducciones/rentas exentas (agrupadas por cédula) de un cliente de
  * renta, en el formato que necesita rentaDb.armarLiquidacion — el cálculo
  * en sí es una función pura, esta solo junta los datos crudos. */
-const CEDULAS_TODAS = ["trabajo", "trabajo_honorarios", "capital", "no_laboral", "pensiones", "dividendos"];
+const CEDULAS_TODAS = ["trabajo", "trabajo_honorarios", "capital", "no_laboral", "pensiones", "dividendos", "ganancia_ocasional"];
 
 /** Reúne los ítems de todas las cédulas de un cliente de renta, agrupados
  * por cédula + tipoValor (ingreso bruto, no constitutivo, costo/deducción
@@ -2345,7 +2345,7 @@ export async function getDatosLiquidacion(rentaClienteId: number) {
   for (const it of itemsCedula) {
     const cedula = it.cedula || "trabajo";
     if (!cedulas[cedula]) cedulas[cedula] = cedulaVacia();
-    const item = { concepto: it.concepto, valor: it.valor, tipoDeduccion: it.tipoDeduccion };
+    const item = { concepto: it.concepto, valor: it.valor, tipoDeduccion: it.tipoDeduccion, tipoGananciaOcasional: it.tipoGananciaOcasional };
     if (it.tipoValor === "ingreso_bruto") cedulas[cedula].ingresoBruto.push(item);
     else if (it.tipoValor === "ingreso_no_constitutivo") cedulas[cedula].ingresoNoConstitutivo.push(item);
     else if (it.tipoValor === "costo_deduccion_procedente") cedulas[cedula].costoDeduccionProcedente.push(item);

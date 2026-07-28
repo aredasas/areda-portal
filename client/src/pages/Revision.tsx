@@ -210,23 +210,14 @@ export default function Revision() {
             </CardHeader>
             <CardContent className="space-y-2">
               {rentaPendienteQuery.data.map((c: any) => (
-                <div key={c.id} className="flex items-center justify-between border rounded-md p-3 gap-2">
-                  <button
-                    className="flex items-center gap-2 text-left flex-1 min-w-0 hover:underline"
-                    onClick={() => setRentaClienteRevisando(c)}
-                  >
-                    <span className="font-medium truncate">Renta de {c.nombre} — año gravable {c.anioGravable}</span>
-                    <ArrowRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                  </button>
-                  <div className="flex gap-2 shrink-0">
-                    <Button size="sm" variant="outline" className="gap-1.5 text-green-700 border-green-300" onClick={() => aprobarRentaMutation.mutate({ rentaClienteId: c.id })} disabled={aprobarRentaMutation.isPending}>
-                      <ThumbsUp className="h-3.5 w-3.5" /> Aprobar
-                    </Button>
-                    <Button size="sm" variant="outline" className="gap-1.5 text-red-700 border-red-300" onClick={() => rechazarRentaMutation.mutate({ rentaClienteId: c.id, comentario: "Revisar valores cargados" })} disabled={rechazarRentaMutation.isPending}>
-                      <ThumbsDown className="h-3.5 w-3.5" /> Rechazar
-                    </Button>
-                  </div>
-                </div>
+                <button
+                  key={c.id}
+                  className="flex items-center justify-between border rounded-md p-3 gap-2 w-full text-left hover:bg-muted/50"
+                  onClick={() => setRentaClienteRevisando(c)}
+                >
+                  <span className="font-medium truncate">Renta de {c.nombre} — año gravable {c.anioGravable}</span>
+                  <ArrowRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                </button>
               ))}
             </CardContent>
           </Card>

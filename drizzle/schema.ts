@@ -710,7 +710,7 @@ export const rentaLiquidacionItems = mysqlTable("rentaLiquidacionItems", {
    * ambas hagan parte de la Cédula General; lo mismo capital (58-73) y
    * no_laboral (74-88). Pensiones y dividendos van aparte. Null para
    * activos y pasivos. */
-  cedula: mysqlEnum("cedula", ["trabajo", "trabajo_honorarios", "capital", "no_laboral", "pensiones", "dividendos"]),
+  cedula: mysqlEnum("cedula", ["trabajo", "trabajo_honorarios", "capital", "no_laboral", "pensiones", "dividendos", "ganancia_ocasional"]),
   /** A qué categoría de casilla corresponde este valor dentro de su
    * cédula — determina en qué renglón del borrador se suma. Null para
    * activos/pasivos. */
@@ -721,6 +721,9 @@ export const rentaLiquidacionItems = mysqlTable("rentaLiquidacionItems", {
    * validar contra su tope individual 2025) — ej. "renta_exenta_25_laboral",
    * "salud_prepagada". Null para el resto. */
   tipoDeduccion: varchar("tipoDeduccion", { length: 60 }),
+  /** Solo para cedula="ganancia_ocasional": qué tipo de ganancia ocasional
+   * es (determina la tarifa: 20% loterías/rifas/apuestas, 15% el resto). */
+  tipoGananciaOcasional: varchar("tipoGananciaOcasional", { length: 60 }),
   concepto: varchar("concepto", { length: 255 }).notNull(),
   valor: double("valor").notNull(),
   origen: mysqlEnum("origen", ["exogena", "manual"]).default("manual").notNull(),

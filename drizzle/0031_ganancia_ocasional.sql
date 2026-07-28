@@ -1,0 +1,2 @@
+ALTER TABLE `rentaLiquidacionItems` MODIFY COLUMN `cedula` enum('trabajo','trabajo_honorarios','capital','no_laboral','pensiones','dividendos','ganancia_ocasional');--> statement-breakpoint
+ALTER TABLE `rentaLiquidacionItems` ADD `tipoGananciaOcasional` varchar(60);

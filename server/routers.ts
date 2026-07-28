@@ -2191,6 +2191,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
         return {
           uvt: rentaDb.UVT_2025, tipos: rentaDb.TIPOS_DEDUCCION_RENTA_EXENTA,
           topeGlobalUVT: rentaDb.TOPES_DEDUCCION_2025.limiteGlobalDeduccionesRentasExentas, cedulas: rentaDb.CEDULAS,
+          tiposGananciaOcasional: rentaDb.TIPOS_GANANCIA_OCASIONAL,
           topesObligacionUVT: {
             ingresos: rentaDb.TOPES_DEDUCCION_2025.ingresos, patrimonio: rentaDb.TOPES_DEDUCCION_2025.patrimonio,
             consumoTC: rentaDb.TOPES_DEDUCCION_2025.consumoTC, movimiento: rentaDb.TOPES_DEDUCCION_2025.movimiento,
@@ -2207,9 +2208,10 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
       crear: protectedProcedure
         .input(z.object({
           rentaClienteId: z.number(), seccion: z.enum(["activo", "pasivo", "cedula"]),
-          cedula: z.enum(["trabajo", "trabajo_honorarios", "capital", "no_laboral", "pensiones", "dividendos"]).optional(),
+          cedula: z.enum(["trabajo", "trabajo_honorarios", "capital", "no_laboral", "pensiones", "dividendos", "ganancia_ocasional"]).optional(),
           tipoValor: z.enum(["ingreso_bruto", "ingreso_no_constitutivo", "costo_deduccion_procedente", "renta_exenta", "deduccion", "retencion"]).optional(),
-          tipoDeduccion: z.string().optional(), concepto: z.string().min(1), valor: z.number(),
+          tipoDeduccion: z.string().optional(), tipoGananciaOcasional: z.string().optional(),
+          concepto: z.string().min(1), valor: z.number(),
         }))
         .mutation(async ({ input, ctx }) => {
           assertInformesAccess(ctx.user.cedula);
@@ -2222,7 +2224,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           }
           const id = await db.crearLiquidacionItem({
             rentaClienteId: input.rentaClienteId, seccion: input.seccion, cedula: input.cedula || null,
-            tipoValor: input.tipoValor || null,
+            tipoValor: input.tipoValor || null, tipoGananciaOcasional: input.tipoGananciaOcasional || null,
             tipoDeduccion: input.tipoDeduccion || null, concepto: input.concepto, valor: input.valor,
           });
           return { id, alerta };
