@@ -232,6 +232,13 @@
       "when": 1785250647174,
       "tag": "0032_ampliar_centro_costo",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "5",
+      "when": 1785253075367,
+      "tag": "0033_renta_activo",
+      "breakpoints": true
     }
   ]
 }

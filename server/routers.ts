@@ -1974,10 +1974,10 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
     // ver assertInformesAccess.
     clientes: router({
       list: protectedProcedure
-        .input(z.object({ anioGravable: z.number() }))
+        .input(z.object({ anioGravable: z.number(), incluirInactivos: z.boolean().optional() }))
         .query(async ({ input, ctx }) => {
           assertInformesAccess(ctx.user.cedula);
-          const filas = await db.getRentaClientes(input.anioGravable);
+          const filas = await db.getRentaClientes(input.anioGravable, input.incluirInactivos);
           const conVencimiento = await Promise.all(filas.map(async (c) => {
             const vencimiento = c.noObligado ? null : await db.getVencimientoRentaPN(c.cedula, c.anioGravable);
             const diasRestantes = vencimiento
@@ -2009,7 +2009,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
       update: protectedProcedure
         .input(z.object({
           id: z.number(), nombre: z.string().optional(), cedula: z.string().optional(),
-          noObligado: z.boolean().optional(), terminado: z.boolean().optional(),
+          noObligado: z.boolean().optional(), terminado: z.boolean().optional(), activo: z.boolean().optional(),
         }))
         .mutation(async ({ input, ctx }) => {
           assertInformesAccess(ctx.user.cedula);
@@ -2055,6 +2055,35 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           const buffer = Buffer.from(input.fileBase64, "base64");
           const archivo = await uploadFileToDrive(folderId, input.fileName, buffer, input.contentType);
           return { id: archivo.id, name: archivo.name, webViewLink: (archivo as any).webViewLink };
+        }),
+      // ---- Solicitud de documentos al cliente (PDF con checklist) ----
+      catalogoDocumentos: protectedProcedure
+        .input(z.object({ rentaClienteId: z.number() }))
+        .query(async ({ input, ctx }) => {
+          assertInformesAccess(ctx.user.cedula);
+          const exogena = await db.getExogenaRenta(input.rentaClienteId);
+          const recomendadas = exogena
+            ? Array.from(rentaDb.recomendarCategoriasDocumentos(exogena.items.map((it: any) => ({ categoria: it.categoria, detalle: it.detalle || "" }))))
+            : ["Información personal", "Deducibles"];
+          return { categorias: rentaDb.CATALOGO_DOCUMENTOS_RENTA, categoriasRecomendadas: recomendadas };
+        }),
+      generarSolicitudDocumentos: protectedProcedure
+        .input(z.object({
+          rentaClienteId: z.number(), anioGravable: z.number(),
+          itemsSeleccionados: z.array(z.string()), documentosAdicionales: z.array(z.string()), observaciones: z.string(),
+        }))
+        .mutation(async ({ input, ctx }) => {
+          assertInformesAccess(ctx.user.cedula);
+          const cliente = await db.getRentaClienteById(input.rentaClienteId);
+          if (!cliente) throw new Error("Cliente de renta no encontrado.");
+          const buffer = await rentaDb.generarSolicitudDocumentos(
+            cliente.nombre, cliente.cedula, input.anioGravable,
+            new Set(input.itemsSeleccionados), input.documentosAdicionales, input.observaciones,
+          );
+          const key = `renta/solicitud-documentos/${input.rentaClienteId}_${Date.now()}.pdf`;
+          const { key: fileKey } = await storagePut(key, buffer, "application/pdf");
+          const signedUrl = await storageGetSignedUrl(fileKey);
+          return { signedUrl };
         }),
       // ---- Flujo de revisión ----
       solicitarRevision: protectedProcedure

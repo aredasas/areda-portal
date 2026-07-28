@@ -2039,10 +2039,12 @@ export async function getBoardContextForAssistant(limite: number = 15) {
 
 // ==================== RENTA PERSONA NATURAL ====================
 
-export async function getRentaClientes(anioGravable: number) {
+export async function getRentaClientes(anioGravable: number, incluirInactivos = false) {
   const db = await getDb();
   if (!db) return [];
-  const filas = await db.select().from(rentaClientes).where(eq(rentaClientes.anioGravable, anioGravable));
+  const condiciones = [eq(rentaClientes.anioGravable, anioGravable)];
+  if (!incluirInactivos) condiciones.push(eq(rentaClientes.activo, true));
+  const filas = await db.select().from(rentaClientes).where(and(...condiciones));
   if (filas.length === 0) return [];
   const idsConExogena = await db.select({ rentaClienteId: rentaExogena.rentaClienteId }).from(rentaExogena)
     .where(inArray(rentaExogena.rentaClienteId, filas.map(f => f.id)));

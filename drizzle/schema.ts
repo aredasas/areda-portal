@@ -621,6 +621,9 @@ export const rentaClientes = mysqlTable("rentaClientes", {
   /** Archivo de la declaración ya presentada con el sello/marca de agua
    * de "recibido" — se sube una vez aprobada la revisión. */
   declaracionFileKey: varchar("declaracionFileKey", { length: 500 }),
+  /** Cliente inactivo — ya no aparece por defecto en el listado, sin
+   * borrar su historial. */
+  activo: boolean("activo").default(true).notNull(),
 }, (table) => ({
   cedulaAnioIdx: uniqueIndex("rentaClientes_cedula_anio_idx").on(table.cedula, table.anioGravable),
 }));

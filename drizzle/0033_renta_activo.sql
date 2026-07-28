@@ -1,0 +1,1 @@
+ALTER TABLE `rentaClientes` ADD `activo` boolean DEFAULT true NOT NULL;

@@ -260,6 +260,72 @@ export const TIPOS_GANANCIA_OCASIONAL: { tipo: string; nombre: string; tarifa: n
   { tipo: "otro", nombre: "Otra ganancia ocasional", tarifa: 0.15 },
 ];
 
+// ==================== SOLICITUD DE DOCUMENTOS AL CLIENTE ====================
+
+export type ItemDocumento = { id: string; concepto: string };
+export type CategoriaDocumentos = { categoria: string; items: ItemDocumento[] };
+
+/** Catálogo de documentos que se le suelen pedir a un cliente de renta
+ * persona natural — tomado del checklist que Areda ya usaba en Word,
+ * organizado por categoría. Cada ítem lleva un id estable (categoria-índice)
+ * para poder marcarlo desde la interfaz. */
+export const CATALOGO_DOCUMENTOS_RENTA: CategoriaDocumentos[] = [
+  { categoria: "Información personal", items: [
+    "RUT", "Cámara de comercio", "Declaración del año inmediatamente anterior", "Contraseña de acceso al portal DIAN",
+  ] },
+  { categoria: "Patrimonio bruto", items: [
+    "Extractos bancarios de cuentas de ahorro y corriente (diciembre)", "Certificado del fondo de cesantías",
+    "Certificado de inversiones", "Listado de bienes inmuebles y muebles", "Impuesto de vehículo",
+    "Impuesto predial", "Certificado de libertad y tradición",
+  ] },
+  { categoria: "Obligaciones", items: [
+    "Relación y certificados de obligaciones financieras", "Certificado de tarjetas de crédito",
+    "Certificado de créditos educativos", "Relación de deudas con particulares", "Otras deudas con soporte",
+  ] },
+  { categoria: "Renta de trabajo", items: [
+    "Certificado anual de retención en la fuente (servicios prestados u otros ingresos no laborales)",
+    "Certificado de ingresos y retenciones (Formulario 220)",
+  ] },
+  { categoria: "Renta de pensionados", items: ["Certificado de ingresos pensionales"] },
+  { categoria: "Rentas de capital", items: [
+    "Información de ingresos por arrendamiento", "Información de gastos por arrendamiento",
+    "Certificado de ingresos por rendimientos financieros", "Certificado de ingresos por intereses",
+  ] },
+  { categoria: "Rentas no laborales", items: [
+    "Estados financieros", "Relación de ingresos del negocio", "Información de costos y gastos del negocio",
+    "Inventario (mercancías y propiedades)", "Declaraciones de IVA del año anterior", "Pago de industria y comercio",
+  ] },
+  { categoria: "Deducibles", items: [
+    "Certificado de intereses pagados en crédito hipotecario", "Certificado de indemnización (seguros)",
+    "Certificado de aporte a fondo de pensiones voluntarios", "Comprobante de retiro de cesantías",
+    "Constancia de pagos de medicina prepagada", "Relación de aportes a seguridad social",
+    "Certificado de donaciones (si aplica)", "Documento de identidad de los dependientes (especificar el tipo)",
+    "Certificado de aporte a fomento a la construcción",
+  ] },
+].map((cat, ci) => ({
+  categoria: cat.categoria,
+  items: cat.items.map((concepto, ii) => ({ id: `${ci}-${ii}`, concepto })),
+}));
+
+/** A partir de lo que trae la exógena ya cargada, sugiere qué categorías
+ * de documentos conviene marcar — es una sugerencia basada en palabras
+ * clave del detalle de cada ítem, no un análisis exhaustivo; el contador
+ * revisa y ajusta antes de generar la solicitud. */
+export function recomendarCategoriasDocumentos(itemsExogena: { categoria: string; detalle: string }[]): Set<string> {
+  const recomendadas = new Set<string>(["Información personal", "Deducibles"]); // aplican casi siempre
+  const quitarTildes = (s: string) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  const detalleTodo = quitarTildes(itemsExogena.map(it => it.detalle.toLowerCase()).join(" | "));
+  const hayCategoria = (cat: string) => itemsExogena.some(it => it.categoria === cat);
+
+  if (hayCategoria("patrimonio")) recomendadas.add("Patrimonio bruto");
+  if (hayCategoria("deuda")) recomendadas.add("Obligaciones");
+  if (/salari|nomina|laboral/.test(detalleTodo)) recomendadas.add("Renta de trabajo");
+  if (/pension/.test(detalleTodo)) recomendadas.add("Renta de pensionados");
+  if (/arrend|interes|rendimiento|dividendo/.test(detalleTodo)) recomendadas.add("Rentas de capital");
+  if (/honorario|independiente|actividad economica|servicio/.test(detalleTodo)) recomendadas.add("Rentas no laborales");
+  return recomendadas;
+}
+
 
 export type ResultadoSubRenta = {
   ingresoBruto: number; ingresoNoConstitutivo: number; costoDeduccionProcedente: number;
@@ -839,6 +905,71 @@ function dibujarPiePaginaAreda(doc: PDFKit.PDFDocument) {
     // Si el logo no se puede dibujar por algún motivo, no debe romper la
     // generación del PDF — se omite en silencio.
   }
+}
+
+/** Genera el PDF de solicitud de documentos para el cliente — mismo estilo
+ * visual que los anexos (encabezado, logo al pie), con los conceptos que
+ * el contador haya marcado como necesarios, agrupados por categoría, más
+ * los documentos adicionales y las observaciones que se hayan escrito. */
+export async function generarSolicitudDocumentos(
+  clienteNombre: string, clienteCedula: string, anioGravable: number,
+  itemsSeleccionados: Set<string>, documentosAdicionales: string[], observaciones: string,
+): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  const doc = new PDFDocument({ size: "letter", margin: 50 });
+  doc.on("data", (c: Buffer) => chunks.push(c));
+  const done = new Promise<Buffer>((resolve) => doc.on("end", () => resolve(Buffer.concat(chunks))));
+
+  const anchoUtil = doc.page.width - 100;
+  const xLabel = 50;
+
+  doc.fontSize(13).font("Helvetica-Bold").text("SOLICITUD DE DOCUMENTOS", { align: "center" });
+  doc.fontSize(11).font("Helvetica-Bold").text(`Declaración de renta — Año gravable ${anioGravable}`, { align: "center" });
+  doc.moveDown(1);
+
+  doc.fontSize(10).font("Helvetica").fillColor("#000000").text(
+    `Señor(a) ${clienteNombre}, esta es la solicitud de documentos adicionales para la elaboración de su ` +
+    `declaración de renta. Por favor allegar los siguientes documentos, según apliquen a su situación:`,
+    { width: anchoUtil, align: "justify" },
+  );
+  doc.moveDown(1);
+
+  for (const cat of CATALOGO_DOCUMENTOS_RENTA) {
+    const itemsMarcados = cat.items.filter(it => itemsSeleccionados.has(it.id));
+    if (itemsMarcados.length === 0) continue;
+    doc.font("Helvetica-Bold").fontSize(10.5).text(cat.categoria);
+    doc.moveDown(0.15);
+    for (const it of itemsMarcados) {
+      doc.font("Helvetica").fontSize(9.5).text(`[   ] ${it.concepto}`, xLabel + 8, doc.y, { width: anchoUtil - 8 });
+    }
+    doc.moveDown(0.5);
+  }
+
+  if (documentosAdicionales.length > 0) {
+    doc.font("Helvetica-Bold").fontSize(10.5).text("Otros documentos solicitados");
+    doc.moveDown(0.15);
+    for (const texto of documentosAdicionales) {
+      doc.font("Helvetica").fontSize(9.5).text(`[   ] ${texto}`, xLabel + 8, doc.y, { width: anchoUtil - 8 });
+    }
+    doc.moveDown(0.5);
+  }
+
+  if (observaciones.trim()) {
+    doc.moveDown(0.3);
+    doc.font("Helvetica-Bold").fontSize(10.5).text("Observaciones generales");
+    doc.moveDown(0.15);
+    doc.font("Helvetica").fontSize(9.5).text(observaciones.trim(), xLabel, doc.y, { width: anchoUtil, align: "justify" });
+    doc.moveDown(0.5);
+  }
+
+  doc.moveDown(2);
+  doc.moveTo(xLabel + 60, doc.y).lineTo(xLabel + 60 + 220, doc.y).strokeColor("#333333").stroke();
+  doc.moveDown(0.2);
+  doc.font("Helvetica").fontSize(9.5).text("Firma Contribuyente", xLabel + 60, doc.y, { width: 220, align: "center" });
+
+  dibujarPiePaginaAreda(doc);
+  doc.end();
+  return done;
 }
 
 export async function generarAnexosRenta(

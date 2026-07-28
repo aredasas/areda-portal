@@ -14,7 +14,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { trpc } from "@/lib/trpc";
 import {
   UserSquare2, Construction, Plus, Loader2, Pencil, Trash2, CheckCircle2, Clock, Users, FileSpreadsheet,
-  Upload, AlertTriangle, Wallet, ChevronDown, Download, Calculator, Eye, FolderOpen, File, Send, ThumbsUp, ThumbsDown, ShieldCheck, Search,
+  Upload, AlertTriangle, Wallet, ChevronDown, Download, Calculator, Eye, FolderOpen, File, Send, ThumbsUp, ThumbsDown, ShieldCheck, Search, Ban, RotateCcw, ClipboardList,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -102,8 +102,9 @@ function TerminadoBadge({ fileKey }: { fileKey: string | null }) {
 
 function ClientesRentaTab({ anioGravable, onIrALiquidacion }: { anioGravable: number; onIrALiquidacion: (id: number) => void }) {
   const utils = trpc.useUtils();
-  const clientesQuery = trpc.renta.clientes.list.useQuery({ anioGravable });
   const [busqueda, setBusqueda] = useState("");
+  const [mostrarInactivos, setMostrarInactivos] = useState(false);
+  const clientesQuery = trpc.renta.clientes.list.useQuery({ anioGravable, incluirInactivos: mostrarInactivos });
 
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<any | null>(null);
@@ -145,6 +146,12 @@ function ClientesRentaTab({ anioGravable, onIrALiquidacion }: { anioGravable: nu
     updateMutation.mutate({ id: c.id, noObligado: checked });
   };
 
+  const handleToggleActivo = (c: any) => {
+    const accion = c.activo ? "inactivar" : "reactivar";
+    if (!window.confirm(`¿Seguro que quieres ${accion} a ${c.nombre}?`)) return;
+    updateMutation.mutate({ id: c.id, activo: !c.activo });
+  };
+
   const handleDelete = (c: any) => {
     if (!window.confirm(`¿Eliminar a ${c.nombre} de la lista de renta ${anioGravable}?`)) return;
     deleteMutation.mutate({ id: c.id });
@@ -157,9 +164,15 @@ function ClientesRentaTab({ anioGravable, onIrALiquidacion }: { anioGravable: nu
   return (
     <div className="space-y-4">
       <div className="flex justify-between items-center gap-3">
-        <div className="relative w-full max-w-xs">
-          <Search className="w-4 h-4 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
-          <Input value={busqueda} onChange={(e) => setBusqueda(e.target.value)} placeholder="Buscar por nombre..." className="pl-8" />
+        <div className="flex items-center gap-3 flex-1">
+          <div className="relative w-full max-w-xs">
+            <Search className="w-4 h-4 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+            <Input value={busqueda} onChange={(e) => setBusqueda(e.target.value)} placeholder="Buscar por nombre..." className="pl-8" />
+          </div>
+          <label className="flex items-center gap-1.5 text-sm text-muted-foreground shrink-0 cursor-pointer">
+            <Checkbox checked={mostrarInactivos} onCheckedChange={(v) => setMostrarInactivos(!!v)} />
+            Mostrar inactivos
+          </label>
         </div>
         <Button onClick={openNew} className="gap-2 bg-[#EDA011] hover:bg-[#d48f0f] text-white">
           <Plus className="w-4 h-4" /> Agregar cliente
@@ -189,8 +202,11 @@ function ClientesRentaTab({ anioGravable, onIrALiquidacion }: { anioGravable: nu
               </thead>
               <tbody>
                 {clientesFiltrados.map((c: any) => (
-                  <tr key={c.id} className={`border-b ${c.noObligado ? "opacity-60" : ""}`}>
-                    <td className="p-3 font-medium">{c.nombre}</td>
+                  <tr key={c.id} className={`border-b ${c.noObligado || !c.activo ? "opacity-60" : ""}`}>
+                    <td className="p-3 font-medium">
+                      {c.nombre}
+                      {!c.activo && <Badge variant="outline" className="ml-2 text-[10px] bg-gray-100 text-gray-600 border-gray-300">Inactivo</Badge>}
+                    </td>
                     <td className="p-3 font-mono text-xs">{c.cedula}</td>
                     <td className="p-3">
                       {c.noObligado ? "—" : c.vencimiento ? new Date(c.vencimiento).toLocaleDateString("es-CO", { timeZone: "UTC" }) : (
@@ -228,6 +244,12 @@ function ClientesRentaTab({ anioGravable, onIrALiquidacion }: { anioGravable: nu
                     <td className="p-3 text-right">
                       <div className="flex gap-1 justify-end">
                         <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => openEdit(c)}><Pencil className="w-3.5 h-3.5" /></Button>
+                        <Button
+                          variant="ghost" size="icon" className={`h-8 w-8 ${c.activo ? "text-orange-600" : "text-green-600"}`}
+                          onClick={() => handleToggleActivo(c)} title={c.activo ? "Inactivar cliente" : "Reactivar cliente"}
+                        >
+                          {c.activo ? <Ban className="w-3.5 h-3.5" /> : <RotateCcw className="w-3.5 h-3.5" />}
+                        </Button>
                         <Button variant="ghost" size="icon" className="h-8 w-8 text-red-600" onClick={() => handleDelete(c)}><Trash2 className="w-3.5 h-3.5" /></Button>
                       </div>
                     </td>
@@ -1785,12 +1807,16 @@ function DriveCard({ rentaClienteId, anioGravable, soloLectura }: { rentaCliente
   };
 
   const abrirAsignar = () => { setDriveUrl(clienteActual?.driveFolderUrl || ""); setShowAsignar(true); };
+  const [showSolicitud, setShowSolicitud] = useState(false);
 
   return (
     <ColapsableCard titulo="Carpeta de Drive (soportes del cliente)">
       <p className="text-sm text-muted-foreground">
         Carpeta donde el cliente envía sus soportes (ej. el Excel de la exógena).
       </p>
+      <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setShowSolicitud(true)}>
+        <ClipboardList className="w-3.5 h-3.5" /> Solicitar Documentos
+      </Button>
       {!clienteActual?.driveFolderUrl ? (
         soloLectura ? (
           <p className="text-sm text-muted-foreground">Sin carpeta asignada.</p>
@@ -1853,7 +1879,151 @@ function DriveCard({ rentaClienteId, anioGravable, soloLectura }: { rentaCliente
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <SolicitudDocumentosDialog
+        rentaClienteId={rentaClienteId} anioGravable={anioGravable}
+        open={showSolicitud} onOpenChange={setShowSolicitud}
+      />
     </ColapsableCard>
+  );
+}
+
+/** Checklist de documentos a solicitarle al cliente — se abre desde la
+ * Carpeta de Drive, viene con sugerencias pre-marcadas según lo que la
+ * exógena ya trae, se puede ajustar libremente, agregar documentos que no
+ * estén en la lista, y dejar observaciones antes de generar el PDF. */
+function SolicitudDocumentosDialog({ rentaClienteId, anioGravable, open, onOpenChange }: {
+  rentaClienteId: number; anioGravable: number; open: boolean; onOpenChange: (open: boolean) => void;
+}) {
+  const catalogoQuery = trpc.renta.clientes.catalogoDocumentos.useQuery({ rentaClienteId }, { enabled: open });
+  const [seleccionados, setSeleccionados] = useState<Set<string>>(new Set());
+  const [inicializado, setInicializado] = useState(false);
+  const [documentosExtra, setDocumentosExtra] = useState<string[]>([]);
+  const [nuevoDocumento, setNuevoDocumento] = useState("");
+  const [observaciones, setObservaciones] = useState("");
+  const [generando, setGenerando] = useState(false);
+
+  useEffect(() => {
+    if (!open) { setInicializado(false); return; }
+    if (catalogoQuery.data && !inicializado) {
+      const recomendados = new Set<string>();
+      for (const cat of catalogoQuery.data.categorias) {
+        if (catalogoQuery.data.categoriasRecomendadas.includes(cat.categoria)) {
+          for (const it of cat.items) recomendados.add(it.id);
+        }
+      }
+      setSeleccionados(recomendados);
+      setInicializado(true);
+    }
+  }, [open, catalogoQuery.data, inicializado]);
+
+  const generarMutation = trpc.renta.clientes.generarSolicitudDocumentos.useMutation({
+    onSuccess: (data) => {
+      toast.success("Solicitud generada");
+      window.open(data.signedUrl, "_blank");
+      onOpenChange(false);
+    },
+    onError: (err) => toast.error(err.message || "No se pudo generar el PDF"),
+  });
+
+  const toggleItem = (id: string) => {
+    setSeleccionados(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+  const toggleCategoria = (cat: any, marcarTodo: boolean) => {
+    setSeleccionados(prev => {
+      const next = new Set(prev);
+      for (const it of cat.items) { if (marcarTodo) next.add(it.id); else next.delete(it.id); }
+      return next;
+    });
+  };
+  const agregarDocumentoExtra = () => {
+    if (!nuevoDocumento.trim()) return;
+    setDocumentosExtra(prev => [...prev, nuevoDocumento.trim()]);
+    setNuevoDocumento("");
+  };
+
+  const handleGenerar = () => {
+    setGenerando(true);
+    generarMutation.mutate(
+      { rentaClienteId, anioGravable, itemsSeleccionados: Array.from(seleccionados), documentosAdicionales: documentosExtra, observaciones },
+      { onSettled: () => setGenerando(false) },
+    );
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-2xl max-h-[85vh] overflow-y-auto overflow-x-hidden min-w-0">
+        <DialogHeader>
+          <DialogTitle>Solicitud de Documentos al Cliente</DialogTitle>
+        </DialogHeader>
+        <p className="text-sm text-muted-foreground">
+          Marca los documentos que le vas a pedir al cliente — las categorías con fondo ámbar son una
+          sugerencia según lo que ya trae la exógena cargada, ajusta libremente según lo que necesites.
+        </p>
+        <div className="space-y-3">
+          {catalogoQuery.data?.categorias.map((cat: any) => {
+            const recomendada = catalogoQuery.data.categoriasRecomendadas.includes(cat.categoria);
+            const todosMarcados = cat.items.every((it: any) => seleccionados.has(it.id));
+            return (
+              <div key={cat.categoria} className={`border rounded-md p-3 ${recomendada ? "border-amber-300 bg-amber-50/40" : ""}`}>
+                <label className="flex items-center gap-2 font-medium text-sm mb-1.5 cursor-pointer">
+                  <Checkbox checked={todosMarcados} onCheckedChange={(v) => toggleCategoria(cat, !!v)} />
+                  {cat.categoria}
+                </label>
+                <div className="grid sm:grid-cols-2 gap-x-3 gap-y-1 pl-1">
+                  {cat.items.map((it: any) => (
+                    <label key={it.id} className="flex items-start gap-2 text-xs cursor-pointer">
+                      <Checkbox checked={seleccionados.has(it.id)} onCheckedChange={() => toggleItem(it.id)} className="mt-0.5" />
+                      {it.concepto}
+                    </label>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+
+          <div className="border rounded-md p-3">
+            <p className="font-medium text-sm mb-1.5">Otros documentos</p>
+            {documentosExtra.length > 0 && (
+              <div className="space-y-1 mb-2">
+                {documentosExtra.map((d, i) => (
+                  <div key={i} className="flex items-center justify-between text-xs border-b py-1">
+                    <span>{d}</span>
+                    <Button variant="ghost" size="icon" className="h-6 w-6 text-red-600" onClick={() => setDocumentosExtra(prev => prev.filter((_, idx) => idx !== i))}>
+                      <Trash2 className="w-3 h-3" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="flex gap-2">
+              <Input value={nuevoDocumento} onChange={(e) => setNuevoDocumento(e.target.value)} placeholder="Documento que se escapó de la lista..." className="h-8" onKeyDown={(e) => { if (e.key === "Enter") agregarDocumentoExtra(); }} />
+              <Button size="sm" variant="outline" className="gap-1" onClick={agregarDocumentoExtra}><Plus className="w-3.5 h-3.5" /> Agregar</Button>
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label className="text-xs">Observaciones generales</Label>
+            <textarea
+              value={observaciones} onChange={(e) => setObservaciones(e.target.value)}
+              className="w-full border rounded-md p-2 text-sm min-h-[70px]"
+              placeholder="Cualquier indicación adicional para el cliente..."
+            />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancelar</Button>
+          <Button onClick={handleGenerar} disabled={generando} className="gap-2 bg-[#EDA011] hover:bg-[#d48f0f] text-white">
+            {generando && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+            Generar PDF
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
