@@ -7,37 +7,27 @@ import {
 
 type FilaCuenta = { tipo: TipoSaldo; codigo: string; valores: Record<number, number> };
 
-/** ESTADO DE RESULTADOS MENSUAL COMPARATIVO (ERM) — el informe principal del
- * módulo. Por cliente, un año calendario, una columna por mes (más
- * Acumulado), sumando TODOS los centros de costo combinados — funciona
- * igual para clientes que manejan centro de costo (como Colfamil) y para
- * los que no (donde todo queda bajo centroCodigo="SC"). Es la base contra
- * la que se validan/derivan los demás informes (como el ERI).
- *
- * nivel "resumen": agrupa cuentas a 4 dígitos (ej. 5105).
- * nivel "detalle": una fila por cada código de cuenta tal cual viene en el
- * libro auxiliar (subcuentas de 6+ dígitos incluidas). */
-export async function generarReporteERM(
-  clienteId: number, anio: number, nivel: "resumen" | "detalle",
-): Promise<Buffer> {
-  const saldos = await getSaldosDelAnio(clienteId, anio);
-  const cuentasConocidas = await getCuentasPucConocidas();
-  const catalogoCliente = await getCatalogoCliente(clienteId);
-
+/** Arma UNA hoja con el formato del Estado de Resultados (meses en
+ * columnas + Acumulado, agrupado en INGRESOS/COSTO/DESCUENTO PP/GASTOS
+ * con sus subtotales) a partir de saldos ya filtrados — se reutiliza
+ * tanto para el ERM (todos los centros combinados) como para el ERI (una
+ * hoja por cada centro de costo, con este mismo formato). */
+export function agregarHojaEstadoResultados(
+  wb: ExcelJS.Workbook, nombreHoja: string, tituloEncabezado: string, subtituloEncabezado: string,
+  saldos: { mes: number; tipo: TipoSaldo; cuenta: string; valor: number }[],
+  nivel: "resumen" | "detalle", cuentasConocidas: Map<string, { descripcion: string | null; tipo: string }>, catalogoCliente: Map<string, string>,
+): void {
   const mesesConDatos = Array.from(new Set(saldos.map(f => f.mes))).sort((a, b) => a - b);
 
   const mapa = new Map<string, FilaCuenta>();
   for (const fila of saldos) {
     const codigo = nivel === "resumen" ? a4Digitos(fila.cuenta) : fila.cuenta;
     const key = `${fila.tipo}|${codigo}`;
-    if (!mapa.has(key)) mapa.set(key, { tipo: fila.tipo as TipoSaldo, codigo, valores: {} });
+    if (!mapa.has(key)) mapa.set(key, { tipo: fila.tipo, codigo, valores: {} });
     const f = mapa.get(key)!;
     f.valores[fila.mes] = (f.valores[fila.mes] || 0) + fila.valor;
   }
 
-  // Prioridad: el catálogo propio de este cliente (más confiable — es el
-  // nombre que ese cliente le da en su propia contabilidad, sembrado desde
-  // el archivo o corregido a mano) antes que el catálogo genérico de IA.
   const descripcionPara = (codigo: string): string => {
     const exactaCliente = catalogoCliente.get(codigo);
     if (exactaCliente) return exactaCliente;
@@ -56,13 +46,10 @@ export async function generarReporteERM(
     .filter(f => f.tipo === tipo)
     .sort((a, b) => a.codigo.localeCompare(b.codigo));
 
-  const wb = new ExcelJS.Workbook();
-  wb.creator = "Areda Work · Módulo Informes";
-  const nombreNivel = nivel === "resumen" ? "Resumen (cuentas a 4 dígitos)" : "Detalle completo (todas las subcuentas)";
-  const ws = wb.addWorksheet(`ERM ${anio}`.slice(0, 31));
+  const ws = wb.addWorksheet(nombreHoja.slice(0, 31));
 
-  ws.addRow([`ESTADO DE RESULTADOS MENSUAL COMPARATIVO · ${anio}`]).font = FONT_TITLE as any;
-  ws.addRow([`${nombreNivel} · Todos los centros de costo combinados · Cuenta 4=Ingreso, 5=Gasto, 6=Costo`]).font = { name: "Arial", size: 9, italic: true } as any;
+  ws.addRow([tituloEncabezado]).font = FONT_TITLE as any;
+  ws.addRow([subtituloEncabezado]).font = { name: "Arial", size: 9, italic: true } as any;
   ws.addRow([]);
 
   const numMeses = mesesConDatos.length;
@@ -72,8 +59,6 @@ export async function generarReporteERM(
   const head = ws.addRow(headerLabels);
   styleHeaderRow(head);
 
-  // Formato de moneda por defecto en todas las columnas de datos; las filas
-  // de porcentaje se sobreescriben puntualmente más abajo.
   for (let c = primeraColMes; c <= colAcumulado; c++) ws.getColumn(c).numFmt = MONEY;
 
   const escribirGrupo = (titulo: string, tipo: TipoSaldo): number => {
@@ -134,6 +119,34 @@ export async function generarReporteERM(
   ws.getColumn(1).width = 14;
   ws.getColumn(2).width = 36;
   for (let c = primeraColMes; c <= colAcumulado; c++) ws.getColumn(c).width = 14;
+}
+
+/** ESTADO DE RESULTADOS MENSUAL COMPARATIVO (ERM) — el informe principal del
+ * módulo. Por cliente, un año calendario, una columna por mes (más
+ * Acumulado), sumando TODOS los centros de costo combinados — funciona
+ * igual para clientes que manejan centro de costo (como Colfamil) y para
+ * los que no (donde todo queda bajo centroCodigo="SC"). Es la base contra
+ * la que se validan/derivan los demás informes (como el ERI).
+ *
+ * nivel "resumen": agrupa cuentas a 4 dígitos (ej. 5105).
+ * nivel "detalle": una fila por cada código de cuenta tal cual viene en el
+ * libro auxiliar (subcuentas de 6+ dígitos incluidas). */
+export async function generarReporteERM(
+  clienteId: number, anio: number, nivel: "resumen" | "detalle",
+): Promise<Buffer> {
+  const saldos = await getSaldosDelAnio(clienteId, anio);
+  const cuentasConocidas = await getCuentasPucConocidas();
+  const catalogoCliente = await getCatalogoCliente(clienteId);
+
+  const wb = new ExcelJS.Workbook();
+  wb.creator = "Areda Work · Módulo Informes";
+  const nombreNivel = nivel === "resumen" ? "Resumen (cuentas a 4 dígitos)" : "Detalle completo (todas las subcuentas)";
+
+  agregarHojaEstadoResultados(
+    wb, `ERM ${anio}`, `ESTADO DE RESULTADOS MENSUAL COMPARATIVO · ${anio}`,
+    `${nombreNivel} · Todos los centros de costo combinados · Cuenta 4=Ingreso, 5=Gasto, 6=Costo`,
+    saldos, nivel, cuentasConocidas, catalogoCliente,
+  );
 
   finalizarLibro(wb);
   const buffer = await wb.xlsx.writeBuffer();

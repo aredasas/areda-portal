@@ -406,8 +406,9 @@ export default function Informes() {
                   </CardHeader>
                   <CardContent className="space-y-3">
                     <p className="text-sm text-muted-foreground">
-                      Estado de resultados de {MESES[mes - 1]} {anio} desglosado por centro de costo, con punto
-                      de equilibrio y pareto de utilidad sobre todos los meses ya cargados del año.
+                      Mismo formato del ERM (meses en columnas, hasta {MESES[mes - 1]} {anio}) pero en una sola
+                      hoja "General" con todos los centros combinados, y una hoja aparte por cada centro de
+                      costo con sus propias cuentas 4/5/6.
                     </p>
                     <Button
                       onClick={() => generarERIMutation.mutate({ clienteId, anio, mes })}
