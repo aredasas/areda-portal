@@ -7,14 +7,19 @@ import { agregarHojaEstadoResultados } from "./informesReportERM";
  * alcance de meses que el ERM (una columna por mes hasta el mes elegido,
  * más Acumulado), pero en vez de una sola hoja con todos los centros
  * combinados, genera una hoja "General" (todos los centros juntos, igual
- * que el ERM) y una hoja adicional por cada centro de costo activo, cada
- * una filtrada a los movimientos de ese centro únicamente. Solo tiene
- * sentido para clientes que manejan centro de costo. */
+ * que el ERM) y una hoja adicional por cada código de centro de costo que
+ * REALMENTE aparezca en los saldos de ese año — incluido "SC" (sin centro
+ * asignado en el archivo), como "Sin centro asignado". Se basa en los
+ * datos reales, no en el catálogo, para que la suma de todas las hojas de
+ * centro cuadre siempre exacto con "General" — si se basara en el
+ * catálogo, un centro marcado inactivo (o nunca catalogado) que aún
+ * tuviera saldos quedaría sumado en General pero sin su propia hoja, y
+ * los acumulados no cuadrarían. Solo tiene sentido para clientes que
+ * manejan centro de costo. */
 export async function generarReporteERI(
   clienteId: number, anio: number, mes: number, nivel: "resumen" | "detalle" = "resumen",
 ): Promise<Buffer> {
   const centrosCatalogo = await getCentrosCosto(clienteId);
-  const centros = centrosCatalogo.filter(c => c.activo).map(c => c.codigo).sort();
   const nombres: Record<string, string> = {};
   for (const c of centrosCatalogo) nombres[c.codigo] = c.nombre;
 
@@ -32,11 +37,17 @@ export async function generarReporteERI(
     saldosAnio, nivel, cuentasConocidas, catalogoCliente,
   );
 
-  for (const c of centros) {
-    const saldosDelCentro = saldosAnio.filter(f => f.centroCodigo === c);
+  // Códigos que REALMENTE aparecen en los saldos de este año — no el
+  // catálogo — para garantizar que General = suma exacta de estas hojas.
+  const codigosEnSaldos = Array.from(new Set(saldosAnio.map(f => f.centroCodigo))).sort();
+  for (const codigo of codigosEnSaldos) {
+    const esSinCentro = codigo === "SC";
+    const nombreCentro = esSinCentro ? "Sin centro asignado" : (nombres[codigo] || codigo);
+    const nombreHoja = esSinCentro ? "Sin centro asignado" : `${codigo} ${nombreCentro}`;
+    const saldosDelCentro = saldosAnio.filter(f => f.centroCodigo === codigo);
     agregarHojaEstadoResultados(
-      wb, `${c} ${nombres[c]}`, `ESTADO DE RESULTADOS · ${nombres[c]} (${c}) · ${anio}`,
-      `${nombreNivel} · Solo centro de costo "${nombres[c]}" · Cuenta 4=Ingreso, 5=Gasto, 6=Costo`,
+      wb, nombreHoja, `ESTADO DE RESULTADOS · ${nombreCentro}${esSinCentro ? "" : ` (${codigo})`} · ${anio}`,
+      `${nombreNivel} · Solo ${esSinCentro ? "movimientos sin centro de costo en el archivo" : `centro de costo "${nombreCentro}"`} · Cuenta 4=Ingreso, 5=Gasto, 6=Costo`,
       saldosDelCentro, nivel, cuentasConocidas, catalogoCliente,
     );
   }
