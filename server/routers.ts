@@ -1808,17 +1808,20 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
       // ERI (por centro de costo) — informe derivado del ERM, solo tiene
       // sentido para clientes que manejan centro de costo.
       generarERI: protectedProcedure
-        .input(z.object({ clienteId: z.number(), anio: z.number(), mes: z.number().min(1).max(12) }))
+        .input(z.object({
+          clienteId: z.number(), anio: z.number(), mes: z.number().min(1).max(12),
+          nivel: z.enum(["resumen", "detalle"]).default("resumen"),
+        }))
         .mutation(async ({ input, ctx }) => {
           assertInformesAccess(ctx.user.cedula);
-          const buffer = await generarReporteERI(input.clienteId, input.anio, input.mes);
+          const buffer = await generarReporteERI(input.clienteId, input.anio, input.mes, input.nivel);
           const key = `informes/ERI_${input.clienteId}_${input.anio}_${String(input.mes).padStart(2, "0")}_${Date.now()}.xlsx`;
           const { url, key: fileKey } = await storagePut(
             key, buffer, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
           );
           await informesDb.guardarReporteGenerado({
             clienteId: input.clienteId, anio: input.anio, mes: input.mes, tipo: "ERI",
-            nivel: "detalle", fileKey, generadoPorId: ctx.user.id,
+            nivel: input.nivel, fileKey, generadoPorId: ctx.user.id,
           });
           const signedUrl = await storageGetSignedUrl(fileKey);
           return { url, signedUrl, fileKey };

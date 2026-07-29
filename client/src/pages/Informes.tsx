@@ -31,6 +31,7 @@ export default function Informes() {
   const [anio, setAnio] = useState(now.getFullYear());
   const [mes, setMes] = useState(now.getMonth() + 1);
   const [nivelERM, setNivelERM] = useState<"resumen" | "detalle">("resumen");
+  const [nivelERI, setNivelERI] = useState<"resumen" | "detalle">("resumen");
   const [subiendo, setSubiendo] = useState(false);
   const [progreso, setProgreso] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -410,14 +411,23 @@ export default function Informes() {
                       hoja "General" con todos los centros combinados, y una hoja aparte por cada centro de
                       costo con sus propias cuentas 4/5/6.
                     </p>
-                    <Button
-                      onClick={() => generarERIMutation.mutate({ clienteId, anio, mes })}
-                      disabled={generarERIMutation.isPending}
-                      className="gap-2"
-                    >
-                      {generarERIMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileSpreadsheet className="w-4 h-4" />}
-                      Generar ERI de {MESES[mes - 1]}
-                    </Button>
+                    <div className="flex items-center gap-3">
+                      <Select value={nivelERI} onValueChange={(v) => setNivelERI(v as "resumen" | "detalle")}>
+                        <SelectTrigger className="w-56"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="resumen">Resumen (cuentas a 4 dígitos)</SelectItem>
+                          <SelectItem value="detalle">Detalle completo (subcuentas)</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <Button
+                        onClick={() => generarERIMutation.mutate({ clienteId, anio, mes, nivel: nivelERI })}
+                        disabled={generarERIMutation.isPending}
+                        className="gap-2"
+                      >
+                        {generarERIMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileSpreadsheet className="w-4 h-4" />}
+                        Generar ERI de {MESES[mes - 1]}
+                      </Button>
+                    </div>
                   </CardContent>
                 </Card>
               )}
