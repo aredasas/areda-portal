@@ -2341,10 +2341,11 @@ const CEDULAS_TODAS = ["trabajo", "trabajo_honorarios", "capital", "no_laboral",
 export async function getDatosLiquidacion(rentaClienteId: number) {
   const db = await getDb();
   if (!db) return null;
-  const [activos, pasivos, itemsCedula, declaracionAnterior] = await Promise.all([
+  const [activos, pasivos, itemsCedula, descuentosTributarios, declaracionAnterior] = await Promise.all([
     getLiquidacionItems(rentaClienteId, "activo"),
     getLiquidacionItems(rentaClienteId, "pasivo"),
     getLiquidacionItems(rentaClienteId, "cedula"),
+    getLiquidacionItems(rentaClienteId, "descuento_tributario"),
     getDeclaracionAnterior(rentaClienteId),
   ]);
 
@@ -2367,6 +2368,7 @@ export async function getDatosLiquidacion(rentaClienteId: number) {
     activos: activos.map(a => ({ concepto: a.concepto, valor: a.valor })),
     pasivos: pasivos.map(p => ({ concepto: p.concepto, valor: p.valor })),
     cedulas,
+    descuentosTributarios: descuentosTributarios.map(d => ({ concepto: d.concepto, valor: d.valor })),
     patrimonioLiquidoAnioAnterior: declaracionAnterior?.patrimonioLiquidoAnioAnterior ?? null,
     impuestoNetoAnioAnterior: declaracionAnterior?.impuestoNetoAnioAnterior ?? null,
     saldoAFavorAnterior: declaracionAnterior?.saldoAFavorAnterior ?? null,

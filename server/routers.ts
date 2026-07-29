@@ -2273,7 +2273,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
         }),
       crear: protectedProcedure
         .input(z.object({
-          rentaClienteId: z.number(), seccion: z.enum(["activo", "pasivo", "cedula"]),
+          rentaClienteId: z.number(), seccion: z.enum(["activo", "pasivo", "cedula", "descuento_tributario"]),
           cedula: z.enum(["trabajo", "trabajo_honorarios", "capital", "no_laboral", "pensiones", "dividendos", "ganancia_ocasional"]).optional(),
           tipoValor: z.enum(["ingreso_bruto", "ingreso_no_constitutivo", "costo_deduccion_procedente", "renta_exenta", "deduccion", "retencion"]).optional(),
           tipoDeduccion: z.string().optional(), tipoGananciaOcasional: z.string().optional(),
@@ -2283,9 +2283,19 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           assertInformesAccess(ctx.user.cedula);
           let alerta: string | null = null;
           if (input.tipoDeduccion) {
-            const { excedeTope, tope, topeUVT } = rentaDb.validarTopeDeduccion(input.tipoDeduccion, input.valor);
+            let ingresoBrutoCedula: number | undefined;
+            if (input.tipoDeduccion === "aportes_voluntarios_pension_afc" && input.cedula) {
+              const itemsCedula = await db.getLiquidacionItems(input.rentaClienteId, "cedula");
+              ingresoBrutoCedula = itemsCedula
+                .filter((it: any) => it.cedula === input.cedula && it.tipoValor === "ingreso_bruto")
+                .reduce((a: number, it: any) => a + it.valor, 0);
+            }
+            const { excedeTope, tope, topeUVT } = rentaDb.validarTopeDeduccion(input.tipoDeduccion, input.valor, ingresoBrutoCedula);
             if (excedeTope) {
-              alerta = `El valor supera el tope 2025 de ${topeUVT} UVT ($${tope!.toLocaleString("es-CO")}) para este tipo — revisar antes de continuar.`;
+              const notaTope = input.tipoDeduccion === "aportes_voluntarios_pension_afc"
+                ? "el menor entre 3.800 UVT y el 30% del ingreso bruto de esta cédula"
+                : `${topeUVT} UVT`;
+              alerta = `El valor supera el tope 2025 (${notaTope}: $${tope!.toLocaleString("es-CO")}) para este tipo — revisar antes de continuar.`;
             }
           }
           const id = await db.crearLiquidacionItem({

@@ -1,0 +1,1 @@
+ALTER TABLE `rentaLiquidacionItems` MODIFY COLUMN `seccion` enum('activo','pasivo','cedula','descuento_tributario') NOT NULL;

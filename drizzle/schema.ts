@@ -706,7 +706,7 @@ export const rentaLiquidacionItems = mysqlTable("rentaLiquidacionItems", {
   /** "cedula" agrupa todo lo que va dentro de una de las 6 sub-rentas (ver
    * `cedula` abajo) — activo/pasivo quedan aparte porque el patrimonio no
    * es cedular. */
-  seccion: mysqlEnum("seccion", ["activo", "pasivo", "cedula"]).notNull(),
+  seccion: mysqlEnum("seccion", ["activo", "pasivo", "cedula", "descuento_tributario"]).notNull(),
   /** Las 6 sub-rentas reales del Formulario 210 — "trabajo" (relación
    * laboral, casillas 32-42) y "trabajo_honorarios" (sin relación laboral,
    * con costos/gastos, casillas 43-57) son DISTINTAS entre sí aunque

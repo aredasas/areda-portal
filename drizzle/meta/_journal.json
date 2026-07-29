@@ -239,6 +239,13 @@
       "when": 1785253075367,
       "tag": "0033_renta_activo",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "5",
+      "when": 1785333079201,
+      "tag": "0034_descuentos_tributarios",
+      "breakpoints": true
     }
   ]
 }

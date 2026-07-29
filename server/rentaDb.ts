@@ -110,6 +110,16 @@ export function esCedulaGeneral(cedula: string | null | undefined): boolean {
 
 export const UVT_2025 = 49799;
 
+/** La DIAN publica los topes en UVT convertidos a pesos redondeados al
+ * millar más cercano (confirmado contra el archivo Ayuda Renta 2025:
+ * 4.500 UVT → $224.096.000, no $224.095.500; 1.625 UVT → $80.923.000,
+ * no $80.923.375) — no es una simple multiplicación truncada. Se usa
+ * para cualquier tope que se muestre en pantalla o en un documento,
+ * para que coincida exacto con la cifra oficial. */
+export function redondearPesosDian(valorExacto: number): number {
+  return Math.round(valorExacto / 1000) * 1000;
+}
+
 /** Tabla de tarifas del Art. 241 del Estatuto Tributario — vigente sin
  * cambios desde la Ley 2010 de 2019 (confirmado directamente contra el
  * texto del artículo). Rangos en UVT sobre la renta líquida gravable. */
@@ -180,10 +190,26 @@ export const TIPOS_DEDUCCION_RENTA_EXENTA: {
 /** Valida un valor digitado contra el tope individual de su tipo de
  * deducción/renta exenta — no reemplaza el criterio del contador, es una
  * alerta cuando el valor supera lo permitido por la norma. */
-export function validarTopeDeduccion(tipoDeduccion: string, valor: number): { excedeTope: boolean; tope: number | null; topeUVT: number | null } {
+/** Valida un valor digitado contra el tope individual de su tipo de
+ * deducción/renta exenta — no reemplaza el criterio del contador, es una
+ * alerta cuando el valor supera lo permitido por la norma.
+ *
+ * Caso especial — aportes voluntarios a pensión/AFC (Art. 126-1 E.T.):
+ * el tope real es el MENOR entre 3.800 UVT y el 30% del ingreso laboral
+ * o tributario del año. Si se conoce el ingreso bruto de la cédula
+ * (`ingresoBrutoCedula`), se valida contra ambos límites; si no se pasa
+ * (ej. al validar sin ese contexto), se valida solo contra los 3.800 UVT
+ * como antes. */
+export function validarTopeDeduccion(
+  tipoDeduccion: string, valor: number, ingresoBrutoCedula?: number,
+): { excedeTope: boolean; tope: number | null; topeUVT: number | null } {
   const catalogo = TIPOS_DEDUCCION_RENTA_EXENTA.find(t => t.tipo === tipoDeduccion);
   if (!catalogo || catalogo.topeUVT === null) return { excedeTope: false, tope: null, topeUVT: null };
-  const tope = catalogo.topeUVT * UVT_2025;
+  let tope = redondearPesosDian(catalogo.topeUVT * UVT_2025);
+  if (tipoDeduccion === "aportes_voluntarios_pension_afc" && ingresoBrutoCedula != null) {
+    const topePorIngreso = Math.round(ingresoBrutoCedula * 0.30);
+    tope = Math.min(tope, topePorIngreso);
+  }
   return { excedeTope: valor > tope, tope, topeUVT: catalogo.topeUVT };
 }
 
@@ -215,6 +241,11 @@ export type DatosLiquidacion = {
   activos: { concepto: string; valor: number }[];
   pasivos: { concepto: string; valor: number }[];
   cedulas: Record<string, DatosCedula>; // trabajo, trabajo_honorarios, capital, no_laboral, pensiones, dividendos
+  /** Descuentos tributarios (Art. 254-260 E.T. — impuestos pagados en el
+   * exterior, donaciones, etc.) — a diferencia de las deducciones/rentas
+   * exentas, estos NO reducen la renta líquida gravable: se restan
+   * DIRECTAMENTE del impuesto de renta ya calculado, peso a peso. */
+  descuentosTributarios: { concepto: string; valor: number }[];
   patrimonioLiquidoAnioAnterior: number | null;
   impuestoNetoAnioAnterior: number | null;
   saldoAFavorAnterior: number | null;
@@ -346,6 +377,11 @@ export type ResultadoLiquidacion = {
   rentaLiquidaGravableTotal: number;
   impuestoRenta: { impuesto: number; tarifaMarginal: number; rangoUVT: string };
   totalRetenciones: number;
+  /** Descuentos tributarios (impuestos exterior, donaciones, etc.) — se
+   * restan directamente del impuesto de renta ya calculado, no de la
+   * base. impuestoNetoDespuesDescuentos nunca baja de 0. */
+  totalDescuentosTributarios: number;
+  impuestoNetoDespuesDescuentos: number;
   patrimonioLiquidoAnioAnterior: number | null;
   impuestoNetoAnioAnterior: number | null;
   saldoAFavorAnterior: number | null;
@@ -353,7 +389,9 @@ export type ResultadoLiquidacion = {
   /** Dos métodos del Art. 807 E.T. para el anticipo del año siguiente —
    * se calculan ambos para que el contador elija cuál aplica (además de
    * verificar si es la primera o segunda declaración, casos especiales
-   * que no se calculan aquí). Ambos ya restan las retenciones y quedan en
+   * que no se calculan aquí). Se calculan sobre el impuesto YA NETO de
+   * descuentos tributarios (impuestoNetoDespuesDescuentos), que es el
+   * impuesto a cargo real. Ambos ya restan las retenciones y quedan en
    * 0 si el resultado da negativo. */
   anticipoMetodo1: number;
   anticipoMetodo2: number;
@@ -418,7 +456,7 @@ export function armarLiquidacion(datos: DatosLiquidacion): ResultadoLiquidacion 
   const baseCalculoLimite = SUBRENTAS_GENERAL.reduce(
     (a, n) => a + subRentasBase[n].ingresoBruto - subRentasBase[n].ingresoNoConstitutivo, 0,
   );
-  const topeUVT = TOPES_DEDUCCION_2025.limiteGlobalDeduccionesRentasExentas * UVT_2025;
+  const topeUVT = redondearPesosDian(TOPES_DEDUCCION_2025.limiteGlobalDeduccionesRentasExentas * UVT_2025);
   const limite40PorcientoOMil340UVT = Math.min(baseCalculoLimite * 0.4, topeUVT);
   const totalDisponibleGeneral = SUBRENTAS_GENERAL.reduce(
     (a, n) => a + subRentasBase[n].rentaExentaDisponible + subRentasBase[n].deduccionDisponible, 0,
@@ -457,17 +495,24 @@ export function armarLiquidacion(datos: DatosLiquidacion): ResultadoLiquidacion 
   const todasLasCedulas = [...SUBRENTAS_GENERAL, "pensiones", "dividendos"];
   const totalRetenciones = todasLasCedulas.reduce((a, n) => a + sumaItems((datos.cedulas[n] || vacio).retencion), 0);
 
+  // Descuentos tributarios (Art. 254-260 E.T.) — se restan directamente
+  // del impuesto ya calculado, no de la base gravable. Nunca bajan de 0.
+  const totalDescuentosTributarios = (datos.descuentosTributarios || []).reduce((a, it) => a + it.valor, 0);
+  const impuestoNetoDespuesDescuentos = Math.max(0, Math.round(impuestoRenta.impuesto - totalDescuentosTributarios));
+
   // Anticipo de renta (Art. 807 E.T.) — dos métodos posibles, el
   // contador elige cuál aplica según el caso (primera/segunda/siguiente
-  // declaración, o cuál da un valor más razonable):
+  // declaración, o cuál da un valor más razonable). Se calculan sobre el
+  // impuesto YA NETO de descuentos tributarios, que es el impuesto a
+  // cargo real:
   // Método 1: impuesto neto de este año × 75% − retenciones.
   // Método 2: promedio(impuesto neto año anterior, impuesto neto de este
   // año) × 75% − retenciones.
   // Ambos quedan en 0 si el resultado da negativo.
-  const anticipoMetodo1 = Math.max(0, Math.round(impuestoRenta.impuesto * 0.75 - totalRetenciones));
+  const anticipoMetodo1 = Math.max(0, Math.round(impuestoNetoDespuesDescuentos * 0.75 - totalRetenciones));
   let anticipoMetodo2 = 0;
   if (datos.impuestoNetoAnioAnterior !== null && datos.impuestoNetoAnioAnterior !== undefined) {
-    const promedio = (impuestoRenta.impuesto + datos.impuestoNetoAnioAnterior) / 2;
+    const promedio = (impuestoNetoDespuesDescuentos + datos.impuestoNetoAnioAnterior) / 2;
     anticipoMetodo2 = Math.max(0, Math.round(promedio * 0.75 - totalRetenciones));
   }
 
@@ -517,6 +562,7 @@ export function armarLiquidacion(datos: DatosLiquidacion): ResultadoLiquidacion 
     ingresoBrutoPensiones, rentaLiquidaPensiones, rentaExentaPensiones, rentaLiquidaGravablePensiones,
     ingresoBrutoDividendos,
     rentaLiquidaGravableTotal, impuestoRenta, totalRetenciones,
+    totalDescuentosTributarios, impuestoNetoDespuesDescuentos,
     patrimonioLiquidoAnioAnterior: datos.patrimonioLiquidoAnioAnterior ?? null,
     impuestoNetoAnioAnterior: datos.impuestoNetoAnioAnterior ?? null,
     saldoAFavorAnterior: datos.saldoAFavorAnterior ?? null,
@@ -546,13 +592,17 @@ export function validarRenta(
 
   // 1. Tope individual de cada deducción/renta exenta ya cargada.
   for (const [cedula, c] of Object.entries(datos.cedulas)) {
+    const ingresoBrutoCedula = c.ingresoBruto.reduce((a, i) => a + i.valor, 0);
     for (const it of [...c.deduccion, ...c.rentaExenta]) {
       if (!it.tipoDeduccion) continue;
-      const { excedeTope, tope, topeUVT } = validarTopeDeduccion(it.tipoDeduccion, it.valor);
+      const { excedeTope, tope, topeUVT } = validarTopeDeduccion(it.tipoDeduccion, it.valor, ingresoBrutoCedula);
       if (excedeTope) {
+        const notaTope = it.tipoDeduccion === "aportes_voluntarios_pension_afc"
+          ? ` (tope real: el menor entre 3.800 UVT y el 30% del ingreso bruto de esta cédula)`
+          : ` (${topeUVT} UVT)`;
         hallazgos.push({
           severidad: "error", categoria: "Tope individual",
-          mensaje: `"${it.concepto}" (${NOMBRE_CEDULA[cedula] || cedula}) supera el tope de ${topeUVT} UVT (${fmt(tope!)}) — valor cargado: ${fmt(it.valor)}.`,
+          mensaje: `"${it.concepto}" (${NOMBRE_CEDULA[cedula] || cedula}) supera el tope de ${fmt(tope!)}${notaTope} — valor cargado: ${fmt(it.valor)}.`,
         });
       }
       const catalogo = TIPOS_DEDUCCION_RENTA_EXENTA.find(t => t.tipo === it.tipoDeduccion);
@@ -563,7 +613,7 @@ export function validarRenta(
   }
 
   // 2. Tope global de la Cédula General (40% / 1.340 UVT).
-  const topeGlobalPesos = TOPES_DEDUCCION_2025.limiteGlobalDeduccionesRentasExentas * UVT_2025;
+  const topeGlobalPesos = redondearPesosDian(TOPES_DEDUCCION_2025.limiteGlobalDeduccionesRentasExentas * UVT_2025);
   const totalGeneralSinCapear = SUBRENTAS_GENERAL.reduce(
     (a, n) => a + datos.cedulas[n]?.deduccion.reduce((s, it) => s + it.valor, 0) + (datos.cedulas[n]?.rentaExenta.reduce((s, it) => s + it.valor, 0) || 0), 0,
   );
@@ -611,7 +661,7 @@ export function validarRenta(
   }
 
   // 6. Obligación de declarar (mismos topes que se muestran en la tarjeta de Topes).
-  const patrimonioObligaTope = TOPES_DEDUCCION_2025.patrimonio * UVT_2025;
+  const patrimonioObligaTope = redondearPesosDian(TOPES_DEDUCCION_2025.patrimonio * UVT_2025);
   if (resultado.patrimonioBruto >= patrimonioObligaTope) {
     hallazgos.push({ severidad: "info", categoria: "Obligación de declarar", mensaje: `El patrimonio bruto (${fmt(resultado.patrimonioBruto)}) supera el tope de 4.500 UVT (${fmt(patrimonioObligaTope)}) — obligado a declarar por este criterio.` });
   }
@@ -1083,6 +1133,12 @@ export async function generarAnexosRenta(
   lineaDivisoria();
   filaTexto("Renta líquida gravable total (Cédula General + Pensiones)", fmt(resultado.rentaLiquidaGravableTotal), { negrita: true });
   filaTexto(`Impuesto de renta (tarifa marginal ${(resultado.impuestoRenta.tarifaMarginal * 100).toFixed(0)}%, Art. 241 E.T.)`, fmt(resultado.impuestoRenta.impuesto), { negrita: true });
+  if (datos.descuentosTributarios.length > 0) {
+    for (const it of datos.descuentosTributarios) {
+      filaTexto(it.concepto, `-${fmt(it.valor)}`, { indent: 8, color: "#b91c1c" });
+    }
+    filaTexto("Impuesto neto de renta", fmt(resultado.impuestoNetoDespuesDescuentos), { negrita: true });
+  }
   doc.moveDown(0.8);
   filaTexto("Total retenciones practicadas", fmt(resultado.totalRetenciones));
   doc.moveDown(0.3);

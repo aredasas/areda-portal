@@ -18,6 +18,11 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+// La DIAN publica los topes en pesos redondeados al millar más cercano
+// (confirmado contra el archivo Ayuda Renta 2025) — no una multiplicación
+// directa sin redondear. Mismo criterio que en el backend (rentaDb.ts).
+const redondearPesosDian = (valorExacto: number) => Math.round(valorExacto / 1000) * 1000;
+
 export default function RentaPersonaNatural() {
   const now = new Date();
   // Año gravable que se está declarando (el año de la exógena consultada,
@@ -484,7 +489,7 @@ function LiquidacionTab({ anioGravable, rentaClienteIdInicial }: { anioGravable:
                       ["Movimiento", exogenaQuery.data.topeMovimiento, catalogoQuery.data?.topesObligacionUVT.movimiento],
                       ["Compras", exogenaQuery.data.topeCompras, catalogoQuery.data?.topesObligacionUVT.compras],
                     ] as [string, number | null, number | undefined][]).map(([etiqueta, valorCalculado, topeUVT]) => {
-                      const topePesos = topeUVT && catalogoQuery.data ? topeUVT * catalogoQuery.data.uvt : null;
+                      const topePesos = topeUVT && catalogoQuery.data ? redondearPesosDian(topeUVT * catalogoQuery.data.uvt) : null;
                       const obligado = topePesos != null && valorCalculado != null && valorCalculado >= topePesos;
                       return (
                         <div key={etiqueta}>
@@ -590,6 +595,7 @@ function LiquidacionTab({ anioGravable, rentaClienteIdInicial }: { anioGravable:
           <SeccionItemsCard key={`pasivo-${rentaClienteId}`} rentaClienteId={rentaClienteId} seccion="pasivo" titulo="Pasivos" puedeImportar soloLectura={soloLectura} />
           <IngresosDeduccionesPorCedulaCard key={`ced-${rentaClienteId}`} rentaClienteId={rentaClienteId} soloLectura={soloLectura} />
           <GananciaOcasionalCard key={`go-${rentaClienteId}`} rentaClienteId={rentaClienteId} soloLectura={soloLectura} />
+          <DescuentosTributariosCard key={`dt-${rentaClienteId}`} rentaClienteId={rentaClienteId} soloLectura={soloLectura} />
           <ResumenPendiente210Card key={`resumen-${rentaClienteId}`} rentaClienteId={rentaClienteId} />
           <ValidarRentaCard key={`validar-${rentaClienteId}`} rentaClienteId={rentaClienteId} />
           <Borrador210Card key={`borrador-${rentaClienteId}`} rentaClienteId={rentaClienteId} anioGravable={anioGravable} />
@@ -998,6 +1004,74 @@ function GananciaOcasionalCard({ rentaClienteId, soloLectura }: { rentaClienteId
   );
 }
 
+/** Descuentos tributarios (Art. 254-260 E.T. — impuestos pagados en el
+ * exterior, donaciones a entidades del régimen especial, etc.) — a
+ * diferencia de las deducciones/rentas exentas, estos NO reducen la
+ * renta líquida gravable: se restan directamente del impuesto de renta
+ * ya calculado, peso a peso. */
+function DescuentosTributariosCard({ rentaClienteId, soloLectura }: { rentaClienteId: number; soloLectura?: boolean }) {
+  const utils = trpc.useUtils();
+  const itemsQuery = trpc.renta.liquidacion.list.useQuery({ rentaClienteId, seccion: "descuento_tributario" });
+  const [concepto, setConcepto] = useState("");
+  const [valor, setValor] = useState("");
+
+  const invalidar = () => {
+    utils.renta.liquidacion.list.invalidate({ rentaClienteId, seccion: "descuento_tributario" });
+    utils.renta.reportes.resumenActual.invalidate({ rentaClienteId });
+  };
+  const crearMutation = trpc.renta.liquidacion.crear.useMutation({
+    onSuccess: () => { setConcepto(""); setValor(""); invalidar(); },
+    onError: (err) => toast.error(err.message || "No se pudo agregar"),
+  });
+  const eliminarMutation = trpc.renta.liquidacion.eliminar.useMutation({ onSuccess: invalidar });
+
+  const fmt = (n: number) => `$${n.toLocaleString("es-CO")}`;
+  const items = itemsQuery.data || [];
+  const total = items.reduce((a: number, it: any) => a + it.valor, 0);
+
+  const handleAgregar = () => {
+    if (!concepto.trim() || !valor) return;
+    crearMutation.mutate({ rentaClienteId, seccion: "descuento_tributario" as any, concepto: concepto.trim(), valor: Number(valor) });
+  };
+
+  return (
+    <ColapsableCard titulo="Descuentos Tributarios" defaultOpen={false}>
+      <p className="text-sm text-muted-foreground">
+        Impuestos pagados en el exterior, donaciones a entidades del régimen especial, y otros descuentos
+        tributarios (Art. 254-260 E.T.) — se restan directamente del impuesto de renta ya calculado, no de
+        la base gravable.
+      </p>
+      {!!items.length && (
+        <div className="space-y-1">
+          {items.map((it: any) => (
+            <div key={it.id} className="flex items-center justify-between text-sm border-b py-1.5 gap-2">
+              <span className="flex-1 min-w-0 truncate">{it.concepto}</span>
+              <span className="font-medium shrink-0">{fmt(it.valor)}</span>
+              {!soloLectura && (
+                <Button variant="ghost" size="icon" className="h-7 w-7 text-red-600 shrink-0" onClick={() => eliminarMutation.mutate({ id: it.id })}>
+                  <Trash2 className="w-3.5 h-3.5" />
+                </Button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="flex items-center justify-between text-base font-bold pt-1.5 border-t">
+        <span>Total descuentos tributarios</span><span>{fmt(total)}</span>
+      </div>
+      {!soloLectura && (
+        <div className="grid sm:grid-cols-[1fr_140px_auto] gap-2 items-end pt-1">
+          <Input value={concepto} onChange={(e) => setConcepto(e.target.value)} placeholder="Concepto" className="h-8" />
+          <Input value={valor} onChange={(e) => setValor(e.target.value)} placeholder="Valor" type="number" className="h-8" />
+          <Button size="sm" variant="outline" className="gap-1" onClick={handleAgregar} disabled={crearMutation.isPending}>
+            <Plus className="w-3.5 h-3.5" /> Agregar
+          </Button>
+        </div>
+      )}
+    </ColapsableCard>
+  );
+}
+
 
 function ImportarExogenaDialog({ rentaClienteId, seccion, cedula, open, onOpenChange, onImportado }: {
   rentaClienteId: number; seccion: "activo" | "pasivo" | "ingreso"; cedula?: string; open: boolean; onOpenChange: (open: boolean) => void; onImportado: () => void;
@@ -1139,7 +1213,7 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
     .filter((it: any) => ["renta_exenta", "deduccion"].includes(it.tipoValor) && !CEDULAS_GENERAL.includes(it.cedula || "trabajo"))
     .reduce((a: number, it: any) => a + it.valor, 0);
   const totalRetencionesGeneral = todosItems.filter((it: any) => it.tipoValor === "retencion").reduce((a: number, it: any) => a + it.valor, 0);
-  const topeGlobal = catalogoQuery.data ? catalogoQuery.data.topeGlobalUVT * catalogoQuery.data.uvt : 0;
+  const topeGlobal = catalogoQuery.data ? redondearPesosDian(catalogoQuery.data.topeGlobalUVT * catalogoQuery.data.uvt) : 0;
   const excedeGlobal = topeGlobal > 0 && totalGeneral > topeGlobal;
 
   // Costos/deducciones imputables como % de los ingresos brutos de la
@@ -1154,7 +1228,7 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
   // esta deducción específica en esta cédula.
   const yaTieneDependientes = porTipo("deduccion").some((it: any) => it.tipoDeduccion === "dependientes_economicos");
   const topeDependientesUVT = catalogoQuery.data?.tipos.find((t: any) => t.tipo === "dependientes_economicos")?.topeUVT;
-  const topeDependientes = topeDependientesUVT && catalogoQuery.data ? topeDependientesUVT * catalogoQuery.data.uvt : 0;
+  const topeDependientes = topeDependientesUVT && catalogoQuery.data ? redondearPesosDian(topeDependientesUVT * catalogoQuery.data.uvt) : 0;
   const sugerenciaDependientes = Math.min(totalIngresoBruto * 0.10, topeDependientes);
   const mostrarSugerenciaDependientes = (dependientesQuery.data?.length || 0) > 0 && !yaTieneDependientes
     && ["trabajo", "trabajo_honorarios"].includes(cedulaSeleccionada) && sugerenciaDependientes > 0;
@@ -1599,6 +1673,18 @@ function ResumenPendiente210Card({ rentaClienteId }: { rentaClienteId: number })
             <span>Impuesto de renta ({(r.impuestoRenta.tarifaMarginal * 100).toFixed(0)}%)</span>
             <span>{fmt(r.impuestoRenta.impuesto)}</span>
           </div>
+          {r.totalDescuentosTributarios > 0 && (
+            <>
+              <div className="flex items-center justify-between text-sm text-red-600">
+                <span>(-) Descuentos tributarios</span>
+                <span>-{fmt(r.totalDescuentosTributarios)}</span>
+              </div>
+              <div className="flex items-center justify-between font-semibold text-base border-t pt-1.5">
+                <span>Impuesto neto de renta</span>
+                <span>{fmt(r.impuestoNetoDespuesDescuentos)}</span>
+              </div>
+            </>
+          )}
 
           {/* Retenciones y anticipo — al final, cuando ya están todos los insumos */}
           <div className="border-t pt-2 grid sm:grid-cols-3 gap-2">
@@ -1759,6 +1845,16 @@ function Borrador210Card({ rentaClienteId, anioGravable }: { rentaClienteId: num
             <span>Impuesto de renta ({(ultimoResultado.impuestoRenta.tarifaMarginal * 100).toFixed(0)}%)</span>
             <span>{fmt(ultimoResultado.impuestoRenta.impuesto)}</span>
           </div>
+          {ultimoResultado.totalDescuentosTributarios > 0 && (
+            <>
+              <div className="flex items-center justify-between text-red-600">
+                <span>(-) Descuentos tributarios</span><span>-{fmt(ultimoResultado.totalDescuentosTributarios)}</span>
+              </div>
+              <div className="flex items-center justify-between font-medium border-t pt-1.5">
+                <span>Impuesto neto de renta</span><span>{fmt(ultimoResultado.impuestoNetoDespuesDescuentos)}</span>
+              </div>
+            </>
+          )}
           <div className="flex items-center justify-between text-muted-foreground">
             <span>Total retenciones practicadas</span><span>{fmt(ultimoResultado.totalRetenciones)}</span>
           </div>

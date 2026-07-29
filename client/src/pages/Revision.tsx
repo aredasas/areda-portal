@@ -655,6 +655,16 @@ function RentaResumenDialog({ cliente, onClose, onAprobar, onRechazar, aprobando
             <div className="flex items-center justify-between font-semibold text-base">
               <span>Impuesto de renta ({(r.impuestoRenta.tarifaMarginal * 100).toFixed(0)}%)</span><span>{fmt(r.impuestoRenta.impuesto)}</span>
             </div>
+            {r.totalDescuentosTributarios > 0 && (
+              <>
+                <div className="flex items-center justify-between text-red-600">
+                  <span>(-) Descuentos tributarios</span><span>-{fmt(r.totalDescuentosTributarios)}</span>
+                </div>
+                <div className="flex items-center justify-between font-semibold text-base border-t pt-1.5">
+                  <span>Impuesto neto de renta</span><span>{fmt(r.impuestoNetoDespuesDescuentos)}</span>
+                </div>
+              </>
+            )}
             <div className="grid sm:grid-cols-3 gap-2 border-t pt-2">
               <div className="border rounded-md p-2.5"><div className="text-xs text-muted-foreground">Retenciones</div><div className="font-semibold">{fmt(r.totalRetenciones)}</div></div>
               <div className="border rounded-md p-2.5"><div className="text-xs text-muted-foreground">Anticipo Método 1</div><div className="font-semibold">{fmt(r.anticipoMetodo1)}</div></div>
