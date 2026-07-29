@@ -10,7 +10,7 @@ import { trpc } from "@/lib/trpc";
 import {
   Upload, FileSpreadsheet, Loader2, Download, CheckCircle2, XCircle, Clock, Plus,
   Sparkles, LineChart, Landmark, Banknote, Receipt, Construction,
-  BookOpen, Pencil, Check, X, Search,
+  BookOpen, Pencil, Check, X, Search, Wrench,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -184,6 +184,14 @@ export default function Informes() {
     onError: (err) => toast.error(err.message || "No se pudo detectar"),
   });
 
+  const deduplicarMutation = trpc.informes.cargas.deduplicarSaldos.useMutation({
+    onSuccess: (data) => {
+      if (data.filasEliminadas > 0) toast.success(`Se encontraron y corrigieron ${data.filasEliminadas} fila(s) duplicada(s) — genera de nuevo los informes para ver los valores correctos.`);
+      else toast.info("No se encontraron datos duplicados para este cliente.");
+    },
+    onError: (err) => toast.error(err.message || "No se pudo reparar"),
+  });
+
   const tieneCentros = !!centrosQuery.data?.length;
   const cuentasPendientes = cuentasPendientesQuery.data || [];
 
@@ -263,8 +271,16 @@ export default function Informes() {
               </Card>
 
               <Card>
-                <CardHeader>
+                <CardHeader className="flex-row items-center justify-between space-y-0">
                   <CardTitle className="text-base">Cargas de {anio}</CardTitle>
+                  <Button
+                    size="sm" variant="outline" className="gap-2"
+                    onClick={() => clienteId && window.confirm("¿Revisar y reparar posibles datos duplicados de este cliente? Es seguro — solo actúa si encuentra duplicados reales.") && deduplicarMutation.mutate({ clienteId })}
+                    disabled={deduplicarMutation.isPending || !clienteId}
+                  >
+                    {deduplicarMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Wrench className="w-3.5 h-3.5" />}
+                    Reparar duplicados
+                  </Button>
                 </CardHeader>
                 <CardContent>
                   {cargasQuery.isLoading ? (

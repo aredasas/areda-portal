@@ -1,4 +1,4 @@
-import { and, eq, sql, isNull, desc } from "drizzle-orm";
+import { and, eq, sql, isNull, desc, inArray } from "drizzle-orm";
 import ExcelJS from "exceljs";
 import { Readable } from "stream";
 import { getDb } from "./db";
@@ -521,6 +521,20 @@ export async function guardarSaldosMensuales(
   const db = await getDb();
   if (!db) return;
 
+  // Se borra explícitamente lo que ya hubiera para este cliente/año/mes
+  // ANTES de insertar lo nuevo — no depende de que exista (o esté bien
+  // aplicado) el índice único de la base de datos para evitar duplicados
+  // al re-subir el mismo mes. Es más robusto: si por cualquier motivo el
+  // índice único no quedó creado correctamente, el `onDuplicateKeyUpdate`
+  // de más abajo no tiene nada contra qué comparar y MySQL simplemente
+  // inserta filas nuevas cada vez — multiplicando los valores en cada
+  // re-subida (esto fue justo lo que le pasó a un cliente real).
+  await db.delete(informesSaldosMensuales).where(and(
+    eq(informesSaldosMensuales.clienteId, clienteId),
+    eq(informesSaldosMensuales.anio, anio),
+    eq(informesSaldosMensuales.mes, mes),
+  ));
+
   const filas: { cargaId: number; clienteId: number; anio: number; mes: number; centroCodigo: string; cuenta: string; tipo: TipoSaldo; valor: number }[] = [];
   for (const [centroCodigo, cuentas] of Object.entries(detalle)) {
     for (const [cuenta, { tipo, valor }] of Object.entries(cuentas)) {
@@ -595,6 +609,37 @@ export async function getSaldosDelAnio(clienteId: number, anio: number) {
   if (!db) return [];
   return db.select().from(informesSaldosMensuales)
     .where(and(eq(informesSaldosMensuales.clienteId, clienteId), eq(informesSaldosMensuales.anio, anio)));
+}
+
+/** Repara datos ya duplicados por re-subidas anteriores (antes de esta
+ * corrección) — para cada combinación de cliente/año/mes/centro/cuenta
+ * que tenga más de una fila, se queda con la más reciente (mayor id) y
+ * borra el resto. No afecta clientes que ya estén limpios. */
+export async function deduplicarSaldosMensuales(clienteId: number): Promise<{ filasEliminadas: number }> {
+  const db = await getDb();
+  if (!db) return { filasEliminadas: 0 };
+
+  const todas = await db.select().from(informesSaldosMensuales)
+    .where(eq(informesSaldosMensuales.clienteId, clienteId));
+
+  const porClave = new Map<string, typeof todas>();
+  for (const fila of todas) {
+    const clave = `${fila.anio}|${fila.mes}|${fila.centroCodigo}|${fila.cuenta}`;
+    if (!porClave.has(clave)) porClave.set(clave, []);
+    porClave.get(clave)!.push(fila);
+  }
+
+  const idsABorrar: number[] = [];
+  for (const filas of Array.from(porClave.values())) {
+    if (filas.length <= 1) continue;
+    const masReciente = filas.reduce((a, b) => (b.id > a.id ? b : a));
+    for (const f of filas) if (f.id !== masReciente.id) idsABorrar.push(f.id);
+  }
+
+  if (idsABorrar.length > 0) {
+    await db.delete(informesSaldosMensuales).where(inArray(informesSaldosMensuales.id, idsABorrar));
+  }
+  return { filasEliminadas: idsABorrar.length };
 }
 
 export async function guardarReporteGenerado(data: {

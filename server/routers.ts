@@ -1775,6 +1775,16 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           const cargas = await informesDb.listarCargas(input.clienteId);
           return cargas.find(c => c.id === input.id) || null;
         }),
+      // Repara datos duplicados de re-subidas anteriores a la corrección
+      // que borra el periodo antes de insertar (ver guardarSaldosMensuales).
+      // Deja solo la fila más reciente por cada combinación de
+      // año/mes/centro/cuenta — no afecta clientes que ya estén limpios.
+      deduplicarSaldos: protectedProcedure
+        .input(z.object({ clienteId: z.number() }))
+        .mutation(async ({ input, ctx }) => {
+          assertInformesAccess(ctx.user.cedula);
+          return informesDb.deduplicarSaldosMensuales(input.clienteId);
+        }),
     }),
     reportes: router({
       list: protectedProcedure
