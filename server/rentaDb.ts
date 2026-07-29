@@ -73,10 +73,24 @@ function extraerRenglon(usoSugerido: string | null | undefined): string | null {
  * deudas (R30), o ingreso (cualquier otro renglón con número, típicamente
  * de renta de trabajo/capital/no laboral/pensiones). Filas sin renglón
  * reconocible quedan como "otro" para revisión manual. */
-function categorizar(renglon: string | null): ItemExogena["categoria"] {
+// Frases del detalle que la propia DIAN usa y que indican que el ítem SÍ
+// es un ingreso de la persona, aun cuando el archivo no trae un renglón
+// sugerido para él (columna "Uso declaración Sugerida" vacía) — el caso
+// más común es "Documento soporte" (compras que el pagador reportó a un
+// independiente sin factura), que Areda confirmó que sí son ingresos
+// reales y deben poder importarse a una cédula.
+const FRASES_INGRESO_SIN_RENGLON = ["documento soporte", "documentos soporte"];
+
+function quitarTildes(s: string): string {
+  return s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+
+function categorizar(renglon: string | null, detalle: string = ""): ItemExogena["categoria"] {
   if (renglon === "R29") return "patrimonio";
   if (renglon === "R30") return "deuda";
   if (renglon) return "ingreso";
+  const detalleNormalizado = quitarTildes(detalle.toLowerCase());
+  if (FRASES_INGRESO_SIN_RENGLON.some(f => detalleNormalizado.includes(f))) return "ingreso";
   return "otro";
 }
 
@@ -760,7 +774,7 @@ export async function parseExogenaDian(filePathOrBuffer: string | Buffer): Promi
       detalle: detalleTexto,
       valor,
       renglon,
-      categoria: categorizar(renglon),
+      categoria: categorizar(renglon, detalleTexto),
       infoAdicional: idx!.infoAdicional >= 0 ? String(values[idx!.infoAdicional] ?? "").trim() : "",
     });
   }

@@ -568,17 +568,37 @@ function LiquidacionTab({ anioGravable, rentaClienteIdInicial }: { anioGravable:
                     <DialogTitle>Detalle del renglón {renglonDetalle}</DialogTitle>
                   </DialogHeader>
                   <div className="space-y-1 min-w-0">
-                    {exogenaQuery.data.items
-                      .filter((it: any) => (it.renglon || "(sin renglón)") === renglonDetalle)
-                      .map((it: any, i: number) => (
+                    {(() => {
+                      const itemsDelRenglon = exogenaQuery.data.items
+                        .filter((it: any) => (it.renglon || "(sin renglón)") === renglonDetalle);
+                      // Mismo tercero + mismo concepto (detalle) repetido —
+                      // se une en una sola fila, sumando el valor, con un
+                      // contador en rojo de cuántos registros originales
+                      // se agruparon ahí.
+                      const consolidado = new Map<string, { nombreTercero: string | null; nitTercero: string | null; detalle: string | null; valor: number; cantidad: number }>();
+                      for (const it of itemsDelRenglon) {
+                        const key = `${it.nombreTercero}|${it.detalle}`;
+                        const existente = consolidado.get(key);
+                        if (existente) { existente.valor += it.valor; existente.cantidad += 1; }
+                        else consolidado.set(key, { nombreTercero: it.nombreTercero, nitTercero: it.nitTercero, detalle: it.detalle, valor: it.valor, cantidad: 1 });
+                      }
+                      return Array.from(consolidado.values()).map((it, i) => (
                         <div key={i} className="flex items-start justify-between gap-2 text-sm border-b py-1.5 min-w-0">
                           <div className="flex-1 min-w-0">
-                            <div className="font-medium truncate">{it.nombreTercero || "(tercero sin nombre en el archivo)"}</div>
+                            <div className="font-medium truncate flex items-center gap-1.5">
+                              {it.nombreTercero || "(tercero sin nombre en el archivo)"}
+                              {it.cantidad > 1 && (
+                                <span className="text-red-600 font-bold text-xs shrink-0" title={`${it.cantidad} registros de este mismo tercero y concepto, sumados`}>
+                                  {it.cantidad}
+                                </span>
+                              )}
+                            </div>
                             <div className="text-xs text-muted-foreground truncate">{it.nitTercero} · {it.detalle}</div>
                           </div>
                           <span className="font-medium shrink-0 whitespace-nowrap">{fmt(it.valor)}</span>
                         </div>
-                      ))}
+                      ));
+                    })()}
                   </div>
                 </DialogContent>
               </Dialog>
