@@ -706,6 +706,38 @@ export function validarRenta(
   return hallazgos;
 }
 
+/** Parsea un Excel simple de 2 columnas (Nombre, Cédula) para importar en
+ * bloque el listado de clientes de renta — acepta el nombre y la cédula
+ * en cualquiera de las 2 primeras columnas con encabezado, sin importar
+ * el orden exacto de las palabras del encabezado (usa sinónimos simples).
+ * Ignora filas vacías o sin cédula. */
+export function parseListadoClientesRenta(buffer: Buffer): { nombre: string; cedula: string }[] {
+  const wb = XLSX.read(buffer, { type: "buffer" });
+  const hoja = wb.Sheets[wb.SheetNames[0]];
+  const filas: any[][] = XLSX.utils.sheet_to_json(hoja, { header: 1, defval: null });
+  if (filas.length === 0) return [];
+
+  const encabezado = filas[0].map(v => String(v ?? "").trim().toUpperCase());
+  let colNombre = encabezado.findIndex(h => h.includes("NOMBRE"));
+  let colCedula = encabezado.findIndex(h => h.includes("CEDULA") || h.includes("CÉDULA") || h.includes("NIT") || h.includes("IDENTIFICACION") || h.includes("IDENTIFICACIÓN"));
+  // Si no se reconoce el encabezado, se asume Nombre en A y Cédula en B.
+  if (colNombre === -1) colNombre = 0;
+  if (colCedula === -1) colCedula = 1;
+
+  const resultado: { nombre: string; cedula: string }[] = [];
+  for (let i = 1; i < filas.length; i++) {
+    const fila = filas[i];
+    if (!fila) continue;
+    const nombre = String(fila[colNombre] ?? "").trim();
+    const cedulaRaw = fila[colCedula];
+    if (!nombre || cedulaRaw === null || cedulaRaw === undefined || cedulaRaw === "") continue;
+    const cedula = String(cedulaRaw).trim().replace(/[.,\s]/g, "");
+    if (!cedula) continue;
+    resultado.push({ nombre, cedula });
+  }
+  return resultado;
+}
+
 export async function parseExogenaDian(filePathOrBuffer: string | Buffer): Promise<ResultadoExogena> {
   const buffer = Buffer.isBuffer(filePathOrBuffer) ? filePathOrBuffer : require("fs").readFileSync(filePathOrBuffer);
   const wb = XLSX.read(buffer, { type: "buffer", cellDates: false });

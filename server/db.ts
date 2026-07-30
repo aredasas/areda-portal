@@ -2066,6 +2066,28 @@ export async function createRentaCliente(data: InsertRentaCliente): Promise<numb
   return Number((result as any).insertId ?? (result as any)[0]?.insertId);
 }
 
+/** Importa en bloque un listado de (nombre, cédula) para un año gravable
+ * — omite (sin error) los que ya existan para esa misma cédula+año, para
+ * que se pueda re-subir el mismo archivo sin duplicar. */
+export async function importarClientesRentaEnBloque(
+  anioGravable: number, clientes: { nombre: string; cedula: string }[],
+): Promise<{ creados: number; yaExistian: number }> {
+  const db = await getDb();
+  if (!db) return { creados: 0, yaExistian: 0 };
+
+  const existentes = await db.select({ cedula: rentaClientes.cedula }).from(rentaClientes)
+    .where(eq(rentaClientes.anioGravable, anioGravable));
+  const cedulasExistentes = new Set(existentes.map(e => e.cedula));
+
+  const nuevos = clientes.filter(c => !cedulasExistentes.has(c.cedula));
+  if (nuevos.length > 0) {
+    await db.insert(rentaClientes).values(nuevos.map(c => ({
+      nombre: c.nombre, cedula: c.cedula, anioGravable, noObligado: false, terminado: false, activo: true,
+    })));
+  }
+  return { creados: nuevos.length, yaExistian: clientes.length - nuevos.length };
+}
+
 export async function updateRentaCliente(id: number, data: Partial<InsertRentaCliente>) {
   const db = await getDb();
   if (!db) return;

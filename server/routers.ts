@@ -2025,6 +2025,19 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
             return da - dbb;
           });
         }),
+      // Importa en bloque un Excel de 2 columnas (Nombre, Cédula) para el
+      // año gravable indicado — omite sin error los que ya existan.
+      importarExcel: protectedProcedure
+        .input(z.object({ anioGravable: z.number(), archivoBase64: z.string() }))
+        .mutation(async ({ input, ctx }) => {
+          assertInformesAccess(ctx.user.cedula);
+          const buffer = Buffer.from(input.archivoBase64, "base64");
+          const clientes = rentaDb.parseListadoClientesRenta(buffer);
+          if (clientes.length === 0) {
+            throw new Error("No se encontraron filas con nombre y cédula en el archivo — verifica que traiga esas 2 columnas.");
+          }
+          return db.importarClientesRentaEnBloque(input.anioGravable, clientes);
+        }),
       create: protectedProcedure
         .input(z.object({ nombre: z.string().min(1), cedula: z.string().min(1), anioGravable: z.number() }))
         .mutation(async ({ input, ctx }) => {

@@ -128,6 +128,33 @@ function ClientesRentaTab({ anioGravable, onIrALiquidacion }: { anioGravable: nu
     onSuccess: () => { toast.success("Cliente eliminado"); utils.renta.clientes.list.invalidate(); },
     onError: (err) => toast.error(err.message || "No se pudo eliminar"),
   });
+  const importarMutation = trpc.renta.clientes.importarExcel.useMutation({
+    onSuccess: (data) => {
+      toast.success(`${data.creados} cliente(s) agregado(s)${data.yaExistian > 0 ? ` — ${data.yaExistian} ya existían y se omitieron` : ""}`);
+      utils.renta.clientes.list.invalidate();
+    },
+    onError: (err) => toast.error(err.message || "No se pudo importar el archivo"),
+  });
+  const fileImportRef = useRef<HTMLInputElement>(null);
+  const [importando, setImportando] = useState(false);
+
+  const handleImportar = async (file: File) => {
+    setImportando(true);
+    try {
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve((reader.result as string).split(",")[1]);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+      await importarMutation.mutateAsync({ anioGravable, archivoBase64: base64 });
+    } catch (e: any) {
+      toast.error(e.message || "Error al leer el archivo");
+    } finally {
+      setImportando(false);
+      if (fileImportRef.current) fileImportRef.current.value = "";
+    }
+  };
 
   const resetForm = () => { setNombre(""); setCedula(""); setEditing(null); };
   const openNew = () => { resetForm(); setShowForm(true); };
@@ -179,9 +206,16 @@ function ClientesRentaTab({ anioGravable, onIrALiquidacion }: { anioGravable: nu
             Mostrar inactivos
           </label>
         </div>
-        <Button onClick={openNew} className="gap-2 bg-[#EDA011] hover:bg-[#d48f0f] text-white">
-          <Plus className="w-4 h-4" /> Agregar cliente
-        </Button>
+        <div className="flex gap-2">
+          <input ref={fileImportRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImportar(f); }} />
+          <Button variant="outline" className="gap-2" onClick={() => fileImportRef.current?.click()} disabled={importando}>
+            {importando ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+            Importar clientes (Excel)
+          </Button>
+          <Button onClick={openNew} className="gap-2 bg-[#EDA011] hover:bg-[#d48f0f] text-white">
+            <Plus className="w-4 h-4" /> Agregar cliente
+          </Button>
+        </div>
       </div>
 
       <Card>
