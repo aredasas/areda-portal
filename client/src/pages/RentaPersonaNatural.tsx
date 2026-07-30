@@ -124,10 +124,6 @@ function ClientesRentaTab({ anioGravable, onIrALiquidacion }: { anioGravable: nu
     onSuccess: () => { utils.renta.clientes.list.invalidate(); },
     onError: (err) => toast.error(err.message || "No se pudo actualizar"),
   });
-  const deleteMutation = trpc.renta.clientes.delete.useMutation({
-    onSuccess: () => { toast.success("Cliente eliminado"); utils.renta.clientes.list.invalidate(); },
-    onError: (err) => toast.error(err.message || "No se pudo eliminar"),
-  });
   const importarMutation = trpc.renta.clientes.importarExcel.useMutation({
     onSuccess: (data) => {
       toast.success(`${data.creados} cliente(s) agregado(s)${data.yaExistian > 0 ? ` — ${data.yaExistian} ya existían y se omitieron` : ""}`);
@@ -182,11 +178,6 @@ function ClientesRentaTab({ anioGravable, onIrALiquidacion }: { anioGravable: nu
     const accion = c.activo ? "inactivar" : "reactivar";
     if (!window.confirm(`¿Seguro que quieres ${accion} a ${c.nombre}?`)) return;
     updateMutation.mutate({ id: c.id, activo: !c.activo });
-  };
-
-  const handleDelete = (c: any) => {
-    if (!window.confirm(`¿Eliminar a ${c.nombre} de la lista de renta ${anioGravable}?`)) return;
-    deleteMutation.mutate({ id: c.id });
   };
 
   const clientesFiltrados = (clientesQuery.data || []).filter((c: any) =>
@@ -291,7 +282,6 @@ function ClientesRentaTab({ anioGravable, onIrALiquidacion }: { anioGravable: nu
                         >
                           {c.activo ? <Ban className="w-3.5 h-3.5" /> : <RotateCcw className="w-3.5 h-3.5" />}
                         </Button>
-                        <Button variant="ghost" size="icon" className="h-8 w-8 text-red-600" onClick={() => handleDelete(c)}><Trash2 className="w-3.5 h-3.5" /></Button>
                       </div>
                     </td>
                   </tr>
@@ -400,6 +390,10 @@ function LiquidacionTab({ anioGravable, rentaClienteIdInicial }: { anioGravable:
   const utils = trpc.useUtils();
   const [renglonDetalle, setRenglonDetalle] = useState<string | null>(null);
   const catalogoQuery = trpc.renta.liquidacion.catalogoTopes.useQuery();
+  const toggleNoObligadoMutation = trpc.renta.clientes.update.useMutation({
+    onSuccess: () => utils.renta.clientes.list.invalidate(),
+    onError: (err) => toast.error(err.message || "No se pudo actualizar"),
+  });
 
   useEffect(() => {
     if (rentaClienteIdInicial != null) setRentaClienteId(rentaClienteIdInicial);
@@ -522,8 +516,17 @@ function LiquidacionTab({ anioGravable, rentaClienteIdInicial }: { anioGravable:
             <>
               <Card>
                 <CardHeader>
-                  <CardTitle className="text-base flex items-center gap-2">
-                    <Wallet className="w-4 h-4" /> Topes (calculados por la DIAN)
+                  <CardTitle className="text-base flex items-center justify-between">
+                    <span className="flex items-center gap-2">
+                      <Wallet className="w-4 h-4" /> Topes (calculados por la DIAN)
+                    </span>
+                    <label className="flex items-center gap-1.5 text-sm font-normal text-muted-foreground cursor-pointer">
+                      <Checkbox
+                        checked={!!clienteSeleccionado?.noObligado}
+                        onCheckedChange={(v) => rentaClienteId && toggleNoObligadoMutation.mutate({ id: rentaClienteId, noObligado: !!v })}
+                      />
+                      No obligado a declarar
+                    </label>
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
