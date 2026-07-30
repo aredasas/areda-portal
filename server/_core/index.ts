@@ -57,14 +57,20 @@ async function startServer() {
       try {
         const { sdk } = await import("./sdk");
         const user = await sdk.authenticateRequest(req);
-        const { INFORMES_AUTHORIZED_CEDULA } = await import("../routers");
-        if (!user || user.cedula !== INFORMES_AUTHORIZED_CEDULA) {
+        if (!user) {
           return res.status(403).json({ error: "No autorizado" });
         }
         const clienteId = parseInt(String(req.query.clienteId));
         const nombreArchivo = String(req.query.nombreArchivo || "libro_auxiliar.xlsx");
         if (!clienteId) {
           return res.status(400).json({ error: "clienteId es requerido" });
+        }
+        if (user.role !== "admin") {
+          const db = await import("../db");
+          const cliente = await db.getClientById(clienteId);
+          if (!cliente || cliente.managerId !== user.id) {
+            return res.status(403).json({ error: "No tienes acceso a este cliente." });
+          }
         }
         if (clientesEnProceso.has(clienteId)) {
           return res.status(409).json({
@@ -168,13 +174,19 @@ async function startServer() {
       try {
         const { sdk } = await import("./sdk");
         const user = await sdk.authenticateRequest(req);
-        const { INFORMES_AUTHORIZED_CEDULA } = await import("../routers");
-        if (!user || user.cedula !== INFORMES_AUTHORIZED_CEDULA) {
+        if (!user) {
           return res.status(403).json({ error: "No autorizado" });
         }
         const clienteId = parseInt(String(req.query.clienteId));
         if (!clienteId) {
           return res.status(400).json({ error: "clienteId es requerido" });
+        }
+        if (user.role !== "admin") {
+          const db = await import("../db");
+          const cliente = await db.getClientById(clienteId);
+          if (!cliente || cliente.managerId !== user.id) {
+            return res.status(403).json({ error: "No tienes acceso a este cliente." });
+          }
         }
 
         const informesDb = await import("../informesDb");
@@ -201,13 +213,19 @@ async function startServer() {
       try {
         const { sdk } = await import("./sdk");
         const user = await sdk.authenticateRequest(req);
-        const { INFORMES_AUTHORIZED_CEDULA } = await import("../routers");
-        if (!user || user.cedula !== INFORMES_AUTHORIZED_CEDULA) {
+        if (!user) {
           return res.status(403).json({ error: "No autorizado" });
         }
         const clienteId = parseInt(String(req.query.clienteId));
         if (!clienteId) {
           return res.status(400).json({ error: "clienteId es requerido" });
+        }
+        if (user.role !== "admin") {
+          const db = await import("../db");
+          const cliente = await db.getClientById(clienteId);
+          if (!cliente || cliente.managerId !== user.id) {
+            return res.status(403).json({ error: "No tienes acceso a este cliente." });
+          }
         }
 
         const informesDb = await import("../informesDb");

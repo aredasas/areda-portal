@@ -59,8 +59,8 @@ const menuItems = [
   { icon: LayoutGrid, label: "Tablero", path: "/tablero" },
   { icon: CheckSquare, label: "Revisión", path: "/revision", adminOnly: true },
   { icon: Clock, label: "Asistencia", path: "/asistencia", adminOnly: true, restrictedToCedula: "5820262" },
-  { icon: LineChart, label: "Informes", path: "/informes", adminOnly: true, restrictedToCedula: "5820262" },
-  { icon: UserSquare2, label: "Renta PN", path: "/renta-persona-natural", adminOnly: true, restrictedToCedula: "5820262" },
+  { icon: LineChart, label: "Informes", path: "/informes" },
+  { icon: UserSquare2, label: "Renta PN", path: "/renta-persona-natural", adminOnly: true },
   { icon: Users, label: "Colaboradores", path: "/colaboradores", adminOnly: true },
   { icon: Settings, label: "Configuración", path: "/configuracion", adminOnly: true },
 ];

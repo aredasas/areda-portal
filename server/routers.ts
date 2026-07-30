@@ -5,12 +5,23 @@ import crypto from "crypto";
 // admin by explicit business request — not all admins should see it.
 const ASISTENCIA_AUTHORIZED_CEDULA = "5820262";
 
-// Módulo Informes (Estado de Resultados por Centro de Costo) — visible por
-// ahora solo para este usuario, mismo criterio que Asistencia.
-export const INFORMES_AUTHORIZED_CEDULA = "5820262";
-function assertInformesAccess(cedula: string | null | undefined) {
-  if (cedula !== INFORMES_AUTHORIZED_CEDULA) {
-    throw new TRPCError({ code: "FORBIDDEN", message: "No autorizado para el módulo Informes" });
+// Módulo Renta PN — restringido a administradores (cualquiera, no solo
+// una cédula puntual) por pedido explícito de Arlex.
+function assertRentaPNAccess(role: string | null | undefined) {
+  if (role !== "admin") {
+    throw new TRPCError({ code: "FORBIDDEN", message: "No autorizado para el módulo Renta PN" });
+  }
+}
+
+// Módulo Informes — visible para cualquier usuario autenticado; los que
+// no son administradores solo pueden operar sobre sus clientes asignados
+// (mismo campo `managerId` que usa el resto de la app). Se valida por
+// cliente en cada endpoint que reciba un clienteId.
+async function assertClienteAccesibleInformes(ctx: { user: { id: number; role: string | null } }, clienteId: number) {
+  if (ctx.user.role === "admin") return;
+  const cliente = await db.getClientById(clienteId);
+  if (!cliente || cliente.managerId !== ctx.user.id) {
+    throw new TRPCError({ code: "FORBIDDEN", message: "No tienes acceso a este cliente." });
   }
 }
 
@@ -1677,23 +1688,26 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
   }),
 
   informes: router({
-    // Clientes disponibles para el módulo (todos los activos de Areda Work;
-    // el módulo en sí ya está restringido por cédula en cada endpoint).
+    // Clientes disponibles para el módulo — visible para cualquier usuario
+    // autenticado; los que no son administradores solo ven los clientes
+    // donde son el gerente/responsable asignado (managerId), igual que en
+    // el módulo general de Clientes. Cada endpoint que reciba un
+    // clienteId además valida que el usuario tenga acceso a ESE cliente
+    // en particular (ver assertClienteAccesibleInformes).
     clientes: router({
       list: protectedProcedure.query(async ({ ctx }) => {
-        assertInformesAccess(ctx.user.cedula);
-        return db.getAllClients();
+        return db.getAllClients(ctx.user.role === "admin" ? undefined : ctx.user.id);
       }),
     }),
     cuentas: router({
       // Cuentas que ya se vieron en alguna carga pero se quedaron sin
       // nombre (ej. porque la clasificación por IA falló esa vez).
       pendientesDeNombre: protectedProcedure.query(async ({ ctx }) => {
-        assertInformesAccess(ctx.user.cedula);
+        if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Solo el administrador puede hacer esto." });
         return informesDb.getCuentasSinDescripcion();
       }),
       reclasificar: protectedProcedure.mutation(async ({ ctx }) => {
-        assertInformesAccess(ctx.user.cedula);
+        if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Solo el administrador puede hacer esto." });
         const pendientes = await informesDb.getCuentasSinDescripcion();
         if (pendientes.length === 0) return { intentadas: 0, clasificadas: 0 };
         const resultado = await informesDb.clasificarCuentasNuevas(pendientes);
@@ -1705,13 +1719,13 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
       catalogoCliente: protectedProcedure
         .input(z.object({ clienteId: z.number() }))
         .query(async ({ input, ctx }) => {
-          assertInformesAccess(ctx.user.cedula);
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
           return informesDb.listarCatalogoCliente(input.clienteId);
         }),
       actualizarNombreCliente: protectedProcedure
         .input(z.object({ clienteId: z.number(), cuenta: z.string().min(1), nombre: z.string().min(1) }))
         .mutation(async ({ input, ctx }) => {
-          assertInformesAccess(ctx.user.cedula);
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
           await informesDb.actualizarNombreCuentaManual(input.clienteId, input.cuenta, input.nombre);
           return { success: true };
         }),
@@ -1720,13 +1734,13 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
       list: protectedProcedure
         .input(z.object({ clienteId: z.number() }))
         .query(async ({ input, ctx }) => {
-          assertInformesAccess(ctx.user.cedula);
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
           return informesDb.getCentrosCosto(input.clienteId);
         }),
       create: protectedProcedure
         .input(z.object({ clienteId: z.number(), codigo: z.string().min(1), nombre: z.string().min(1) }))
         .mutation(async ({ input, ctx }) => {
-          assertInformesAccess(ctx.user.cedula);
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
           await informesDb.createCentroCosto(input.clienteId, input.codigo, input.nombre);
           return { success: true };
         }),
@@ -1735,7 +1749,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
       detectarDesdeSaldos: protectedProcedure
         .input(z.object({ clienteId: z.number() }))
         .mutation(async ({ input, ctx }) => {
-          assertInformesAccess(ctx.user.cedula);
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
           return informesDb.detectarCentrosCostoDesdeSaldos(input.clienteId);
         }),
       // Conveniencia: siembra el catálogo conocido de Colfamil (23 puntos +
@@ -1744,14 +1758,14 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
       seedColfamil: protectedProcedure
         .input(z.object({ clienteId: z.number() }))
         .mutation(async ({ input, ctx }) => {
-          assertInformesAccess(ctx.user.cedula);
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
           await informesDb.seedCentrosCosto(input.clienteId, informesDb.CENTROS_SEED_COLFAMIL);
           return { success: true };
         }),
       update: protectedProcedure
         .input(z.object({ id: z.number(), nombre: z.string().optional(), activo: z.boolean().optional() }))
         .mutation(async ({ input, ctx }) => {
-          assertInformesAccess(ctx.user.cedula);
+          if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Solo el administrador puede hacer esto." });
           const { id, ...data } = input;
           await informesDb.updateCentroCosto(id, data);
           return { success: true };
@@ -1761,7 +1775,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
       list: protectedProcedure
         .input(z.object({ clienteId: z.number(), anio: z.number().optional() }))
         .query(async ({ input, ctx }) => {
-          assertInformesAccess(ctx.user.cedula);
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
           return informesDb.listarCargas(input.clienteId, input.anio);
         }),
       // La subida real del archivo (puede pesar 50-100mb+) va por
@@ -1771,7 +1785,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
       getById: protectedProcedure
         .input(z.object({ clienteId: z.number(), id: z.number() }))
         .query(async ({ input, ctx }) => {
-          assertInformesAccess(ctx.user.cedula);
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
           const cargas = await informesDb.listarCargas(input.clienteId);
           return cargas.find(c => c.id === input.id) || null;
         }),
@@ -1782,7 +1796,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
       deduplicarSaldos: protectedProcedure
         .input(z.object({ clienteId: z.number() }))
         .mutation(async ({ input, ctx }) => {
-          assertInformesAccess(ctx.user.cedula);
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
           return informesDb.deduplicarSaldosMensuales(input.clienteId);
         }),
     }),
@@ -1790,7 +1804,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
       list: protectedProcedure
         .input(z.object({ clienteId: z.number(), anio: z.number().optional() }))
         .query(async ({ input, ctx }) => {
-          assertInformesAccess(ctx.user.cedula);
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
           return informesDb.listarReportes(input.clienteId, input.anio);
         }),
       // ERM (Estado de Resultados Mensual comparativo) — el informe
@@ -1802,7 +1816,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           nivel: z.enum(["resumen", "detalle"]).default("resumen"),
         }))
         .mutation(async ({ input, ctx }) => {
-          assertInformesAccess(ctx.user.cedula);
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
           const buffer = await generarReporteERM(input.clienteId, input.anio, input.nivel);
           const key = `informes/ERM_${input.clienteId}_${input.anio}_${input.nivel}_${Date.now()}.xlsx`;
           const { url, key: fileKey } = await storagePut(
@@ -1823,7 +1837,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           nivel: z.enum(["resumen", "detalle"]).default("resumen"),
         }))
         .mutation(async ({ input, ctx }) => {
-          assertInformesAccess(ctx.user.cedula);
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
           const buffer = await generarReporteERI(input.clienteId, input.anio, input.mes, input.nivel);
           const key = `informes/ERI_${input.clienteId}_${input.anio}_${String(input.mes).padStart(2, "0")}_${Date.now()}.xlsx`;
           const { url, key: fileKey } = await storagePut(
@@ -1839,7 +1853,6 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
       getDownloadUrl: protectedProcedure
         .input(z.object({ fileKey: z.string() }))
         .query(async ({ input, ctx }) => {
-          assertInformesAccess(ctx.user.cedula);
           return { signedUrl: await storageGetSignedUrl(input.fileKey) };
         }),
     }),
@@ -1850,7 +1863,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
       auxiliarDisponible: protectedProcedure
         .input(z.object({ clienteId: z.number(), anio: z.number(), mes: z.number().min(1).max(12) }))
         .query(async ({ input, ctx }) => {
-          assertInformesAccess(ctx.user.cedula);
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
           const carga = await informesDb.getCargaConArchivo(input.clienteId, input.anio, input.mes);
           if (!carga) return null;
           return { nombreArchivo: carga.nombreArchivo, totalFilas: carga.totalFilas };
@@ -1865,7 +1878,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           dianBase64: z.string(),
         }))
         .mutation(async ({ input, ctx }) => {
-          assertInformesAccess(ctx.user.cedula);
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
           const cliente = (await db.getAllClients()).find((c: any) => c.id === input.clienteId);
           const bufferDian = Buffer.from(input.dianBase64, "base64");
 
@@ -1999,13 +2012,13 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
   }),
 
   renta: router({
-    // Restringido a la misma cédula que Informes (Arlex) — mismo patrón,
-    // ver assertInformesAccess.
+    // Restringido a usuarios con rol administrador (cualquiera, no una
+    // cédula puntual) — ver assertRentaPNAccess.
     clientes: router({
       list: protectedProcedure
         .input(z.object({ anioGravable: z.number(), incluirInactivos: z.boolean().optional() }))
         .query(async ({ input, ctx }) => {
-          assertInformesAccess(ctx.user.cedula);
+          assertRentaPNAccess(ctx.user.role);
           const filas = await db.getRentaClientes(input.anioGravable, input.incluirInactivos);
           const conVencimiento = await Promise.all(filas.map(async (c) => {
             const vencimiento = c.noObligado ? null : await db.getVencimientoRentaPN(c.cedula, c.anioGravable);
@@ -2030,7 +2043,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
       importarExcel: protectedProcedure
         .input(z.object({ anioGravable: z.number(), archivoBase64: z.string() }))
         .mutation(async ({ input, ctx }) => {
-          assertInformesAccess(ctx.user.cedula);
+          assertRentaPNAccess(ctx.user.role);
           const buffer = Buffer.from(input.archivoBase64, "base64");
           const clientes = rentaDb.parseListadoClientesRenta(buffer);
           if (clientes.length === 0) {
@@ -2041,7 +2054,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
       create: protectedProcedure
         .input(z.object({ nombre: z.string().min(1), cedula: z.string().min(1), anioGravable: z.number() }))
         .mutation(async ({ input, ctx }) => {
-          assertInformesAccess(ctx.user.cedula);
+          assertRentaPNAccess(ctx.user.role);
           const id = await db.createRentaCliente({
             nombre: input.nombre, cedula: input.cedula.replace(/\D/g, ""),
             anioGravable: input.anioGravable, createdById: ctx.user.id,
@@ -2054,7 +2067,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           noObligado: z.boolean().optional(), terminado: z.boolean().optional(), activo: z.boolean().optional(),
         }))
         .mutation(async ({ input, ctx }) => {
-          assertInformesAccess(ctx.user.cedula);
+          assertRentaPNAccess(ctx.user.role);
           const { id, ...data } = input;
           if (data.cedula) data.cedula = data.cedula.replace(/\D/g, "");
           await db.updateRentaCliente(id, data);
@@ -2063,7 +2076,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
       delete: protectedProcedure
         .input(z.object({ id: z.number() }))
         .mutation(async ({ input, ctx }) => {
-          assertInformesAccess(ctx.user.cedula);
+          assertRentaPNAccess(ctx.user.role);
           await db.deleteRentaCliente(input.id);
           return { success: true };
         }),
@@ -2071,14 +2084,14 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
       guardarDrive: protectedProcedure
         .input(z.object({ rentaClienteId: z.number(), driveFolderUrl: z.string() }))
         .mutation(async ({ input, ctx }) => {
-          assertInformesAccess(ctx.user.cedula);
+          assertRentaPNAccess(ctx.user.role);
           await db.updateRentaCliente(input.rentaClienteId, { driveFolderUrl: input.driveFolderUrl });
           return { success: true };
         }),
       listarArchivosDrive: protectedProcedure
         .input(z.object({ rentaClienteId: z.number() }))
         .query(async ({ input, ctx }) => {
-          assertInformesAccess(ctx.user.cedula);
+          assertRentaPNAccess(ctx.user.role);
           const cliente = await db.getRentaClienteById(input.rentaClienteId);
           if (!cliente?.driveFolderUrl || !isDriveConfigured()) return [];
           const folderId = extractFolderIdFromUrl(cliente.driveFolderUrl);
@@ -2088,7 +2101,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
       subirArchivoDrive: protectedProcedure
         .input(z.object({ rentaClienteId: z.number(), fileName: z.string(), fileBase64: z.string(), contentType: z.string() }))
         .mutation(async ({ input, ctx }) => {
-          assertInformesAccess(ctx.user.cedula);
+          assertRentaPNAccess(ctx.user.role);
           if (!isDriveConfigured()) throw new Error("Google Drive no está configurado en este servidor.");
           const cliente = await db.getRentaClienteById(input.rentaClienteId);
           if (!cliente?.driveFolderUrl) throw new Error("Este cliente de renta no tiene una carpeta de Drive configurada.");
@@ -2102,7 +2115,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
       catalogoDocumentos: protectedProcedure
         .input(z.object({ rentaClienteId: z.number() }))
         .query(async ({ input, ctx }) => {
-          assertInformesAccess(ctx.user.cedula);
+          assertRentaPNAccess(ctx.user.role);
           const exogena = await db.getExogenaRenta(input.rentaClienteId);
           const recomendadas = exogena
             ? Array.from(rentaDb.recomendarCategoriasDocumentos(exogena.items.map((it: any) => ({ categoria: it.categoria, detalle: it.detalle || "" }))))
@@ -2115,7 +2128,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           itemsSeleccionados: z.array(z.string()), documentosAdicionales: z.array(z.string()), observaciones: z.string(),
         }))
         .mutation(async ({ input, ctx }) => {
-          assertInformesAccess(ctx.user.cedula);
+          assertRentaPNAccess(ctx.user.role);
           const cliente = await db.getRentaClienteById(input.rentaClienteId);
           if (!cliente) throw new Error("Cliente de renta no encontrado.");
           const buffer = await rentaDb.generarSolicitudDocumentos(
@@ -2136,7 +2149,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
       limpiarDatosLiquidacion: protectedProcedure
         .input(z.object({ confirmacion: z.string() }))
         .mutation(async ({ input, ctx }) => {
-          assertInformesAccess(ctx.user.cedula);
+          assertRentaPNAccess(ctx.user.role);
           if (ctx.user.role !== "admin") {
             throw new TRPCError({ code: "FORBIDDEN", message: "Solo el administrador puede limpiar los datos de Liquidación." });
           }
@@ -2149,7 +2162,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
       solicitarRevision: protectedProcedure
         .input(z.object({ rentaClienteId: z.number() }))
         .mutation(async ({ input, ctx }) => {
-          assertInformesAccess(ctx.user.cedula);
+          assertRentaPNAccess(ctx.user.role);
           await db.updateRentaCliente(input.rentaClienteId, {
             estadoRevision: "solicitada", revisionSolicitadaPorId: ctx.user.id, revisionSolicitadaAt: new Date(), revisionComentario: null,
           });
@@ -2158,23 +2171,23 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
       aprobarRevision: protectedProcedure
         .input(z.object({ rentaClienteId: z.number() }))
         .mutation(async ({ input, ctx }) => {
-          assertInformesAccess(ctx.user.cedula);
+          assertRentaPNAccess(ctx.user.role);
           await db.updateRentaCliente(input.rentaClienteId, { estadoRevision: "aprobada" });
           return { success: true };
         }),
       rechazarRevision: protectedProcedure
         .input(z.object({ rentaClienteId: z.number(), comentario: z.string().optional() }))
         .mutation(async ({ input, ctx }) => {
-          assertInformesAccess(ctx.user.cedula);
+          assertRentaPNAccess(ctx.user.role);
           await db.updateRentaCliente(input.rentaClienteId, { estadoRevision: "rechazada", revisionComentario: input.comentario || null });
           return { success: true };
         }),
       pendientesRevision: protectedProcedure.query(async ({ ctx }) => {
-        assertInformesAccess(ctx.user.cedula);
+        assertRentaPNAccess(ctx.user.role);
         return db.getRentaClientesPendientesRevision();
       }),
       terminados: protectedProcedure.query(async ({ ctx }) => {
-        assertInformesAccess(ctx.user.cedula);
+        assertRentaPNAccess(ctx.user.role);
         return db.getRentaClientesTerminados();
       }),
       // Reabre una renta ya terminada — vuelve a quedar editable en
@@ -2184,7 +2197,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
       reabrir: protectedProcedure
         .input(z.object({ rentaClienteId: z.number() }))
         .mutation(async ({ input, ctx }) => {
-          assertInformesAccess(ctx.user.cedula);
+          assertRentaPNAccess(ctx.user.role);
           if (ctx.user.role !== "admin") {
             throw new TRPCError({ code: "FORBIDDEN", message: "Solo el administrador puede reabrir una renta terminada." });
           }
@@ -2195,7 +2208,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
       subirDeclaracionFinal: protectedProcedure
         .input(z.object({ rentaClienteId: z.number(), fileName: z.string(), fileBase64: z.string(), contentType: z.string() }))
         .mutation(async ({ input, ctx }) => {
-          assertInformesAccess(ctx.user.cedula);
+          assertRentaPNAccess(ctx.user.role);
           const cliente = await db.getRentaClienteById(input.rentaClienteId);
           if (cliente?.estadoRevision !== "aprobada") {
             throw new Error("La revisión debe estar aprobada antes de subir la declaración final.");
@@ -2211,7 +2224,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
       get: protectedProcedure
         .input(z.object({ rentaClienteId: z.number() }))
         .query(async ({ input, ctx }) => {
-          assertInformesAccess(ctx.user.cedula);
+          assertRentaPNAccess(ctx.user.role);
           const exogena = await db.getExogenaRenta(input.rentaClienteId);
           if (!exogena) return null;
           const resumen = rentaDb.resumirPorRenglon(exogena.items as any);
@@ -2224,7 +2237,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           rentaClienteId: z.number(), nombreArchivo: z.string(), archivoBase64: z.string(),
         }))
         .mutation(async ({ input, ctx }) => {
-          assertInformesAccess(ctx.user.cedula);
+          assertRentaPNAccess(ctx.user.role);
           const buffer = Buffer.from(input.archivoBase64, "base64");
           const resultado = await rentaDb.parseExogenaDian(buffer);
           if (resultado.items.length === 0 && Object.values(resultado.topes).every(v => v === null)) {
@@ -2254,7 +2267,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
       get: protectedProcedure
         .input(z.object({ rentaClienteId: z.number() }))
         .query(async ({ input, ctx }) => {
-          assertInformesAccess(ctx.user.cedula);
+          assertRentaPNAccess(ctx.user.role);
           return db.getDeclaracionAnterior(input.rentaClienteId);
         }),
       guardar: protectedProcedure
@@ -2266,7 +2279,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           anticipoAnioActual: z.number().optional(),
         }))
         .mutation(async ({ input, ctx }) => {
-          assertInformesAccess(ctx.user.cedula);
+          assertRentaPNAccess(ctx.user.role);
           const { rentaClienteId, ...data } = input;
           await db.guardarDeclaracionAnterior(rentaClienteId, data);
           return { success: true };
@@ -2276,7 +2289,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
       // Los topes/catálogo de deducciones se exponen para que el frontend
       // muestre el tope de cada tipo sin duplicar esos números ahí.
       catalogoTopes: protectedProcedure.query(async ({ ctx }) => {
-        assertInformesAccess(ctx.user.cedula);
+        assertRentaPNAccess(ctx.user.role);
         return {
           uvt: rentaDb.UVT_2025, tipos: rentaDb.TIPOS_DEDUCCION_RENTA_EXENTA,
           topeGlobalUVT: rentaDb.TOPES_DEDUCCION_2025.limiteGlobalDeduccionesRentasExentas, cedulas: rentaDb.CEDULAS,
@@ -2291,7 +2304,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
       list: protectedProcedure
         .input(z.object({ rentaClienteId: z.number(), seccion: z.string().optional() }))
         .query(async ({ input, ctx }) => {
-          assertInformesAccess(ctx.user.cedula);
+          assertRentaPNAccess(ctx.user.role);
           return db.getLiquidacionItems(input.rentaClienteId, input.seccion);
         }),
       crear: protectedProcedure
@@ -2303,7 +2316,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           concepto: z.string().min(1), valor: z.number(),
         }))
         .mutation(async ({ input, ctx }) => {
-          assertInformesAccess(ctx.user.cedula);
+          assertRentaPNAccess(ctx.user.role);
           let alerta: string | null = null;
           if (input.tipoDeduccion) {
             let ingresoBrutoCedula: number | undefined;
@@ -2331,7 +2344,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
       actualizar: protectedProcedure
         .input(z.object({ id: z.number(), concepto: z.string().optional(), valor: z.number().optional() }))
         .mutation(async ({ input, ctx }) => {
-          assertInformesAccess(ctx.user.cedula);
+          assertRentaPNAccess(ctx.user.role);
           const { id, ...data } = input;
           await db.actualizarLiquidacionItem(id, data);
           return { success: true };
@@ -2339,7 +2352,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
       eliminar: protectedProcedure
         .input(z.object({ id: z.number() }))
         .mutation(async ({ input, ctx }) => {
-          assertInformesAccess(ctx.user.cedula);
+          assertRentaPNAccess(ctx.user.role);
           await db.eliminarLiquidacionItem(input.id);
           return { success: true };
         }),
@@ -2348,7 +2361,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
       importarDesdeExogena: protectedProcedure
         .input(z.object({ rentaClienteId: z.number(), seccion: z.enum(["activo", "pasivo", "ingreso"]) }))
         .mutation(async ({ input, ctx }) => {
-          assertInformesAccess(ctx.user.cedula);
+          assertRentaPNAccess(ctx.user.role);
           const importados = await db.importarDesdeExogena(input.rentaClienteId, input.seccion);
           return { importados };
         }),
@@ -2357,7 +2370,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
       exogenaDisponibles: protectedProcedure
         .input(z.object({ rentaClienteId: z.number(), seccion: z.enum(["activo", "pasivo", "ingreso"]) }))
         .query(async ({ input, ctx }) => {
-          assertInformesAccess(ctx.user.cedula);
+          assertRentaPNAccess(ctx.user.role);
           return db.getExogenaItemsDisponibles(input.rentaClienteId, input.seccion);
         }),
       importarSeleccionDesdeExogena: protectedProcedure
@@ -2366,7 +2379,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           exogenaItemIds: z.array(z.number()), cedula: z.enum(["trabajo", "trabajo_honorarios", "capital", "no_laboral", "pensiones", "dividendos"]).optional(),
         }))
         .mutation(async ({ input, ctx }) => {
-          assertInformesAccess(ctx.user.cedula);
+          assertRentaPNAccess(ctx.user.role);
           const importados = await db.importarItemsExogenaSeleccionados(input.rentaClienteId, input.seccion, input.exogenaItemIds, input.cedula);
           return { importados };
         }),
@@ -2375,20 +2388,20 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
       list: protectedProcedure
         .input(z.object({ rentaClienteId: z.number() }))
         .query(async ({ input, ctx }) => {
-          assertInformesAccess(ctx.user.cedula);
+          assertRentaPNAccess(ctx.user.role);
           return db.getRentaReportes(input.rentaClienteId);
         }),
       getDownloadUrl: protectedProcedure
         .input(z.object({ fileKey: z.string() }))
         .query(async ({ input, ctx }) => {
-          assertInformesAccess(ctx.user.cedula);
+          assertRentaPNAccess(ctx.user.role);
           return { signedUrl: await storageGetSignedUrl(input.fileKey) };
         }),
       // Solo el administrador puede borrar del historial de generados.
       eliminar: protectedProcedure
         .input(z.object({ id: z.number() }))
         .mutation(async ({ input, ctx }) => {
-          assertInformesAccess(ctx.user.cedula);
+          assertRentaPNAccess(ctx.user.role);
           if (ctx.user.role !== "admin") {
             throw new TRPCError({ code: "FORBIDDEN", message: "Solo el administrador puede eliminar reportes generados." });
           }
@@ -2403,7 +2416,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
       resumenActual: protectedProcedure
         .input(z.object({ rentaClienteId: z.number() }))
         .query(async ({ input, ctx }) => {
-          assertInformesAccess(ctx.user.cedula);
+          assertRentaPNAccess(ctx.user.role);
           const datos = await db.getDatosLiquidacion(input.rentaClienteId);
           if (!datos) return null;
           return rentaDb.armarLiquidacion(datos);
@@ -2414,7 +2427,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
       validarRenta: protectedProcedure
         .input(z.object({ rentaClienteId: z.number() }))
         .query(async ({ input, ctx }) => {
-          assertInformesAccess(ctx.user.cedula);
+          assertRentaPNAccess(ctx.user.role);
           const datos = await db.getDatosLiquidacion(input.rentaClienteId);
           if (!datos) return { hallazgos: [] };
           const resultado = rentaDb.armarLiquidacion(datos);
@@ -2433,7 +2446,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
       generarBorrador210: protectedProcedure
         .input(z.object({ rentaClienteId: z.number(), anioGravable: z.number() }))
         .mutation(async ({ input, ctx }) => {
-          assertInformesAccess(ctx.user.cedula);
+          assertRentaPNAccess(ctx.user.role);
           const cliente = (await db.getRentaClientes(input.anioGravable)).find((c: any) => c.id === input.rentaClienteId);
           if (!cliente) throw new Error("Cliente de renta no encontrado para ese año gravable.");
           const datos = await db.getDatosLiquidacion(input.rentaClienteId);
@@ -2465,20 +2478,20 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
       list: protectedProcedure
         .input(z.object({ rentaClienteId: z.number() }))
         .query(async ({ input, ctx }) => {
-          assertInformesAccess(ctx.user.cedula);
+          assertRentaPNAccess(ctx.user.role);
           return db.getDependientes(input.rentaClienteId);
         }),
       agregar: protectedProcedure
         .input(z.object({ rentaClienteId: z.number(), nombre: z.string().min(1), tipoDocumento: z.string().min(1), numeroDocumento: z.string().min(1) }))
         .mutation(async ({ input, ctx }) => {
-          assertInformesAccess(ctx.user.cedula);
+          assertRentaPNAccess(ctx.user.role);
           const id = await db.agregarDependiente(input.rentaClienteId, input.nombre, input.tipoDocumento, input.numeroDocumento);
           return { id };
         }),
       eliminar: protectedProcedure
         .input(z.object({ id: z.number() }))
         .mutation(async ({ input, ctx }) => {
-          assertInformesAccess(ctx.user.cedula);
+          assertRentaPNAccess(ctx.user.role);
           await db.eliminarDependiente(input.id);
           return { success: true };
         }),
