@@ -196,6 +196,7 @@ function ClientesRentaTab({ anioGravable, onIrALiquidacion }: { anioGravable: nu
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b text-left text-muted-foreground">
+                  <th className="p-3 font-medium w-10">#</th>
                   <th className="p-3 font-medium">Cliente</th>
                   <th className="p-3 font-medium">Cédula</th>
                   <th className="p-3 font-medium">Vencimiento</th>
@@ -206,8 +207,9 @@ function ClientesRentaTab({ anioGravable, onIrALiquidacion }: { anioGravable: nu
                 </tr>
               </thead>
               <tbody>
-                {clientesFiltrados.map((c: any) => (
+                {clientesFiltrados.map((c: any, i: number) => (
                   <tr key={c.id} className={`border-b ${c.noObligado || !c.activo ? "opacity-60" : ""}`}>
+                    <td className="p-3 text-muted-foreground">{i + 1}</td>
                     <td className="p-3 font-medium">
                       {c.nombre}
                       {!c.activo && <Badge variant="outline" className="ml-2 text-[10px] bg-gray-100 text-gray-600 border-gray-300">Inactivo</Badge>}
@@ -357,6 +359,7 @@ function LimpiarDatosLiquidacionCard() {
 function LiquidacionTab({ anioGravable, rentaClienteIdInicial }: { anioGravable: number; rentaClienteIdInicial?: number | null }) {
   const clientesQuery = trpc.renta.clientes.list.useQuery({ anioGravable });
   const [rentaClienteId, setRentaClienteId] = useState<number | null>(null);
+  const [busquedaCliente, setBusquedaCliente] = useState("");
   const [archivoExogena, setArchivoExogena] = useState<File | null>(null);
   const [subiendo, setSubiendo] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -408,14 +411,23 @@ function LiquidacionTab({ anioGravable, rentaClienteIdInicial }: { anioGravable:
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3 flex-wrap">
         <span className="text-sm text-muted-foreground w-32">Cliente de renta:</span>
+        <div className="relative w-56">
+          <Search className="w-4 h-4 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            value={busquedaCliente} onChange={(e) => setBusquedaCliente(e.target.value)}
+            placeholder="Buscar por nombre..." className="pl-8 h-9"
+          />
+        </div>
         <Select value={rentaClienteId ? String(rentaClienteId) : undefined} onValueChange={(v) => setRentaClienteId(Number(v))}>
           <SelectTrigger className="w-72"><SelectValue placeholder="Selecciona un cliente" /></SelectTrigger>
           <SelectContent>
-            {clientesQuery.data?.map((c: any) => (
-              <SelectItem key={c.id} value={String(c.id)}>{c.nombre} — {c.cedula}</SelectItem>
-            ))}
+            {clientesQuery.data
+              ?.filter((c: any) => c.nombre.toLowerCase().includes(busquedaCliente.trim().toLowerCase()))
+              .map((c: any) => (
+                <SelectItem key={c.id} value={String(c.id)}>{c.nombre} — {c.cedula}</SelectItem>
+              ))}
           </SelectContent>
         </Select>
       </div>
