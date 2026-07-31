@@ -2335,7 +2335,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
             const limiteGlobal = Math.min(baseCalculoLimite * 0.4, topeUVT);
             const ajustes = rentaDb.repartirLimiteGeneral(
               itemsGeneral.map(it => ({ clave: it.id, cedula: it.cedula, valor: it.valorLimitado, marcado: !!it.limiteGeneral })),
-              limiteGlobal, rentaDb.SUBRENTAS_GENERAL,
+              limiteGlobal, rentaDb.SUBRENTAS_GENERAL, true,
             );
             return conLimitado.map(it => ajustes.has(it.id) ? { ...it, valorAjustadoGeneral: ajustes.get(it.id) } : it);
           }

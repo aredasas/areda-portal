@@ -250,6 +250,7 @@ export function calcularValorLimitado(valor: number, tipoDeduccion: string | nul
 export function repartirLimiteGeneral<T>(
   items: { clave: T; cedula: string; valor: number; marcado: boolean }[],
   limiteGlobal: number, ordenCedulas: readonly string[],
+  soloMarcados = false,
 ): Map<T, number> {
   const ajustes = items.map(it => ({ ...it, ajustado: it.valor }));
   const totalDisponible = ajustes.reduce((a, it) => a + it.valor, 0);
@@ -260,18 +261,27 @@ export function repartirLimiteGeneral<T>(
     const sumMarcados = marcados.reduce((a, it) => a + it.valor, 0);
     const reduccionEnMarcados = Math.min(excedente, sumMarcados);
     if (sumMarcados > 0) {
-      for (const it of marcados) it.ajustado = Math.max(0, it.ajustado - reduccionEnMarcados * (it.valor / sumMarcados));
+      for (const it of marcados) it.ajustado = Math.max(0, Math.round(it.ajustado - reduccionEnMarcados * (it.valor / sumMarcados)));
     }
-    let excedenteRestante = excedente - reduccionEnMarcados;
-    for (const nombre of ordenCedulas) {
-      if (excedenteRestante <= 0) break;
-      const noMarcadosDeEstaCedula = ajustes.filter(it => it.cedula === nombre && !it.marcado);
-      const sumNoMarcados = noMarcadosDeEstaCedula.reduce((a, it) => a + it.ajustado, 0);
-      const reduccionAqui = Math.min(excedenteRestante, sumNoMarcados);
-      if (sumNoMarcados > 0) {
-        for (const it of noMarcadosDeEstaCedula) it.ajustado = Math.max(0, it.ajustado - reduccionAqui * (it.ajustado / sumNoMarcados));
+    // Si nadie marcó nada (o lo marcado no alcanza), el resto del ajuste
+    // NO se reparte en silencio entre partidas sin marcar — eso confundía
+    // (una partida sin check aparecía reducida sin explicación). Solo se
+    // usa el reparto automático de respaldo para el CÁLCULO real de la
+    // renta (soloMarcados=false, en armarLiquidacion) — nunca para lo que
+    // se le muestra al contador en pantalla/PDF (soloMarcados=true), que
+    // deja las partidas sin marcar siempre en su tope individual completo.
+    if (!soloMarcados) {
+      let excedenteRestante = excedente - reduccionEnMarcados;
+      for (const nombre of ordenCedulas) {
+        if (excedenteRestante <= 0) break;
+        const noMarcadosDeEstaCedula = ajustes.filter(it => it.cedula === nombre && !it.marcado);
+        const sumNoMarcados = noMarcadosDeEstaCedula.reduce((a, it) => a + it.ajustado, 0);
+        const reduccionAqui = Math.min(excedenteRestante, sumNoMarcados);
+        if (sumNoMarcados > 0) {
+          for (const it of noMarcadosDeEstaCedula) it.ajustado = Math.max(0, Math.round(it.ajustado - reduccionAqui * (it.ajustado / sumNoMarcados)));
+        }
+        excedenteRestante -= reduccionAqui;
       }
-      excedenteRestante -= reduccionAqui;
     }
   }
 
@@ -1203,7 +1213,7 @@ export async function generarAnexosRenta(
         itemsGeneral.push({ clave: it, cedula: nombre, valor: valorLimitado, marcado: !!it.limiteGeneral });
       }
     }
-    const ajustes = repartirLimiteGeneral(itemsGeneral, resultado.limite40PorcientoOMil340UVT, SUBRENTAS_GENERAL);
+    const ajustes = repartirLimiteGeneral(itemsGeneral, resultado.limite40PorcientoOMil340UVT, SUBRENTAS_GENERAL, true);
     for (const [item, valor] of Array.from(ajustes.entries())) ajustesGeneralPorItem.set(item, valor);
   }
 

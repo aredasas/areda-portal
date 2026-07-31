@@ -1268,7 +1268,7 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
   const itemsDeEstaCedula = todosItems.filter((it: any) => (it.cedula || "trabajo") === cedulaSeleccionada);
   const porTipo = (tipo: string) => itemsDeEstaCedula.filter((it: any) => it.tipoValor === tipo);
   const totalPorTipo = (tipo: string) => porTipo(tipo).reduce((a: number, it: any) => a + it.valor, 0);
-  const totalLimitadoPorTipo = (tipo: string) => porTipo(tipo).reduce((a: number, it: any) => a + (it.valorLimitado ?? it.valor), 0);
+  const totalLimitadoPorTipo = (tipo: string) => porTipo(tipo).reduce((a: number, it: any) => a + (it.valorAjustadoGeneral ?? it.valorLimitado ?? it.valor), 0);
 
   const totalIngresoBruto = totalPorTipo("ingreso_bruto");
   const totalIncrngo = totalPorTipo("ingreso_no_constitutivo");
@@ -1296,7 +1296,7 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
 
   const totalGeneral = todosItems
     .filter((it: any) => ["renta_exenta", "deduccion"].includes(it.tipoValor) && CEDULAS_GENERAL.includes(it.cedula || "trabajo"))
-    .reduce((a: number, it: any) => a + (it.valorLimitado ?? it.valor), 0);
+    .reduce((a: number, it: any) => a + (it.valorAjustadoGeneral ?? it.valorLimitado ?? it.valor), 0);
   const totalOtrasCedulas = todosItems
     .filter((it: any) => ["renta_exenta", "deduccion"].includes(it.tipoValor) && !CEDULAS_GENERAL.includes(it.cedula || "trabajo"))
     .reduce((a: number, it: any) => a + (it.valorLimitado ?? it.valor), 0);
