@@ -732,6 +732,13 @@ export const rentaLiquidacionItems = mysqlTable("rentaLiquidacionItems", {
    * cuando el conjunto supere el tope del 40%/1.340 UVT, en vez de que
    * el sistema decida automáticamente cuál cédula recortar primero. */
   limiteGeneral: boolean("limiteGeneral").default(false).notNull(),
+  /** Momento (epoch ms) en que se marcó esta partida como "límite
+   * general" — el reparto del ajuste es SECUENCIAL según este orden (la
+   * primera marcada se agota primero hasta llegar a 0, y solo si no
+   * alcanza pasa a la siguiente), no proporcional entre todas a la vez;
+   * así el asesor controla exactamente cuál partida se sacrifica
+   * primero. Null si no está marcada. */
+  limiteGeneralOrden: double("limiteGeneralOrden"),
   concepto: varchar("concepto", { length: 255 }).notNull(),
   valor: double("valor").notNull(),
   origen: mysqlEnum("origen", ["exogena", "manual"]).default("manual").notNull(),

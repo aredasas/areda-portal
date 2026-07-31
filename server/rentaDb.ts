@@ -248,7 +248,7 @@ export function calcularValorLimitado(valor: number, tipoDeduccion: string | nul
  * lo que sea) para poder usarse tanto dentro del cálculo interno como
  * para exponer el ajuste de cada ítem real hacia la interfaz. */
 export function repartirLimiteGeneral<T>(
-  items: { clave: T; cedula: string; valor: number; marcado: boolean }[],
+  items: { clave: T; cedula: string; valor: number; marcado: boolean; orden?: number | null }[],
   limiteGlobal: number, ordenCedulas: readonly string[],
   soloMarcados = false,
 ): Map<T, number> {
@@ -257,12 +257,21 @@ export function repartirLimiteGeneral<T>(
   const excedente = Math.max(0, totalDisponible - limiteGlobal);
 
   if (excedente > 0) {
-    const marcados = ajustes.filter(it => it.marcado);
-    const sumMarcados = marcados.reduce((a, it) => a + it.valor, 0);
-    const reduccionEnMarcados = Math.min(excedente, sumMarcados);
-    if (sumMarcados > 0) {
-      for (const it of marcados) it.ajustado = Math.max(0, Math.round(it.ajustado - reduccionEnMarcados * (it.valor / sumMarcados)));
+    // Reparto SECUENCIAL entre las marcadas, no proporcional: la primera
+    // que se marcó se agota primero (baja hasta 0 si hace falta), y solo
+    // si el excedente no cabe ahí completo pasa a drenar la siguiente
+    // marcada (en el orden en que el asesor las fue marcando) — así el
+    // asesor controla exactamente cuál partida sacrifica primero, en vez
+    // de que todas las marcadas se recorten un poco cada una.
+    const marcados = ajustes.filter(it => it.marcado).sort((a, b) => (a.orden ?? 0) - (b.orden ?? 0));
+    let excedenteEnMarcados = excedente;
+    for (const it of marcados) {
+      if (excedenteEnMarcados <= 0) break;
+      const reduccionAqui = Math.min(excedenteEnMarcados, it.valor);
+      it.ajustado = Math.max(0, Math.round(it.valor - reduccionAqui));
+      excedenteEnMarcados -= reduccionAqui;
     }
+    const reduccionEnMarcados = excedente - excedenteEnMarcados;
     // Si nadie marcó nada (o lo marcado no alcanza), el resto del ajuste
     // NO se reparte en silencio entre partidas sin marcar — eso confundía
     // (una partida sin check aparecía reducida sin explicación). Solo se
@@ -288,7 +297,7 @@ export function repartirLimiteGeneral<T>(
   return new Map(ajustes.map(it => [it.clave, it.ajustado]));
 }
 
-export type ItemValor = { concepto: string; valor: number; tipoDeduccion?: string | null; tipoGananciaOcasional?: string | null; limiteGeneral?: boolean };
+export type ItemValor = { concepto: string; valor: number; tipoDeduccion?: string | null; tipoGananciaOcasional?: string | null; limiteGeneral?: boolean; limiteGeneralOrden?: number | null };
 
 /** Los datos crudos de UNA de las 4 sub-rentas de la Cédula General, o de
  * Pensiones/Dividendos — cada casilla del Formulario 210 corresponde a uno
@@ -546,14 +555,14 @@ export function armarLiquidacion(datos: DatosLiquidacion): ResultadoLiquidacion 
   // nada), el resto se reparte con el orden automático de siempre:
   // trabajo → trabajo_honorarios → capital → no_laboral, cédula por
   // cédula (compatible con clientes que no usan esta opción nueva).
-  const itemsGeneral: { clave: number; cedula: string; valor: number; marcado: boolean }[] = [];
+  const itemsGeneral: { clave: number; cedula: string; valor: number; marcado: boolean; orden?: number | null }[] = [];
   let claveSecuencial = 0;
   for (const nombre of SUBRENTAS_GENERAL) {
     const c = datos.cedulas[nombre] || vacio;
     const ingresoBrutoCedula = subRentasBase[nombre].ingresoBruto;
     for (const it of [...c.deduccion, ...c.rentaExenta]) {
       const valorLimitado = calcularValorLimitado(it.valor, it.tipoDeduccion, ingresoBrutoCedula);
-      itemsGeneral.push({ clave: claveSecuencial++, cedula: nombre, valor: valorLimitado, marcado: !!it.limiteGeneral });
+      itemsGeneral.push({ clave: claveSecuencial++, cedula: nombre, valor: valorLimitado, marcado: !!it.limiteGeneral, orden: it.limiteGeneralOrden });
     }
   }
   const ajustesPorClave = repartirLimiteGeneral(itemsGeneral, limite40PorcientoOMil340UVT, SUBRENTAS_GENERAL);
@@ -1203,14 +1212,14 @@ export async function generarAnexosRenta(
   // el tope individual sin considerar el reparto entre cédulas.
   const ajustesGeneralPorItem = new Map<ItemValor, number>();
   {
-    const itemsGeneral: { clave: ItemValor; cedula: string; valor: number; marcado: boolean }[] = [];
+    const itemsGeneral: { clave: ItemValor; cedula: string; valor: number; marcado: boolean; orden?: number | null }[] = [];
     for (const nombre of SUBRENTAS_GENERAL) {
       const c = datos.cedulas[nombre];
       if (!c) continue;
       const ingresoBrutoCedula = c.ingresoBruto.reduce((a, it) => a + it.valor, 0);
       for (const it of [...c.deduccion, ...c.rentaExenta]) {
         const valorLimitado = calcularValorLimitado(it.valor, it.tipoDeduccion, ingresoBrutoCedula);
-        itemsGeneral.push({ clave: it, cedula: nombre, valor: valorLimitado, marcado: !!it.limiteGeneral });
+        itemsGeneral.push({ clave: it, cedula: nombre, valor: valorLimitado, marcado: !!it.limiteGeneral, orden: it.limiteGeneralOrden });
       }
     }
     const ajustes = repartirLimiteGeneral(itemsGeneral, resultado.limite40PorcientoOMil340UVT, SUBRENTAS_GENERAL, true);

@@ -1,0 +1,1 @@
+ALTER TABLE `rentaLiquidacionItems` ADD `limiteGeneralOrden` double;

@@ -2334,7 +2334,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
             const topeUVT = rentaDb.redondearPesosDian(rentaDb.TOPES_DEDUCCION_2025.limiteGlobalDeduccionesRentasExentas * rentaDb.UVT_2025);
             const limiteGlobal = Math.min(baseCalculoLimite * 0.4, topeUVT);
             const ajustes = rentaDb.repartirLimiteGeneral(
-              itemsGeneral.map(it => ({ clave: it.id, cedula: it.cedula, valor: it.valorLimitado, marcado: !!it.limiteGeneral })),
+              itemsGeneral.map(it => ({ clave: it.id, cedula: it.cedula, valor: it.valorLimitado, marcado: !!it.limiteGeneral, orden: it.limiteGeneralOrden })),
               limiteGlobal, rentaDb.SUBRENTAS_GENERAL, true,
             );
             return conLimitado.map(it => ajustes.has(it.id) ? { ...it, valorAjustadoGeneral: ajustes.get(it.id) } : it);
@@ -2373,6 +2373,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
             tipoValor: input.tipoValor || null, tipoGananciaOcasional: input.tipoGananciaOcasional || null,
             tipoDeduccion: input.tipoDeduccion || null, concepto: input.concepto, valor: input.valor,
             limiteGeneral: input.limiteGeneral || false,
+            limiteGeneralOrden: input.limiteGeneral ? Date.now() : null,
           });
           return { id, alerta };
         }),
@@ -2381,7 +2382,11 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
         .mutation(async ({ input, ctx }) => {
           assertRentaPNAccess(ctx.user.role);
           const { id, ...data } = input;
-          await db.actualizarLiquidacionItem(id, data);
+          const datosActualizar: typeof data & { limiteGeneralOrden?: number | null } = { ...data };
+          if (input.limiteGeneral !== undefined) {
+            datosActualizar.limiteGeneralOrden = input.limiteGeneral ? Date.now() : null;
+          }
+          await db.actualizarLiquidacionItem(id, datosActualizar);
           return { success: true };
         }),
       eliminar: protectedProcedure
