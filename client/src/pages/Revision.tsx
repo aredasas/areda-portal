@@ -631,7 +631,7 @@ function RentaResumenDialog({ cliente, onClose, onAprobar, onRechazar, aprobando
                 </div>
               );
               const lineaLimitada = (it: any) => {
-                const limitado = it.valorLimitado ?? it.valor;
+                const limitado = it.valorAjustadoGeneral ?? it.valorLimitado ?? it.valor;
                 const fueLimitado = limitado < it.valor;
                 return (
                   <div key={it.id} className="flex items-center justify-between py-0.5 gap-2">

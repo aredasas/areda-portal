@@ -247,7 +247,7 @@ export function calcularValorLimitado(valor: number, tipoDeduccion: string | nul
  * no_laboral, cédula por cédula). `clave` es genérica (id de BD, índice,
  * lo que sea) para poder usarse tanto dentro del cálculo interno como
  * para exponer el ajuste de cada ítem real hacia la interfaz. */
-export function repartirLimiteGeneral<T extends string | number>(
+export function repartirLimiteGeneral<T>(
   items: { clave: T; cedula: string; valor: number; marcado: boolean }[],
   limiteGlobal: number, ordenCedulas: readonly string[],
 ): Map<T, number> {
@@ -1186,13 +1186,34 @@ export async function generarAnexosRenta(
   // ================= ANEXO 1: Ingresos, INCRNGO, deducciones, rentas exentas =================
   encabezado("ANEXO 1 — DETALLE DE INGRESOS, INCRNGO, DEDUCCIONES Y RENTAS EXENTAS");
 
+  // Valor final de cada deducción/renta exenta de la Cédula General tras
+  // repartir el tope del 40%/1.340 UVT (respetando qué partidas se
+  // marcaron como "límite general") — mismo criterio que en pantalla, el
+  // anexo del cliente debe mostrar el valor REALMENTE aplicable, no solo
+  // el tope individual sin considerar el reparto entre cédulas.
+  const ajustesGeneralPorItem = new Map<ItemValor, number>();
+  {
+    const itemsGeneral: { clave: ItemValor; cedula: string; valor: number; marcado: boolean }[] = [];
+    for (const nombre of SUBRENTAS_GENERAL) {
+      const c = datos.cedulas[nombre];
+      if (!c) continue;
+      const ingresoBrutoCedula = c.ingresoBruto.reduce((a, it) => a + it.valor, 0);
+      for (const it of [...c.deduccion, ...c.rentaExenta]) {
+        const valorLimitado = calcularValorLimitado(it.valor, it.tipoDeduccion, ingresoBrutoCedula);
+        itemsGeneral.push({ clave: it, cedula: nombre, valor: valorLimitado, marcado: !!it.limiteGeneral });
+      }
+    }
+    const ajustes = repartirLimiteGeneral(itemsGeneral, resultado.limite40PorcientoOMil340UVT, SUBRENTAS_GENERAL);
+    for (const [item, valor] of Array.from(ajustes.entries())) ajustesGeneralPorItem.set(item, valor);
+  }
+
   for (const { key, titulo } of SUBRENTAS_ANEXO) {
     const c = datos.cedulas[key];
     if (!c || c.ingresoBruto.length === 0) continue; // solo las cédulas con datos, para no saturar
 
     const ingresoBrutoCedula = c.ingresoBruto.reduce((a, it) => a + it.valor, 0);
     const lineaLimitada = (it: ItemValor) => {
-      const limitado = calcularValorLimitado(it.valor, it.tipoDeduccion, ingresoBrutoCedula);
+      const limitado = ajustesGeneralPorItem.get(it) ?? calcularValorLimitado(it.valor, it.tipoDeduccion, ingresoBrutoCedula);
       const nota = limitado < it.valor ? ` (digitado: ${fmt(it.valor)})` : "";
       filaTexto(it.concepto, `-${fmt(limitado)}${nota}`, { indent: 8, color: "#b91c1c" });
     };

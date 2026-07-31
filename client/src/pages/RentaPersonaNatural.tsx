@@ -1296,10 +1296,10 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
 
   const totalGeneral = todosItems
     .filter((it: any) => ["renta_exenta", "deduccion"].includes(it.tipoValor) && CEDULAS_GENERAL.includes(it.cedula || "trabajo"))
-    .reduce((a: number, it: any) => a + it.valor, 0);
+    .reduce((a: number, it: any) => a + (it.valorLimitado ?? it.valor), 0);
   const totalOtrasCedulas = todosItems
     .filter((it: any) => ["renta_exenta", "deduccion"].includes(it.tipoValor) && !CEDULAS_GENERAL.includes(it.cedula || "trabajo"))
-    .reduce((a: number, it: any) => a + it.valor, 0);
+    .reduce((a: number, it: any) => a + (it.valorLimitado ?? it.valor), 0);
   const totalRetencionesGeneral = todosItems.filter((it: any) => it.tipoValor === "retencion").reduce((a: number, it: any) => a + it.valor, 0);
   const topeGlobal = catalogoQuery.data ? redondearPesosDian(catalogoQuery.data.topeGlobalUVT * catalogoQuery.data.uvt) : 0;
   const excedeGlobal = topeGlobal > 0 && totalGeneral > topeGlobal;
@@ -1501,7 +1501,7 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
               <span className="w-6 shrink-0" />
             </div>
             {porTipo("deduccion").map((it: any) => {
-              const limitado = it.valorLimitado ?? it.valor;
+              const limitado = it.valorAjustadoGeneral ?? it.valorLimitado ?? it.valor;
               const fueLimitado = limitado < it.valor;
               return (
                 <div key={it.id} className="flex items-center text-sm border-b py-1 gap-2">
@@ -1589,7 +1589,7 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
               <span className="w-6 shrink-0" />
             </div>
             {porTipo("renta_exenta").map((it: any) => {
-              const limitado = it.valorLimitado ?? it.valor;
+              const limitado = it.valorAjustadoGeneral ?? it.valorLimitado ?? it.valor;
               const fueLimitado = limitado < it.valor;
               return (
                 <div key={it.id} className="flex items-center text-sm border-b py-1 gap-2">
@@ -1766,7 +1766,7 @@ function ResumenPendiente210Card({ rentaClienteId }: { rentaClienteId: number })
               </div>
             );
             const lineaLimitada = (it: any) => {
-              const limitado = it.valorLimitado ?? it.valor;
+              const limitado = it.valorAjustadoGeneral ?? it.valorLimitado ?? it.valor;
               const fueLimitado = limitado < it.valor;
               return (
                 <div key={it.id} className="flex items-center justify-between py-0.5 gap-2">
