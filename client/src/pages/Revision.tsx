@@ -630,6 +630,17 @@ function RentaResumenDialog({ cliente, onClose, onAprobar, onRechazar, aprobando
                   <span className={signo < 0 ? "text-red-600" : ""}>{signo < 0 ? "−" : ""}{fmt(it.valor)}</span>
                 </div>
               );
+              const lineaLimitada = (it: any) => {
+                const limitado = it.valorLimitado ?? it.valor;
+                const fueLimitado = limitado < it.valor;
+                return (
+                  <div key={it.id} className="flex items-center justify-between py-0.5 gap-2">
+                    <span className="text-muted-foreground flex-1 min-w-0 truncate">{it.concepto}</span>
+                    {fueLimitado && <span className="text-[10px] text-amber-700 shrink-0">(digitado: {fmt(it.valor)})</span>}
+                    <span className={`shrink-0 ${fueLimitado ? "font-semibold text-amber-700" : "text-red-600"}`}>−{fmt(limitado)}</span>
+                  </div>
+                );
+              };
               const sr = r.subRentas[k];
               return (
                 <div key={k} className="border rounded-md p-3">
@@ -638,8 +649,8 @@ function RentaResumenDialog({ cliente, onClose, onAprobar, onRechazar, aprobando
                     {deEstaCedula.filter((it: any) => it.tipoValor === "ingreso_bruto").map((it: any) => linea(it, 1))}
                     {deEstaCedula.filter((it: any) => it.tipoValor === "ingreso_no_constitutivo").map((it: any) => linea(it, -1))}
                     {deEstaCedula.filter((it: any) => it.tipoValor === "costo_deduccion_procedente").map((it: any) => linea(it, -1))}
-                    {deEstaCedula.filter((it: any) => it.tipoValor === "deduccion").map((it: any) => linea(it, -1))}
-                    {deEstaCedula.filter((it: any) => it.tipoValor === "renta_exenta").map((it: any) => linea(it, -1))}
+                    {deEstaCedula.filter((it: any) => it.tipoValor === "deduccion").map((it: any) => lineaLimitada(it))}
+                    {deEstaCedula.filter((it: any) => it.tipoValor === "renta_exenta").map((it: any) => lineaLimitada(it))}
                   </div>
                   <div className="flex items-center justify-between border-t mt-1.5 pt-1.5 font-bold">
                     <span>Total renta cédula</span>

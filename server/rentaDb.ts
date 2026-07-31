@@ -227,6 +227,18 @@ export function validarTopeDeduccion(
   return { excedeTope: valor > tope, tope, topeUVT: catalogo.topeUVT };
 }
 
+/** El valor que la ley realmente permite tomar de una deducción/renta
+ * exenta — nunca más que el tope individual de su tipo (si lo tiene). Es
+ * el valor con el que se calcula la renta; el valor digitado ("total")
+ * se conserva aparte solo para mostrarlo en pantalla y en el anexo, no
+ * participa del cálculo si supera lo permitido. */
+export function calcularValorLimitado(valor: number, tipoDeduccion: string | null | undefined, ingresoBrutoCedula?: number): number {
+  if (!tipoDeduccion) return valor;
+  const { tope } = validarTopeDeduccion(tipoDeduccion, valor, ingresoBrutoCedula);
+  if (tope == null) return valor;
+  return Math.min(valor, tope);
+}
+
 export type ItemValor = { concepto: string; valor: number; tipoDeduccion?: string | null; tipoGananciaOcasional?: string | null };
 
 /** Los datos crudos de UNA de las 4 sub-rentas de la Cédula General, o de
@@ -455,8 +467,8 @@ export function armarLiquidacion(datos: DatosLiquidacion): ResultadoLiquidacion 
     const ingresoNoConstitutivo = sumaItems(c.ingresoNoConstitutivo);
     const costoDeduccionProcedente = nombre === "trabajo" ? 0 : sumaItems(c.costoDeduccionProcedente);
     const rentaLiquida = Math.max(0, ingresoBruto - ingresoNoConstitutivo - costoDeduccionProcedente);
-    const rentaExentaDisponible = sumaItems(c.rentaExenta);
-    const deduccionDisponible = sumaItems(c.deduccion);
+    const rentaExentaDisponible = c.rentaExenta.reduce((a, it) => a + calcularValorLimitado(it.valor, it.tipoDeduccion, ingresoBruto), 0);
+    const deduccionDisponible = c.deduccion.reduce((a, it) => a + calcularValorLimitado(it.valor, it.tipoDeduccion, ingresoBruto), 0);
     subRentasBase[nombre] = {
       ingresoBruto, ingresoNoConstitutivo, costoDeduccionProcedente, rentaLiquida,
       rentaExentaDisponible, deduccionDisponible, rentaExentaDeduccionAsignada: 0, rentaLiquidaOrdinaria: rentaLiquida,
@@ -494,7 +506,7 @@ export function armarLiquidacion(datos: DatosLiquidacion): ResultadoLiquidacion 
   const ingresoBrutoPensiones = sumaItems(cPensiones.ingresoBruto);
   const incrngoPensiones = sumaItems(cPensiones.ingresoNoConstitutivo);
   const rentaLiquidaPensiones = Math.max(0, ingresoBrutoPensiones - incrngoPensiones);
-  const rentaExentaPensiones = sumaItems(cPensiones.rentaExenta);
+  const rentaExentaPensiones = cPensiones.rentaExenta.reduce((a, it) => a + calcularValorLimitado(it.valor, it.tipoDeduccion, ingresoBrutoPensiones), 0);
   const rentaLiquidaGravablePensiones = Math.max(0, rentaLiquidaPensiones - rentaExentaPensiones);
 
   const cDividendos = datos.cedulas["dividendos"] || vacio;
@@ -558,7 +570,7 @@ export function armarLiquidacion(datos: DatosLiquidacion): ResultadoLiquidacion 
   let comparacionPatrimonial: ResultadoLiquidacion["comparacionPatrimonial"] = null;
   if (datos.patrimonioLiquidoAnioAnterior != null) {
     const totalRentasExentasCP = Object.values(datos.cedulas).reduce(
-      (a, c) => a + c.rentaExenta.reduce((s, it) => s + it.valor, 0), 0,
+      (a, c) => a + c.rentaExenta.reduce((s, it) => s + calcularValorLimitado(it.valor, it.tipoDeduccion, sumaItems(c.ingresoBruto)), 0), 0,
     );
     const impuestoPagadoDuranteElAnio = totalRetenciones + (datos.anticipoAnioActual || 0);
     const diferenciaPatrimonial = patrimonioLiquido - datos.patrimonioLiquidoAnioAnterior;
@@ -628,9 +640,15 @@ export function validarRenta(
 
   // 2. Tope global de la Cédula General (40% / 1.340 UVT).
   const topeGlobalPesos = redondearPesosDian(TOPES_DEDUCCION_2025.limiteGlobalDeduccionesRentasExentas * UVT_2025);
-  const totalGeneralSinCapear = SUBRENTAS_GENERAL.reduce(
-    (a, n) => a + datos.cedulas[n]?.deduccion.reduce((s, it) => s + it.valor, 0) + (datos.cedulas[n]?.rentaExenta.reduce((s, it) => s + it.valor, 0) || 0), 0,
-  );
+  const totalGeneralSinCapear = SUBRENTAS_GENERAL.reduce((a, n) => {
+    const c = datos.cedulas[n];
+    if (!c) return a;
+    const ingresoBrutoCedula = sumaItems(c.ingresoBruto);
+    const totalCedula = [...c.deduccion, ...c.rentaExenta].reduce(
+      (s, it) => s + calcularValorLimitado(it.valor, it.tipoDeduccion, ingresoBrutoCedula), 0,
+    );
+    return a + totalCedula;
+  }, 0);
   if (totalGeneralSinCapear > resultado.limite40PorcientoOMil340UVT) {
     hallazgos.push({
       severidad: "advertencia", categoria: "Tope global Cédula General",
@@ -1117,13 +1135,20 @@ export async function generarAnexosRenta(
     const c = datos.cedulas[key];
     if (!c || c.ingresoBruto.length === 0) continue; // solo las cédulas con datos, para no saturar
 
+    const ingresoBrutoCedula = c.ingresoBruto.reduce((a, it) => a + it.valor, 0);
+    const lineaLimitada = (it: ItemValor) => {
+      const limitado = calcularValorLimitado(it.valor, it.tipoDeduccion, ingresoBrutoCedula);
+      const nota = limitado < it.valor ? ` (digitado: ${fmt(it.valor)})` : "";
+      filaTexto(it.concepto, `-${fmt(limitado)}${nota}`, { indent: 8, color: "#b91c1c" });
+    };
+
     doc.font("Helvetica-Bold").fontSize(11).text(titulo);
     doc.moveDown(0.2);
     for (const it of c.ingresoBruto) filaTexto(it.concepto, fmt(it.valor), { indent: 8 });
     for (const it of c.ingresoNoConstitutivo) filaTexto(it.concepto, `-${fmt(it.valor)}`, { indent: 8, color: "#b91c1c" });
     for (const it of c.costoDeduccionProcedente) filaTexto(it.concepto, `-${fmt(it.valor)}`, { indent: 8, color: "#b91c1c" });
-    for (const it of c.deduccion) filaTexto(it.concepto, `-${fmt(it.valor)}`, { indent: 8, color: "#b91c1c" });
-    for (const it of c.rentaExenta) filaTexto(it.concepto, `-${fmt(it.valor)}`, { indent: 8, color: "#b91c1c" });
+    for (const it of c.deduccion) lineaLimitada(it);
+    for (const it of c.rentaExenta) lineaLimitada(it);
     doc.moveDown(0.2);
     lineaDivisoria();
     const sr = resultado.subRentas[key];
@@ -1132,11 +1157,16 @@ export async function generarAnexosRenta(
   }
 
   if (resultado.ingresoBrutoPensiones > 0) {
+    const ingresoBrutoPensionesCedula = (datos.cedulas["pensiones"]?.ingresoBruto || []).reduce((a, it) => a + it.valor, 0);
     doc.font("Helvetica-Bold").fontSize(11).text("Pensiones");
     doc.moveDown(0.2);
     for (const it of datos.cedulas["pensiones"]?.ingresoBruto || []) filaTexto(it.concepto, fmt(it.valor), { indent: 8 });
     for (const it of datos.cedulas["pensiones"]?.ingresoNoConstitutivo || []) filaTexto(it.concepto, `-${fmt(it.valor)}`, { indent: 8, color: "#b91c1c" });
-    for (const it of datos.cedulas["pensiones"]?.rentaExenta || []) filaTexto(it.concepto, `-${fmt(it.valor)}`, { indent: 8, color: "#b91c1c" });
+    for (const it of datos.cedulas["pensiones"]?.rentaExenta || []) {
+      const limitado = calcularValorLimitado(it.valor, it.tipoDeduccion, ingresoBrutoPensionesCedula);
+      const nota = limitado < it.valor ? ` (digitado: ${fmt(it.valor)})` : "";
+      filaTexto(it.concepto, `-${fmt(limitado)}${nota}`, { indent: 8, color: "#b91c1c" });
+    }
     lineaDivisoria();
     filaTexto("Renta líquida gravable cédula de pensiones", fmt(resultado.rentaLiquidaGravablePensiones), { negrita: true });
     doc.moveDown(0.8);

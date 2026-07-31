@@ -1266,12 +1266,15 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
   const itemsDeEstaCedula = todosItems.filter((it: any) => (it.cedula || "trabajo") === cedulaSeleccionada);
   const porTipo = (tipo: string) => itemsDeEstaCedula.filter((it: any) => it.tipoValor === tipo);
   const totalPorTipo = (tipo: string) => porTipo(tipo).reduce((a: number, it: any) => a + it.valor, 0);
+  const totalLimitadoPorTipo = (tipo: string) => porTipo(tipo).reduce((a: number, it: any) => a + (it.valorLimitado ?? it.valor), 0);
 
   const totalIngresoBruto = totalPorTipo("ingreso_bruto");
   const totalIncrngo = totalPorTipo("ingreso_no_constitutivo");
   const totalCostos = totalPorTipo("costo_deduccion_procedente");
   const totalDeducciones = totalPorTipo("deduccion");
+  const totalDeduccionesLimitado = totalLimitadoPorTipo("deduccion");
   const totalRentasExentas = totalPorTipo("renta_exenta");
+  const totalRentasExentasLimitado = totalLimitadoPorTipo("renta_exenta");
   const totalRetenciones = totalPorTipo("retencion");
   const rentaLiquidaEstimadaCedula = totalIngresoBruto - totalIncrngo - totalCostos;
 
@@ -1474,16 +1477,27 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
         <span className="text-sm font-semibold text-purple-800">Deducciones</span>
         {!!porTipo("deduccion").length && (
           <div className="space-y-1 max-h-40 overflow-y-auto">
-            {porTipo("deduccion").map((it: any) => (
-              <div key={it.id} className="flex items-center justify-between text-sm border-b py-1 gap-2">
-                <div className="flex-1 min-w-0">
-                  <div className="truncate">{it.concepto}</div>
-                  <div className="text-xs text-muted-foreground">{nombreCatalogo(it.tipoDeduccion)}</div>
+            <div className="flex items-center gap-2 text-[10px] text-muted-foreground uppercase tracking-wide px-0.5">
+              <span className="flex-1">Concepto</span>
+              <span className="w-24 text-right shrink-0">Total</span>
+              <span className="w-24 text-right shrink-0">Limitado</span>
+              <span className="w-6 shrink-0" />
+            </div>
+            {porTipo("deduccion").map((it: any) => {
+              const limitado = it.valorLimitado ?? it.valor;
+              const fueLimitado = limitado < it.valor;
+              return (
+                <div key={it.id} className="flex items-center text-sm border-b py-1 gap-2">
+                  <div className="flex-1 min-w-0">
+                    <div className="truncate">{it.concepto}</div>
+                    <div className="text-xs text-muted-foreground">{nombreCatalogo(it.tipoDeduccion)}</div>
+                  </div>
+                  <span className="w-24 text-right shrink-0">{fmt(it.valor)}</span>
+                  <span className={`w-24 text-right shrink-0 ${fueLimitado ? "font-semibold text-amber-700" : ""}`}>{fmt(limitado)}</span>
+                  <Button variant="ghost" size="icon" className="h-6 w-6 text-red-600 shrink-0" onClick={() => eliminarMutation.mutate({ id: it.id })} disabled={soloLectura}><Trash2 className="w-3.5 h-3.5" /></Button>
                 </div>
-                <span className="shrink-0">{fmt(it.valor)}</span>
-                <Button variant="ghost" size="icon" className="h-6 w-6 text-red-600 shrink-0" onClick={() => eliminarMutation.mutate({ id: it.id })} disabled={soloLectura}><Trash2 className="w-3.5 h-3.5" /></Button>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
         {mostrarSugerenciaDependientes && (
@@ -1495,7 +1509,8 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
           </div>
         )}
         <div className="flex items-center justify-between text-base font-bold text-purple-800 pt-1.5 border-t border-purple-200">
-          <span>Total deducciones</span><span>{fmt(totalDeducciones)}</span>
+          <span>Total deducciones {totalDeduccionesLimitado < totalDeducciones && <span className="text-xs font-normal text-muted-foreground">(digitado: {fmt(totalDeducciones)})</span>}</span>
+          <span>{fmt(totalDeduccionesLimitado)}</span>
         </div>
         <div className="grid sm:grid-cols-[1fr_1fr_140px_auto] gap-2 items-end pt-1">
           <div className="space-y-1">
@@ -1679,10 +1694,22 @@ function ResumenPendiente210Card({ rentaClienteId }: { rentaClienteId: number })
                 <span className={signo < 0 ? "text-red-600" : ""}>{fmtFirmado(signo * it.valor)}</span>
               </div>
             );
+            const lineaLimitada = (it: any) => {
+              const limitado = it.valorLimitado ?? it.valor;
+              const fueLimitado = limitado < it.valor;
+              return (
+                <div key={it.id} className="flex items-center justify-between py-0.5 gap-2">
+                  <span className="text-muted-foreground flex-1 min-w-0 truncate">{it.concepto}</span>
+                  {fueLimitado && <span className="text-[10px] text-amber-700 shrink-0">(digitado: {fmt(it.valor)})</span>}
+                  <span className={`shrink-0 ${fueLimitado ? "font-semibold text-amber-700" : "text-red-600"}`}>{fmtFirmado(-limitado)}</span>
+                </div>
+              );
+            };
             const sr = r.subRentas[k];
             const sumaSimple = deEstaCedula.reduce((a: number, it: any) => {
               if (it.tipoValor === "ingreso_bruto") return a + it.valor;
-              if (["ingreso_no_constitutivo", "costo_deduccion_procedente", "deduccion", "renta_exenta"].includes(it.tipoValor)) return a - it.valor;
+              if (it.tipoValor === "ingreso_no_constitutivo" || it.tipoValor === "costo_deduccion_procedente") return a - it.valor;
+              if (it.tipoValor === "deduccion" || it.tipoValor === "renta_exenta") return a - (it.valorLimitado ?? it.valor);
               return a;
             }, 0);
             const ajustadoPorTope = sr && Math.abs(sumaSimple - sr.rentaLiquidaOrdinaria) > 1;
@@ -1693,8 +1720,8 @@ function ResumenPendiente210Card({ rentaClienteId }: { rentaClienteId: number })
                   {deEstaCedula.filter((it: any) => it.tipoValor === "ingreso_bruto").map((it: any) => linea(it, 1))}
                   {deEstaCedula.filter((it: any) => it.tipoValor === "ingreso_no_constitutivo").map((it: any) => linea(it, -1))}
                   {deEstaCedula.filter((it: any) => it.tipoValor === "costo_deduccion_procedente").map((it: any) => linea(it, -1))}
-                  {deEstaCedula.filter((it: any) => it.tipoValor === "deduccion").map((it: any) => linea(it, -1))}
-                  {deEstaCedula.filter((it: any) => it.tipoValor === "renta_exenta").map((it: any) => linea(it, -1))}
+                  {deEstaCedula.filter((it: any) => it.tipoValor === "deduccion").map((it: any) => lineaLimitada(it))}
+                  {deEstaCedula.filter((it: any) => it.tipoValor === "renta_exenta").map((it: any) => lineaLimitada(it))}
                 </div>
                 <div className="flex items-center justify-between border-t mt-1.5 pt-1.5 font-bold">
                   <span>Total renta cédula</span>

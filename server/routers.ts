@@ -2305,7 +2305,23 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
         .input(z.object({ rentaClienteId: z.number(), seccion: z.string().optional() }))
         .query(async ({ input, ctx }) => {
           assertRentaPNAccess(ctx.user.role);
-          return db.getLiquidacionItems(input.rentaClienteId, input.seccion);
+          const items = await db.getLiquidacionItems(input.rentaClienteId, input.seccion);
+          // Se agrega valorLimitado a cada ítem de deducción/renta exenta —
+          // el valor que realmente permite la ley, para poder mostrar las
+          // dos columnas (total digitado vs. limitado) sin que el frontend
+          // tenga que repetir la lógica de topes.
+          const ingresoBrutoPorCedula: Record<string, number> = {};
+          for (const it of items as any[]) {
+            if (it.tipoValor === "ingreso_bruto" && it.cedula) {
+              ingresoBrutoPorCedula[it.cedula] = (ingresoBrutoPorCedula[it.cedula] || 0) + it.valor;
+            }
+          }
+          return (items as any[]).map(it => {
+            if (it.tipoValor !== "deduccion" && it.tipoValor !== "renta_exenta") return it;
+            const ingresoBrutoCedula = it.cedula ? ingresoBrutoPorCedula[it.cedula] : undefined;
+            const valorLimitado = rentaDb.calcularValorLimitado(it.valor, it.tipoDeduccion, ingresoBrutoCedula);
+            return { ...it, valorLimitado };
+          });
         }),
       crear: protectedProcedure
         .input(z.object({
