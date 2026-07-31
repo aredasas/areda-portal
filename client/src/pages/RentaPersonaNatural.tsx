@@ -1496,16 +1496,13 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
             <div className="flex items-center gap-2 text-[10px] text-muted-foreground uppercase tracking-wide px-0.5">
               <span className="flex-1">Concepto</span>
               <span className="w-20 text-center shrink-0">Lím. gral.</span>
-              <span className="w-24 text-right shrink-0">Total</span>
+              <span className="w-24 text-right shrink-0">Digitado</span>
               <span className="w-24 text-right shrink-0">Limitado</span>
-              <span className="w-24 text-right shrink-0">Ajustado</span>
               <span className="w-6 shrink-0" />
             </div>
             {porTipo("deduccion").map((it: any) => {
               const limitado = it.valorLimitado ?? it.valor;
               const fueLimitado = limitado < it.valor;
-              const ajustado = it.valorAjustadoGeneral ?? limitado;
-              const fueAjustado = ajustado < limitado - 1;
               return (
                 <div key={it.id} className="flex items-center text-sm border-b py-1 gap-2">
                   <div className="flex-1 min-w-0">
@@ -1521,7 +1518,6 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
                   </span>
                   <span className="w-24 text-right shrink-0">{fmt(it.valor)}</span>
                   <span className={`w-24 text-right shrink-0 ${fueLimitado ? "font-semibold text-amber-700" : ""}`}>{fmt(limitado)}</span>
-                  <span className={`w-24 text-right shrink-0 ${fueAjustado ? "font-semibold text-red-700" : ""}`}>{fueAjustado ? fmt(ajustado) : "—"}</span>
                   <Button variant="ghost" size="icon" className="h-6 w-6 text-red-600 shrink-0" onClick={() => eliminarMutation.mutate({ id: it.id })} disabled={soloLectura}><Trash2 className="w-3.5 h-3.5" /></Button>
                 </div>
               );
@@ -1588,16 +1584,13 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
             <div className="flex items-center gap-2 text-[10px] text-muted-foreground uppercase tracking-wide px-0.5">
               <span className="flex-1">Concepto</span>
               <span className="w-20 text-center shrink-0">Lím. gral.</span>
-              <span className="w-24 text-right shrink-0">Total</span>
+              <span className="w-24 text-right shrink-0">Digitado</span>
               <span className="w-24 text-right shrink-0">Limitado</span>
-              <span className="w-24 text-right shrink-0">Ajustado</span>
               <span className="w-6 shrink-0" />
             </div>
             {porTipo("renta_exenta").map((it: any) => {
               const limitado = it.valorLimitado ?? it.valor;
               const fueLimitado = limitado < it.valor;
-              const ajustado = it.valorAjustadoGeneral ?? limitado;
-              const fueAjustado = ajustado < limitado - 1;
               return (
                 <div key={it.id} className="flex items-center text-sm border-b py-1 gap-2">
                   <div className="flex-1 min-w-0">
@@ -1613,7 +1606,6 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
                   </span>
                   <span className="w-24 text-right shrink-0">{fmt(it.valor)}</span>
                   <span className={`w-24 text-right shrink-0 ${fueLimitado ? "font-semibold text-amber-700" : ""}`}>{fmt(limitado)}</span>
-                  <span className={`w-24 text-right shrink-0 ${fueAjustado ? "font-semibold text-red-700" : ""}`}>{fueAjustado ? fmt(ajustado) : "—"}</span>
                   <Button variant="ghost" size="icon" className="h-6 w-6 text-red-600 shrink-0" onClick={() => eliminarMutation.mutate({ id: it.id })} disabled={soloLectura}><Trash2 className="w-3.5 h-3.5" /></Button>
                 </div>
               );
