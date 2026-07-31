@@ -1239,6 +1239,7 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
   const [tipoDeduccion, setTipoDeduccion] = useState("");
   const [conceptoDeduccion, setConceptoDeduccion] = useState("");
   const [valorDeduccion, setValorDeduccion] = useState("");
+  const [limiteGeneralNuevo, setLimiteGeneralNuevo] = useState(false);
   const [conceptoRetencion, setConceptoRetencion] = useState("");
   const [valorRetencion, setValorRetencion] = useState("");
   const [eliminarId, setEliminarId] = useState<number | null>(null);
@@ -1256,6 +1257,7 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
     onError: (err) => toast.error(err.message || "No se pudo agregar"),
   });
   const eliminarMutation = trpc.renta.liquidacion.eliminar.useMutation({ onSuccess: invalidarTodo });
+  const actualizarMutation = trpc.renta.liquidacion.actualizar.useMutation({ onSuccess: invalidarTodo });
 
   const fmt = (n: number) => `$${n.toLocaleString("es-CO")}`;
   const CEDULAS_GENERAL = ["trabajo", "trabajo_honorarios", "capital", "no_laboral"];
@@ -1277,6 +1279,20 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
   const totalRentasExentasLimitado = totalLimitadoPorTipo("renta_exenta");
   const totalRetenciones = totalPorTipo("retencion");
   const rentaLiquidaEstimadaCedula = totalIngresoBruto - totalIncrngo - totalCostos;
+
+  // Vista previa en vivo mientras se digita — misma lógica que el
+  // backend (tope UVT, o el 30% del ingreso bruto de esta cédula para
+  // aportes voluntarios), para que el operario vea de una vez cuánto se
+  // va a limitar antes de guardar.
+  const previewValorLimitado = (tipo: string, valorStr: string): number | null => {
+    const valor = Number(valorStr);
+    if (!tipo || !valor || Number.isNaN(valor)) return null;
+    const info = catalogoQuery.data?.tipos.find((t: any) => t.tipo === tipo);
+    if (!info?.topeUVT) return null;
+    let tope = redondearPesosDian(info.topeUVT * (catalogoQuery.data?.uvt || 0));
+    if (tipo === "aportes_voluntarios_pension_afc") tope = Math.min(tope, Math.round(totalIngresoBruto * 0.30));
+    return Math.min(valor, tope);
+  };
 
   const totalGeneral = todosItems
     .filter((it: any) => ["renta_exenta", "deduccion"].includes(it.tipoValor) && CEDULAS_GENERAL.includes(it.cedula || "trabajo"))
@@ -1337,8 +1353,8 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
     crearMutation.mutate({
       rentaClienteId, seccion: "cedula", cedula: cedulaSeleccionada as any,
       tipoValor: (tipoInfo?.tipoValor || "deduccion") as any,
-      tipoDeduccion, concepto: conceptoDeduccion.trim(), valor: Number(valorDeduccion),
-    }, { onSuccess: () => { setConceptoDeduccion(""); setValorDeduccion(""); setTipoDeduccion(""); } });
+      tipoDeduccion, concepto: conceptoDeduccion.trim(), valor: Number(valorDeduccion), limiteGeneral: limiteGeneralNuevo,
+    }, { onSuccess: () => { setConceptoDeduccion(""); setValorDeduccion(""); setTipoDeduccion(""); setLimiteGeneralNuevo(false); } });
   };
   const handleAgregarDependientes = () => {
     crearMutation.mutate({
@@ -1476,24 +1492,36 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
       <div className="border-2 border-purple-200 rounded-md p-3 space-y-2 bg-purple-50/30">
         <span className="text-sm font-semibold text-purple-800">Deducciones</span>
         {!!porTipo("deduccion").length && (
-          <div className="space-y-1 max-h-40 overflow-y-auto">
+          <div className="space-y-1 max-h-48 overflow-y-auto">
             <div className="flex items-center gap-2 text-[10px] text-muted-foreground uppercase tracking-wide px-0.5">
               <span className="flex-1">Concepto</span>
+              <span className="w-20 text-center shrink-0">Lím. gral.</span>
               <span className="w-24 text-right shrink-0">Total</span>
               <span className="w-24 text-right shrink-0">Limitado</span>
+              <span className="w-24 text-right shrink-0">Ajustado</span>
               <span className="w-6 shrink-0" />
             </div>
             {porTipo("deduccion").map((it: any) => {
               const limitado = it.valorLimitado ?? it.valor;
               const fueLimitado = limitado < it.valor;
+              const ajustado = it.valorAjustadoGeneral ?? limitado;
+              const fueAjustado = ajustado < limitado - 1;
               return (
                 <div key={it.id} className="flex items-center text-sm border-b py-1 gap-2">
                   <div className="flex-1 min-w-0">
                     <div className="truncate">{it.concepto}</div>
                     <div className="text-xs text-muted-foreground">{nombreCatalogo(it.tipoDeduccion)}</div>
                   </div>
+                  <span className="w-20 flex justify-center shrink-0">
+                    <Checkbox
+                      checked={!!it.limiteGeneral}
+                      onCheckedChange={(v) => actualizarMutation.mutate({ id: it.id, limiteGeneral: !!v })}
+                      disabled={soloLectura}
+                    />
+                  </span>
                   <span className="w-24 text-right shrink-0">{fmt(it.valor)}</span>
                   <span className={`w-24 text-right shrink-0 ${fueLimitado ? "font-semibold text-amber-700" : ""}`}>{fmt(limitado)}</span>
+                  <span className={`w-24 text-right shrink-0 ${fueAjustado ? "font-semibold text-red-700" : ""}`}>{fueAjustado ? fmt(ajustado) : "—"}</span>
                   <Button variant="ghost" size="icon" className="h-6 w-6 text-red-600 shrink-0" onClick={() => eliminarMutation.mutate({ id: it.id })} disabled={soloLectura}><Trash2 className="w-3.5 h-3.5" /></Button>
                 </div>
               );
@@ -1512,7 +1540,7 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
           <span>Total deducciones {totalDeduccionesLimitado < totalDeducciones && <span className="text-xs font-normal text-muted-foreground">(digitado: {fmt(totalDeducciones)})</span>}</span>
           <span>{fmt(totalDeduccionesLimitado)}</span>
         </div>
-        <div className="grid sm:grid-cols-[1fr_1fr_140px_auto] gap-2 items-end pt-1">
+        <div className="grid sm:grid-cols-[1.2fr_1fr_120px_120px_auto] gap-2 items-end pt-1">
           <div className="space-y-1">
             <Label className="text-xs">Tipo</Label>
             <Select value={tipoDeduccion} onValueChange={setTipoDeduccion}>
@@ -1525,14 +1553,28 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
             </Select>
           </div>
           <Input value={conceptoDeduccion} onChange={(e) => setConceptoDeduccion(e.target.value)} placeholder="Concepto" className="h-8" />
-          <Input value={valorDeduccion} onChange={(e) => setValorDeduccion(e.target.value)} placeholder="Valor" type="number" className="h-8" />
+          <div className="space-y-1">
+            <Label className="text-xs">Digitado</Label>
+            <Input value={valorDeduccion} onChange={(e) => setValorDeduccion(e.target.value)} placeholder="Valor" type="number" className="h-8" />
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">Limitado</Label>
+            <div className="h-8 flex items-center px-2 text-xs rounded border bg-muted/40 text-muted-foreground">
+              {previewValorLimitado(tipoDeduccion, valorDeduccion) != null ? fmt(previewValorLimitado(tipoDeduccion, valorDeduccion)!) : "—"}
+            </div>
+          </div>
           <Button size="sm" variant="outline" className="gap-1" onClick={handleAgregarDeduccion} disabled={crearMutation.isPending || soloLectura}>
             <Plus className="w-3.5 h-3.5" /> Agregar
           </Button>
         </div>
+        <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
+          <Checkbox checked={limiteGeneralNuevo} onCheckedChange={(v) => setLimiteGeneralNuevo(!!v)} />
+          Límite general — si el conjunto de la Cédula General supera el 40%/1.340 UVT, esta partida absorbe el ajuste primero
+        </label>
         {catalogoQuery.data?.tipos.find((t: any) => t.tipo === tipoDeduccion && t.tipoValor === "deduccion")?.nota && (
           <p className="text-xs text-amber-700 flex items-start gap-1.5 bg-amber-50 rounded p-1.5 mt-1">
             <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+
             {catalogoQuery.data.tipos.find((t: any) => t.tipo === tipoDeduccion)?.nota}
           </p>
         )}
@@ -1542,23 +1584,47 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
       <div className="border-2 border-teal-200 rounded-md p-3 space-y-2 bg-teal-50/30">
         <span className="text-sm font-semibold text-teal-800">Rentas Exentas</span>
         {!!porTipo("renta_exenta").length && (
-          <div className="space-y-1 max-h-40 overflow-y-auto">
-            {porTipo("renta_exenta").map((it: any) => (
-              <div key={it.id} className="flex items-center justify-between text-sm border-b py-1 gap-2">
-                <div className="flex-1 min-w-0">
-                  <div className="truncate">{it.concepto}</div>
-                  <div className="text-xs text-muted-foreground">{nombreCatalogo(it.tipoDeduccion)}</div>
+          <div className="space-y-1 max-h-48 overflow-y-auto">
+            <div className="flex items-center gap-2 text-[10px] text-muted-foreground uppercase tracking-wide px-0.5">
+              <span className="flex-1">Concepto</span>
+              <span className="w-20 text-center shrink-0">Lím. gral.</span>
+              <span className="w-24 text-right shrink-0">Total</span>
+              <span className="w-24 text-right shrink-0">Limitado</span>
+              <span className="w-24 text-right shrink-0">Ajustado</span>
+              <span className="w-6 shrink-0" />
+            </div>
+            {porTipo("renta_exenta").map((it: any) => {
+              const limitado = it.valorLimitado ?? it.valor;
+              const fueLimitado = limitado < it.valor;
+              const ajustado = it.valorAjustadoGeneral ?? limitado;
+              const fueAjustado = ajustado < limitado - 1;
+              return (
+                <div key={it.id} className="flex items-center text-sm border-b py-1 gap-2">
+                  <div className="flex-1 min-w-0">
+                    <div className="truncate">{it.concepto}</div>
+                    <div className="text-xs text-muted-foreground">{nombreCatalogo(it.tipoDeduccion)}</div>
+                  </div>
+                  <span className="w-20 flex justify-center shrink-0">
+                    <Checkbox
+                      checked={!!it.limiteGeneral}
+                      onCheckedChange={(v) => actualizarMutation.mutate({ id: it.id, limiteGeneral: !!v })}
+                      disabled={soloLectura}
+                    />
+                  </span>
+                  <span className="w-24 text-right shrink-0">{fmt(it.valor)}</span>
+                  <span className={`w-24 text-right shrink-0 ${fueLimitado ? "font-semibold text-amber-700" : ""}`}>{fmt(limitado)}</span>
+                  <span className={`w-24 text-right shrink-0 ${fueAjustado ? "font-semibold text-red-700" : ""}`}>{fueAjustado ? fmt(ajustado) : "—"}</span>
+                  <Button variant="ghost" size="icon" className="h-6 w-6 text-red-600 shrink-0" onClick={() => eliminarMutation.mutate({ id: it.id })} disabled={soloLectura}><Trash2 className="w-3.5 h-3.5" /></Button>
                 </div>
-                <span className="shrink-0">{fmt(it.valor)}</span>
-                <Button variant="ghost" size="icon" className="h-6 w-6 text-red-600 shrink-0" onClick={() => eliminarMutation.mutate({ id: it.id })} disabled={soloLectura}><Trash2 className="w-3.5 h-3.5" /></Button>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
         <div className="flex items-center justify-between text-base font-bold text-teal-800 pt-1.5 border-t border-teal-200">
-          <span>Total rentas exentas</span><span>{fmt(totalRentasExentas)}</span>
+          <span>Total rentas exentas {totalRentasExentasLimitado < totalRentasExentas && <span className="text-xs font-normal text-muted-foreground">(digitado: {fmt(totalRentasExentas)})</span>}</span>
+          <span>{fmt(totalRentasExentasLimitado)}</span>
         </div>
-        <div className="grid sm:grid-cols-[1fr_1fr_140px_auto] gap-2 items-end pt-1">
+        <div className="grid sm:grid-cols-[1.2fr_1fr_120px_120px_auto] gap-2 items-end pt-1">
           <div className="space-y-1">
             <Label className="text-xs">Tipo</Label>
             <Select value={tipoDeduccion} onValueChange={setTipoDeduccion}>
@@ -1571,11 +1637,24 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
             </Select>
           </div>
           <Input value={conceptoDeduccion} onChange={(e) => setConceptoDeduccion(e.target.value)} placeholder="Concepto" className="h-8" />
-          <Input value={valorDeduccion} onChange={(e) => setValorDeduccion(e.target.value)} placeholder="Valor" type="number" className="h-8" />
+          <div className="space-y-1">
+            <Label className="text-xs">Digitado</Label>
+            <Input value={valorDeduccion} onChange={(e) => setValorDeduccion(e.target.value)} placeholder="Valor" type="number" className="h-8" />
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">Limitado</Label>
+            <div className="h-8 flex items-center px-2 text-xs rounded border bg-muted/40 text-muted-foreground">
+              {previewValorLimitado(tipoDeduccion, valorDeduccion) != null ? fmt(previewValorLimitado(tipoDeduccion, valorDeduccion)!) : "—"}
+            </div>
+          </div>
           <Button size="sm" variant="outline" className="gap-1" onClick={handleAgregarDeduccion} disabled={crearMutation.isPending || soloLectura}>
             <Plus className="w-3.5 h-3.5" /> Agregar
           </Button>
         </div>
+        <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
+          <Checkbox checked={limiteGeneralNuevo} onCheckedChange={(v) => setLimiteGeneralNuevo(!!v)} />
+          Límite general — si el conjunto de la Cédula General supera el 40%/1.340 UVT, esta partida absorbe el ajuste primero
+        </label>
         {catalogoQuery.data?.tipos.find((t: any) => t.tipo === tipoDeduccion && t.tipoValor === "renta_exenta")?.nota && (
           <p className="text-xs text-amber-700 flex items-start gap-1.5 bg-amber-50 rounded p-1.5 mt-1">
             <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />

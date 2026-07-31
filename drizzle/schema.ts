@@ -727,6 +727,11 @@ export const rentaLiquidacionItems = mysqlTable("rentaLiquidacionItems", {
   /** Solo para cedula="ganancia_ocasional": qué tipo de ganancia ocasional
    * es (determina la tarifa: 20% loterías/rifas/apuestas, 15% el resto). */
   tipoGananciaOcasional: varchar("tipoGananciaOcasional", { length: 60 }),
+  /** Solo para deducción/renta exenta de la Cédula General: si el
+   * contador marca esta partida como la que debe absorber el ajuste
+   * cuando el conjunto supere el tope del 40%/1.340 UVT, en vez de que
+   * el sistema decida automáticamente cuál cédula recortar primero. */
+  limiteGeneral: boolean("limiteGeneral").default(false).notNull(),
   concepto: varchar("concepto", { length: 255 }).notNull(),
   valor: double("valor").notNull(),
   origen: mysqlEnum("origen", ["exogena", "manual"]).default("manual").notNull(),

@@ -2305,30 +2305,48 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
         .input(z.object({ rentaClienteId: z.number(), seccion: z.string().optional() }))
         .query(async ({ input, ctx }) => {
           assertRentaPNAccess(ctx.user.role);
-          const items = await db.getLiquidacionItems(input.rentaClienteId, input.seccion);
-          // Se agrega valorLimitado a cada ítem de deducción/renta exenta —
-          // el valor que realmente permite la ley, para poder mostrar las
-          // dos columnas (total digitado vs. limitado) sin que el frontend
-          // tenga que repetir la lógica de topes.
+          const items = await db.getLiquidacionItems(input.rentaClienteId, input.seccion) as any[];
+          // Se agrega valorLimitado (tope individual) y, para las 4
+          // sub-rentas de la Cédula General, valorAjustadoGeneral (tras
+          // repartir el tope del 40%/1.340 UVT, respetando qué partidas
+          // se marcaron como "límite general") — para mostrar las
+          // columnas sin que el frontend repita esta lógica.
           const ingresoBrutoPorCedula: Record<string, number> = {};
-          for (const it of items as any[]) {
-            if (it.tipoValor === "ingreso_bruto" && it.cedula) {
-              ingresoBrutoPorCedula[it.cedula] = (ingresoBrutoPorCedula[it.cedula] || 0) + it.valor;
-            }
+          const incrngoPorCedula: Record<string, number> = {};
+          for (const it of items) {
+            if (it.cedula && it.tipoValor === "ingreso_bruto") ingresoBrutoPorCedula[it.cedula] = (ingresoBrutoPorCedula[it.cedula] || 0) + it.valor;
+            if (it.cedula && it.tipoValor === "ingreso_no_constitutivo") incrngoPorCedula[it.cedula] = (incrngoPorCedula[it.cedula] || 0) + it.valor;
           }
-          return (items as any[]).map(it => {
+
+          const conLimitado = items.map(it => {
             if (it.tipoValor !== "deduccion" && it.tipoValor !== "renta_exenta") return it;
             const ingresoBrutoCedula = it.cedula ? ingresoBrutoPorCedula[it.cedula] : undefined;
             const valorLimitado = rentaDb.calcularValorLimitado(it.valor, it.tipoDeduccion, ingresoBrutoCedula);
             return { ...it, valorLimitado };
           });
+
+          const esGeneral = (cedula: string | null) => cedula != null && (rentaDb.SUBRENTAS_GENERAL as readonly string[]).includes(cedula);
+          const itemsGeneral = conLimitado.filter(it => (it.tipoValor === "deduccion" || it.tipoValor === "renta_exenta") && esGeneral(it.cedula));
+          if (itemsGeneral.length > 0) {
+            const baseCalculoLimite = rentaDb.SUBRENTAS_GENERAL.reduce(
+              (a, n) => a + (ingresoBrutoPorCedula[n] || 0) - (incrngoPorCedula[n] || 0), 0,
+            );
+            const topeUVT = rentaDb.redondearPesosDian(rentaDb.TOPES_DEDUCCION_2025.limiteGlobalDeduccionesRentasExentas * rentaDb.UVT_2025);
+            const limiteGlobal = Math.min(baseCalculoLimite * 0.4, topeUVT);
+            const ajustes = rentaDb.repartirLimiteGeneral(
+              itemsGeneral.map(it => ({ clave: it.id, cedula: it.cedula, valor: it.valorLimitado, marcado: !!it.limiteGeneral })),
+              limiteGlobal, rentaDb.SUBRENTAS_GENERAL,
+            );
+            return conLimitado.map(it => ajustes.has(it.id) ? { ...it, valorAjustadoGeneral: ajustes.get(it.id) } : it);
+          }
+          return conLimitado;
         }),
       crear: protectedProcedure
         .input(z.object({
           rentaClienteId: z.number(), seccion: z.enum(["activo", "pasivo", "cedula", "descuento_tributario"]),
           cedula: z.enum(["trabajo", "trabajo_honorarios", "capital", "no_laboral", "pensiones", "dividendos", "ganancia_ocasional"]).optional(),
           tipoValor: z.enum(["ingreso_bruto", "ingreso_no_constitutivo", "costo_deduccion_procedente", "renta_exenta", "deduccion", "retencion"]).optional(),
-          tipoDeduccion: z.string().optional(), tipoGananciaOcasional: z.string().optional(),
+          tipoDeduccion: z.string().optional(), tipoGananciaOcasional: z.string().optional(), limiteGeneral: z.boolean().optional(),
           concepto: z.string().min(1), valor: z.number(),
         }))
         .mutation(async ({ input, ctx }) => {
@@ -2354,11 +2372,12 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
             rentaClienteId: input.rentaClienteId, seccion: input.seccion, cedula: input.cedula || null,
             tipoValor: input.tipoValor || null, tipoGananciaOcasional: input.tipoGananciaOcasional || null,
             tipoDeduccion: input.tipoDeduccion || null, concepto: input.concepto, valor: input.valor,
+            limiteGeneral: input.limiteGeneral || false,
           });
           return { id, alerta };
         }),
       actualizar: protectedProcedure
-        .input(z.object({ id: z.number(), concepto: z.string().optional(), valor: z.number().optional() }))
+        .input(z.object({ id: z.number(), concepto: z.string().optional(), valor: z.number().optional(), limiteGeneral: z.boolean().optional() }))
         .mutation(async ({ input, ctx }) => {
           assertRentaPNAccess(ctx.user.role);
           const { id, ...data } = input;

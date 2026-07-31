@@ -1,0 +1,1 @@
+ALTER TABLE `rentaLiquidacionItems` ADD `limiteGeneral` boolean DEFAULT false NOT NULL;
