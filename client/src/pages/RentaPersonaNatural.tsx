@@ -1240,6 +1240,7 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
   const [conceptoDeduccion, setConceptoDeduccion] = useState("");
   const [valorDeduccion, setValorDeduccion] = useState("");
   const [limiteGeneralNuevo, setLimiteGeneralNuevo] = useState(false);
+  const [calculoAutomaticoNuevo, setCalculoAutomaticoNuevo] = useState(false);
   const [conceptoRetencion, setConceptoRetencion] = useState("");
   const [valorRetencion, setValorRetencion] = useState("");
   const [eliminarId, setEliminarId] = useState<number | null>(null);
@@ -1345,7 +1346,8 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
     }, { onSuccess: () => { setConceptoCostos(""); setValorCostos(""); } });
   };
   const handleAgregarDeduccion = () => {
-    if (!conceptoDeduccion.trim() || !valorDeduccion || !tipoDeduccion) {
+    const esAuto25 = tipoDeduccion === "renta_exenta_25_laboral" && calculoAutomaticoNuevo;
+    if (!conceptoDeduccion.trim() || (!esAuto25 && !valorDeduccion) || !tipoDeduccion) {
       toast.error("Selecciona el tipo, y digita concepto y valor");
       return;
     }
@@ -1353,8 +1355,9 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
     crearMutation.mutate({
       rentaClienteId, seccion: "cedula", cedula: cedulaSeleccionada as any,
       tipoValor: (tipoInfo?.tipoValor || "deduccion") as any,
-      tipoDeduccion, concepto: conceptoDeduccion.trim(), valor: Number(valorDeduccion), limiteGeneral: limiteGeneralNuevo,
-    }, { onSuccess: () => { setConceptoDeduccion(""); setValorDeduccion(""); setTipoDeduccion(""); setLimiteGeneralNuevo(false); } });
+      tipoDeduccion, concepto: conceptoDeduccion.trim(), valor: esAuto25 ? 0 : Number(valorDeduccion),
+      limiteGeneral: limiteGeneralNuevo, calculoAutomatico: esAuto25,
+    }, { onSuccess: () => { setConceptoDeduccion(""); setValorDeduccion(""); setTipoDeduccion(""); setLimiteGeneralNuevo(false); setCalculoAutomaticoNuevo(false); } });
   };
   const handleAgregarDependientes = () => {
     crearMutation.mutate({
@@ -1591,10 +1594,11 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
             {porTipo("renta_exenta").map((it: any) => {
               const limitado = it.valorAjustadoGeneral ?? it.valorLimitado ?? it.valor;
               const fueLimitado = limitado < it.valor;
+              const esAuto = it.tipoDeduccion === "renta_exenta_25_laboral" && it.calculoAutomatico;
               return (
                 <div key={it.id} className="flex items-center text-sm border-b py-1 gap-2">
                   <div className="flex-1 min-w-0">
-                    <div className="truncate">{it.concepto}</div>
+                    <div className="truncate">{it.concepto}{esAuto && <span className="ml-1.5 text-[10px] text-teal-700 bg-teal-100 rounded px-1.5 py-0.5">automático</span>}</div>
                     <div className="text-xs text-muted-foreground">{nombreCatalogo(it.tipoDeduccion)}</div>
                   </div>
                   <span className="w-20 flex justify-center shrink-0">
@@ -1604,8 +1608,8 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
                       disabled={soloLectura}
                     />
                   </span>
-                  <span className="w-24 text-right shrink-0">{fmt(it.valor)}</span>
-                  <span className={`w-24 text-right shrink-0 ${fueLimitado ? "font-semibold text-amber-700" : ""}`}>{fmt(limitado)}</span>
+                  <span className="w-24 text-right shrink-0">{esAuto ? "—" : fmt(it.valor)}</span>
+                  <span className={`w-24 text-right shrink-0 ${fueLimitado || esAuto ? "font-semibold text-teal-700" : ""}`}>{fmt(limitado)}</span>
                   <Button variant="ghost" size="icon" className="h-6 w-6 text-red-600 shrink-0" onClick={() => eliminarMutation.mutate({ id: it.id })} disabled={soloLectura}><Trash2 className="w-3.5 h-3.5" /></Button>
                 </div>
               );
@@ -1631,12 +1635,17 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
           <Input value={conceptoDeduccion} onChange={(e) => setConceptoDeduccion(e.target.value)} placeholder="Concepto" className="h-8" />
           <div className="space-y-1">
             <Label className="text-xs">Digitado</Label>
-            <Input value={valorDeduccion} onChange={(e) => setValorDeduccion(e.target.value)} placeholder="Valor" type="number" className="h-8" />
+            <Input
+              value={valorDeduccion} onChange={(e) => setValorDeduccion(e.target.value)} placeholder="Valor" type="number" className="h-8"
+              disabled={tipoDeduccion === "renta_exenta_25_laboral" && cedulaSeleccionada === "trabajo" && calculoAutomaticoNuevo}
+            />
           </div>
           <div className="space-y-1">
             <Label className="text-xs">Limitado</Label>
             <div className="h-8 flex items-center px-2 text-xs rounded border bg-muted/40 text-muted-foreground">
-              {previewValorLimitado(tipoDeduccion, valorDeduccion) != null ? fmt(previewValorLimitado(tipoDeduccion, valorDeduccion)!) : "—"}
+              {tipoDeduccion === "renta_exenta_25_laboral" && cedulaSeleccionada === "trabajo" && calculoAutomaticoNuevo
+                ? "Se calcula solo"
+                : previewValorLimitado(tipoDeduccion, valorDeduccion) != null ? fmt(previewValorLimitado(tipoDeduccion, valorDeduccion)!) : "—"}
             </div>
           </div>
           <Button size="sm" variant="outline" className="gap-1" onClick={handleAgregarDeduccion} disabled={crearMutation.isPending || soloLectura}>
@@ -1647,6 +1656,12 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
           <Checkbox checked={limiteGeneralNuevo} onCheckedChange={(v) => setLimiteGeneralNuevo(!!v)} />
           Límite general — si el conjunto de la Cédula General supera el 40%/1.340 UVT, esta partida absorbe el ajuste primero
         </label>
+        {tipoDeduccion === "renta_exenta_25_laboral" && cedulaSeleccionada === "trabajo" && (
+          <label className="flex items-center gap-1.5 text-xs text-teal-800 cursor-pointer">
+            <Checkbox checked={calculoAutomaticoNuevo} onCheckedChange={(v) => setCalculoAutomaticoNuevo(!!v)} />
+            Cálculo automático — 25% del ingreso ya depurado de INCRNGO, deducciones y demás rentas exentas de esta cédula (se recalcula solo si algo más cambia)
+          </label>
+        )}
         {catalogoQuery.data?.tipos.find((t: any) => t.tipo === tipoDeduccion && t.tipoValor === "renta_exenta")?.nota && (
           <p className="text-xs text-amber-700 flex items-start gap-1.5 bg-amber-50 rounded p-1.5 mt-1">
             <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
@@ -2229,21 +2244,42 @@ function SolicitudDocumentosDialog({ rentaClienteId, anioGravable, open, onOpenC
   useEffect(() => {
     if (!open) { setInicializado(false); return; }
     if (catalogoQuery.data && !inicializado) {
-      const recomendados = new Set<string>();
-      for (const cat of catalogoQuery.data.categorias) {
-        if (catalogoQuery.data.categoriasRecomendadas.includes(cat.categoria)) {
-          for (const it of cat.items) recomendados.add(it.id);
+      if (catalogoQuery.data.estadoGuardado) {
+        // Ya se había marcado algo antes para este cliente — se retoma
+        // exactamente como quedó, en vez de recalcular recomendaciones.
+        setSeleccionados(new Set(catalogoQuery.data.estadoGuardado.seleccionados));
+        setDocumentosExtra(catalogoQuery.data.estadoGuardado.documentosExtra);
+        setObservaciones(catalogoQuery.data.estadoGuardado.observaciones);
+      } else {
+        const recomendados = new Set<string>();
+        for (const cat of catalogoQuery.data.categorias) {
+          if (catalogoQuery.data.categoriasRecomendadas.includes(cat.categoria)) {
+            for (const it of cat.items) recomendados.add(it.id);
+          }
         }
+        setSeleccionados(recomendados);
       }
-      setSeleccionados(recomendados);
       setInicializado(true);
     }
   }, [open, catalogoQuery.data, inicializado]);
+
+  const guardarEstadoMutation = trpc.renta.clientes.guardarEstadoSolicitudDocumentos.useMutation();
+  const guardarEstadoActual = () => {
+    if (!inicializado) return; // no pisar nada si ni siquiera cargó
+    guardarEstadoMutation.mutate({
+      rentaClienteId, seleccionados: Array.from(seleccionados), documentosExtra, observaciones,
+    });
+  };
+  const handleCerrar = (siguienteAbierto: boolean) => {
+    if (!siguienteAbierto) guardarEstadoActual();
+    onOpenChange(siguienteAbierto);
+  };
 
   const generarMutation = trpc.renta.clientes.generarSolicitudDocumentos.useMutation({
     onSuccess: (data) => {
       toast.success("Solicitud generada");
       window.open(data.signedUrl, "_blank");
+      guardarEstadoActual();
       onOpenChange(false);
     },
     onError: (err) => toast.error(err.message || "No se pudo generar el PDF"),
@@ -2278,7 +2314,7 @@ function SolicitudDocumentosDialog({ rentaClienteId, anioGravable, open, onOpenC
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={handleCerrar}>
       <DialogContent className="sm:max-w-2xl max-h-[85vh] overflow-y-auto overflow-x-hidden min-w-0">
         <DialogHeader>
           <DialogTitle>Solicitud de Documentos al Cliente</DialogTitle>
@@ -2339,7 +2375,7 @@ function SolicitudDocumentosDialog({ rentaClienteId, anioGravable, open, onOpenC
           </div>
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancelar</Button>
+          <Button variant="outline" onClick={() => handleCerrar(false)}>Cancelar</Button>
           <Button onClick={handleGenerar} disabled={generando} className="gap-2 bg-[#EDA011] hover:bg-[#d48f0f] text-white">
             {generando && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
             Generar PDF

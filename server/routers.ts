@@ -2120,7 +2120,27 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           const recomendadas = exogena
             ? Array.from(rentaDb.recomendarCategoriasDocumentos(exogena.items.map((it: any) => ({ categoria: it.categoria, detalle: it.detalle || "" }))))
             : ["Información personal", "Deducibles"];
-          return { categorias: rentaDb.CATALOGO_DOCUMENTOS_RENTA, categoriasRecomendadas: recomendadas };
+          const cliente = await db.getRentaClienteById(input.rentaClienteId);
+          let estadoGuardado: { seleccionados: string[]; documentosExtra: string[]; observaciones: string } | null = null;
+          if (cliente?.solicitudDocumentosEstado) {
+            try { estadoGuardado = JSON.parse(cliente.solicitudDocumentosEstado); } catch { estadoGuardado = null; }
+          }
+          return { categorias: rentaDb.CATALOGO_DOCUMENTOS_RENTA, categoriasRecomendadas: recomendadas, estadoGuardado };
+        }),
+      // Guarda lo último marcado en la Solicitud de Documentos, para que
+      // no se pierda al cerrar y volver a abrir el diálogo.
+      guardarEstadoSolicitudDocumentos: protectedProcedure
+        .input(z.object({
+          rentaClienteId: z.number(), seleccionados: z.array(z.string()),
+          documentosExtra: z.array(z.string()), observaciones: z.string(),
+        }))
+        .mutation(async ({ input, ctx }) => {
+          assertRentaPNAccess(ctx.user.role);
+          const estado = JSON.stringify({
+            seleccionados: input.seleccionados, documentosExtra: input.documentosExtra, observaciones: input.observaciones,
+          });
+          await db.updateRentaCliente(input.rentaClienteId, { solicitudDocumentosEstado: estado });
+          return { success: true };
         }),
       generarSolicitudDocumentos: protectedProcedure
         .input(z.object({
@@ -2327,6 +2347,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
 
           const esGeneral = (cedula: string | null) => cedula != null && (rentaDb.SUBRENTAS_GENERAL as readonly string[]).includes(cedula);
           const itemsGeneral = conLimitado.filter(it => (it.tipoValor === "deduccion" || it.tipoValor === "renta_exenta") && esGeneral(it.cedula));
+          let resultado = conLimitado;
           if (itemsGeneral.length > 0) {
             const baseCalculoLimite = rentaDb.SUBRENTAS_GENERAL.reduce(
               (a, n) => a + (ingresoBrutoPorCedula[n] || 0) - (incrngoPorCedula[n] || 0), 0,
@@ -2337,9 +2358,24 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
               itemsGeneral.map(it => ({ clave: it.id, cedula: it.cedula, valor: it.valorLimitado, marcado: !!it.limiteGeneral, orden: it.limiteGeneralOrden })),
               limiteGlobal, rentaDb.SUBRENTAS_GENERAL, true,
             );
-            return conLimitado.map(it => ajustes.has(it.id) ? { ...it, valorAjustadoGeneral: ajustes.get(it.id) } : it);
+            resultado = conLimitado.map(it => ajustes.has(it.id) ? { ...it, valorAjustadoGeneral: ajustes.get(it.id) } : it);
           }
-          return conLimitado;
+          // Si hay una partida de 25% laboral en cálculo automático, su
+          // "Limitado" no sale del reparto de arriba (que usa el valor
+          // digitado, irrelevante aquí) sino del cálculo iterativo
+          // completo — se reutiliza armarLiquidacion para no duplicar esa
+          // lógica (marcados/no marcados, recálculo tras cada ajuste).
+          const itemAuto25 = resultado.find(it => it.tipoDeduccion === "renta_exenta_25_laboral" && it.calculoAutomatico);
+          if (itemAuto25) {
+            const datosCompletos = await db.getDatosLiquidacion(input.rentaClienteId);
+            if (datosCompletos) {
+              const r = rentaDb.armarLiquidacion(datosCompletos as any);
+              if (r.auto25CalculadoValor != null) {
+                resultado = resultado.map(it => it.id === itemAuto25.id ? { ...it, valorAjustadoGeneral: r.auto25CalculadoValor, valorLimitado: r.auto25CalculadoValor } : it);
+              }
+            }
+          }
+          return resultado;
         }),
       crear: protectedProcedure
         .input(z.object({
@@ -2347,6 +2383,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           cedula: z.enum(["trabajo", "trabajo_honorarios", "capital", "no_laboral", "pensiones", "dividendos", "ganancia_ocasional"]).optional(),
           tipoValor: z.enum(["ingreso_bruto", "ingreso_no_constitutivo", "costo_deduccion_procedente", "renta_exenta", "deduccion", "retencion"]).optional(),
           tipoDeduccion: z.string().optional(), tipoGananciaOcasional: z.string().optional(), limiteGeneral: z.boolean().optional(),
+          calculoAutomatico: z.boolean().optional(),
           concepto: z.string().min(1), valor: z.number(),
         }))
         .mutation(async ({ input, ctx }) => {
@@ -2374,11 +2411,15 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
             tipoDeduccion: input.tipoDeduccion || null, concepto: input.concepto, valor: input.valor,
             limiteGeneral: input.limiteGeneral || false,
             limiteGeneralOrden: input.limiteGeneral ? Date.now() : null,
+            calculoAutomatico: input.calculoAutomatico || false,
           });
           return { id, alerta };
         }),
       actualizar: protectedProcedure
-        .input(z.object({ id: z.number(), concepto: z.string().optional(), valor: z.number().optional(), limiteGeneral: z.boolean().optional() }))
+        .input(z.object({
+          id: z.number(), concepto: z.string().optional(), valor: z.number().optional(),
+          limiteGeneral: z.boolean().optional(), calculoAutomatico: z.boolean().optional(),
+        }))
         .mutation(async ({ input, ctx }) => {
           assertRentaPNAccess(ctx.user.role);
           const { id, ...data } = input;

@@ -196,8 +196,8 @@ export const TIPOS_DEDUCCION_RENTA_EXENTA: {
   { tipo: "salud_prepagada", nombre: "Medicina prepagada / seguros de salud", tipoValor: "deduccion", topeUVT: TOPES_DEDUCCION_2025.saludPrepagada },
   { tipo: "dependientes_economicos", nombre: "Dependientes económicos", tipoValor: "deduccion", topeUVT: TOPES_DEDUCCION_2025.dependientes },
   { tipo: "intereses_vivienda", nombre: "Intereses de vivienda (crédito hipotecario/leasing)", tipoValor: "deduccion", topeUVT: TOPES_DEDUCCION_2025.interesesVivienda },
-  { tipo: "gmf_25", nombre: "GMF (4×1000) — 25% deducible (Art. 115 E.T.)", tipoValor: "deduccion", topeUVT: null,
-    nota: "Solo el 25% del GMF efectivamente pagado y certificado por el banco es deducible — digitar ya ese 25%, no el GMF total." },
+  { tipo: "gmf_25", nombre: "GMF (4×1000) — 50% deducible (Art. 115 E.T.)", tipoValor: "deduccion", topeUVT: null,
+    nota: "Solo el 50% del GMF efectivamente pagado y certificado por el banco es deducible — digitar ya ese 50%, no el GMF total." },
   { tipo: "otro", nombre: "Otra deducción/renta exenta (verificar manualmente)", tipoValor: "deduccion", topeUVT: null },
 ];
 
@@ -297,7 +297,7 @@ export function repartirLimiteGeneral<T>(
   return new Map(ajustes.map(it => [it.clave, it.ajustado]));
 }
 
-export type ItemValor = { concepto: string; valor: number; tipoDeduccion?: string | null; tipoGananciaOcasional?: string | null; limiteGeneral?: boolean; limiteGeneralOrden?: number | null };
+export type ItemValor = { concepto: string; valor: number; tipoDeduccion?: string | null; tipoGananciaOcasional?: string | null; limiteGeneral?: boolean; limiteGeneralOrden?: number | null; calculoAutomatico?: boolean };
 
 /** Los datos crudos de UNA de las 4 sub-rentas de la Cédula General, o de
  * Pensiones/Dividendos — cada casilla del Formulario 210 corresponde a uno
@@ -451,6 +451,10 @@ export type ResultadoSubRenta = {
 export type ResultadoLiquidacion = {
   patrimonioBruto: number; deudas: number; patrimonioLiquido: number;
   subRentas: Record<string, ResultadoSubRenta>; // trabajo, trabajo_honorarios, capital, no_laboral
+  /** Valor final (ya convergido y ajustado por el 40%) del 25% renta
+   * exenta laboral cuando está marcado como cálculo automático — null si
+   * no hay ninguna partida así en la cédula de trabajo. */
+  auto25CalculadoValor: number | null;
   baseCalculoLimite: number;
   limite40PorcientoOMil340UVT: number;
   totalDisponibleGeneral: number;
@@ -518,54 +522,88 @@ export function armarLiquidacion(datos: DatosLiquidacion): ResultadoLiquidacion 
   const patrimonioLiquido = Math.max(0, patrimonioBruto - deudas);
 
   const vacio: DatosCedula = { ingresoBruto: [], ingresoNoConstitutivo: [], costoDeduccionProcedente: [], rentaExenta: [], deduccion: [], retencion: [] };
-  const subRentasBase: Record<string, ResultadoSubRenta> = {};
-  for (const nombre of SUBRENTAS_GENERAL) {
-    const c = datos.cedulas[nombre] || vacio;
-    const ingresoBruto = sumaItems(c.ingresoBruto);
-    const ingresoNoConstitutivo = sumaItems(c.ingresoNoConstitutivo);
-    const costoDeduccionProcedente = nombre === "trabajo" ? 0 : sumaItems(c.costoDeduccionProcedente);
-    const rentaLiquida = Math.max(0, ingresoBruto - ingresoNoConstitutivo - costoDeduccionProcedente);
-    const rentaExentaDisponible = c.rentaExenta.reduce((a, it) => a + calcularValorLimitado(it.valor, it.tipoDeduccion, ingresoBruto), 0);
-    const deduccionDisponible = c.deduccion.reduce((a, it) => a + calcularValorLimitado(it.valor, it.tipoDeduccion, ingresoBruto), 0);
-    subRentasBase[nombre] = {
-      ingresoBruto, ingresoNoConstitutivo, costoDeduccionProcedente, rentaLiquida,
-      rentaExentaDisponible, deduccionDisponible, rentaExentaDeduccionAsignada: 0, rentaLiquidaOrdinaria: rentaLiquida,
-    };
-  }
 
-  // Base para el límite del 40%/1.340 UVT: suma de ingresos brutos menos
-  // ingresos no constitutivos de las 4 sub-rentas (el instructivo no resta
-  // costos en este paso — solo se restan al calcular la renta líquida de
-  // cada sub-renta por separado).
-  const baseCalculoLimite = SUBRENTAS_GENERAL.reduce(
-    (a, n) => a + subRentasBase[n].ingresoBruto - subRentasBase[n].ingresoNoConstitutivo, 0,
-  );
-  const topeUVT = redondearPesosDian(TOPES_DEDUCCION_2025.limiteGlobalDeduccionesRentasExentas * UVT_2025);
-  const limite40PorcientoOMil340UVT = Math.min(baseCalculoLimite * 0.4, topeUVT);
-  const totalDisponibleGeneral = SUBRENTAS_GENERAL.reduce(
-    (a, n) => a + subRentasBase[n].rentaExentaDisponible + subRentasBase[n].deduccionDisponible, 0,
-  );
-  const valorDistribuido = Math.min(limite40PorcientoOMil340UVT, totalDisponibleGeneral);
+  // Si "trabajo" tiene una renta exenta del 25% marcada como cálculo
+  // automático, su valor depende de las DEMÁS partidas de esa cédula ya
+  // depuradas — y esas, a su vez, pueden reducirse por el reparto del
+  // 40%/1.340 UVT, lo que vuelve a cambiar la base del 25%. Por eso todo
+  // este bloque se repite en un ciclo hasta que el 25% se estabiliza
+  // (normalmente converge en 2-3 vueltas, cada ronda pesa 25% de la
+  // anterior) — así "cuando se limita alguna partida de forma
+  // secuencial, se recalcula el 25% de nuevo", como se necesitaba.
+  const cTrabajo = datos.cedulas["trabajo"] || vacio;
+  const itemAuto25 = cTrabajo.rentaExenta.find(it => it.tipoDeduccion === "renta_exenta_25_laboral" && it.calculoAutomatico);
+  const tope25UVT = TIPOS_DEDUCCION_RENTA_EXENTA.find(t => t.tipo === "renta_exenta_25_laboral")?.topeUVT || 0;
+  const tope25Pesos = redondearPesosDian(tope25UVT * UVT_2025);
 
-  // Reparto del tope global: si el contador marcó alguna partida como
-  // "límite general", esa(s) partida(s) absorben el ajuste primero
-  // (proporcionalmente entre ellas si hay varias) — así el contador
-  // decide qué deducción/renta exenta se recorta en vez de que el
-  // sistema lo decida solo. Si no alcanza lo marcado (o no se marcó
-  // nada), el resto se reparte con el orden automático de siempre:
-  // trabajo → trabajo_honorarios → capital → no_laboral, cédula por
-  // cédula (compatible con clientes que no usan esta opción nueva).
-  const itemsGeneral: { clave: number; cedula: string; valor: number; marcado: boolean; orden?: number | null }[] = [];
-  let claveSecuencial = 0;
-  for (const nombre of SUBRENTAS_GENERAL) {
-    const c = datos.cedulas[nombre] || vacio;
-    const ingresoBrutoCedula = subRentasBase[nombre].ingresoBruto;
-    for (const it of [...c.deduccion, ...c.rentaExenta]) {
-      const valorLimitado = calcularValorLimitado(it.valor, it.tipoDeduccion, ingresoBrutoCedula);
-      itemsGeneral.push({ clave: claveSecuencial++, cedula: nombre, valor: valorLimitado, marcado: !!it.limiteGeneral, orden: it.limiteGeneralOrden });
+  let subRentasBase: Record<string, ResultadoSubRenta> = {};
+  let itemsGeneral: { clave: number; cedula: string; valor: number; marcado: boolean; orden?: number | null }[] = [];
+  let ajustesPorClave: Map<number, number> = new Map();
+  let limite40PorcientoOMil340UVT = 0;
+  let claveAuto25: number | null = null;
+  let baseCalculoLimite = 0;
+  let totalDisponibleGeneral = 0;
+  let auto25Valor = 0;
+
+  for (let iteracion = 0; iteracion < 25; iteracion++) {
+    subRentasBase = {};
+    for (const nombre of SUBRENTAS_GENERAL) {
+      const c = datos.cedulas[nombre] || vacio;
+      const ingresoBruto = sumaItems(c.ingresoBruto);
+      const ingresoNoConstitutivo = sumaItems(c.ingresoNoConstitutivo);
+      const costoDeduccionProcedente = nombre === "trabajo" ? 0 : sumaItems(c.costoDeduccionProcedente);
+      const rentaLiquida = Math.max(0, ingresoBruto - ingresoNoConstitutivo - costoDeduccionProcedente);
+      const rentaExentaItems = nombre === "trabajo" ? c.rentaExenta.filter(it => it !== itemAuto25) : c.rentaExenta;
+      let rentaExentaDisponible = rentaExentaItems.reduce((a, it) => a + calcularValorLimitado(it.valor, it.tipoDeduccion, ingresoBruto), 0);
+      if (nombre === "trabajo" && itemAuto25) rentaExentaDisponible += auto25Valor;
+      const deduccionDisponible = c.deduccion.reduce((a, it) => a + calcularValorLimitado(it.valor, it.tipoDeduccion, ingresoBruto), 0);
+      subRentasBase[nombre] = {
+        ingresoBruto, ingresoNoConstitutivo, costoDeduccionProcedente, rentaLiquida,
+        rentaExentaDisponible, deduccionDisponible, rentaExentaDeduccionAsignada: 0, rentaLiquidaOrdinaria: rentaLiquida,
+      };
     }
+
+    baseCalculoLimite = SUBRENTAS_GENERAL.reduce(
+      (a, n) => a + subRentasBase[n].ingresoBruto - subRentasBase[n].ingresoNoConstitutivo, 0,
+    );
+    const topeUVT = redondearPesosDian(TOPES_DEDUCCION_2025.limiteGlobalDeduccionesRentasExentas * UVT_2025);
+    limite40PorcientoOMil340UVT = Math.min(baseCalculoLimite * 0.4, topeUVT);
+    totalDisponibleGeneral = SUBRENTAS_GENERAL.reduce(
+      (a, n) => a + subRentasBase[n].rentaExentaDisponible + subRentasBase[n].deduccionDisponible, 0,
+    );
+
+    itemsGeneral = [];
+    let claveSecuencial = 0;
+    for (const nombre of SUBRENTAS_GENERAL) {
+      const c = datos.cedulas[nombre] || vacio;
+      const ingresoBrutoCedula = subRentasBase[nombre].ingresoBruto;
+      const rentaExentaItems = nombre === "trabajo" ? c.rentaExenta.filter(it => it !== itemAuto25) : c.rentaExenta;
+      for (const it of [...c.deduccion, ...rentaExentaItems]) {
+        const valorLimitado = calcularValorLimitado(it.valor, it.tipoDeduccion, ingresoBrutoCedula);
+        itemsGeneral.push({ clave: claveSecuencial++, cedula: nombre, valor: valorLimitado, marcado: !!it.limiteGeneral, orden: it.limiteGeneralOrden });
+      }
+      if (nombre === "trabajo" && itemAuto25) {
+        claveAuto25 = claveSecuencial++;
+        itemsGeneral.push({ clave: claveAuto25, cedula: "trabajo", valor: auto25Valor, marcado: !!itemAuto25.limiteGeneral, orden: itemAuto25.limiteGeneralOrden });
+      }
+    }
+    ajustesPorClave = repartirLimiteGeneral(itemsGeneral, limite40PorcientoOMil340UVT, SUBRENTAS_GENERAL);
+
+    if (!itemAuto25) break; // sin cálculo automático, una sola pasada alcanza
+
+    // Recalcular el 25% con las DEMÁS partidas de trabajo ya ajustadas
+    // (su valor final tras el reparto, no solo su tope individual).
+    const otrosTrabajoAjustados = itemsGeneral
+      .filter(it => it.cedula === "trabajo" && it.clave !== claveAuto25)
+      .reduce((a, it) => a + (ajustesPorClave.get(it.clave) ?? it.valor), 0);
+    const baseDepurada = Math.max(0, subRentasBase.trabajo.ingresoBruto - subRentasBase.trabajo.ingresoNoConstitutivo - otrosTrabajoAjustados);
+    const nuevoAuto25 = Math.min(Math.round(baseDepurada * 0.25), tope25Pesos);
+
+    if (Math.abs(nuevoAuto25 - auto25Valor) < 1) { auto25Valor = nuevoAuto25; break; }
+    auto25Valor = nuevoAuto25;
   }
-  const ajustesPorClave = repartirLimiteGeneral(itemsGeneral, limite40PorcientoOMil340UVT, SUBRENTAS_GENERAL);
+
+  const valorDistribuido = Math.min(limite40PorcientoOMil340UVT, totalDisponibleGeneral);
 
   for (const nombre of SUBRENTAS_GENERAL) {
     const sr = subRentasBase[nombre];
@@ -657,6 +695,7 @@ export function armarLiquidacion(datos: DatosLiquidacion): ResultadoLiquidacion 
 
   return {
     patrimonioBruto, deudas, patrimonioLiquido, subRentas: subRentasBase,
+    auto25CalculadoValor: itemAuto25 ? (ajustesPorClave.get(claveAuto25 as number) ?? auto25Valor) : null,
     baseCalculoLimite, limite40PorcientoOMil340UVT, totalDisponibleGeneral, valorDistribuido,
     rentaLiquidaCedulaGeneral,
     ingresoBrutoPensiones, rentaLiquidaPensiones, rentaExentaPensiones, rentaLiquidaGravablePensiones,
@@ -1218,7 +1257,10 @@ export async function generarAnexosRenta(
       if (!c) continue;
       const ingresoBrutoCedula = c.ingresoBruto.reduce((a, it) => a + it.valor, 0);
       for (const it of [...c.deduccion, ...c.rentaExenta]) {
-        const valorLimitado = calcularValorLimitado(it.valor, it.tipoDeduccion, ingresoBrutoCedula);
+        const esAuto25 = it.tipoDeduccion === "renta_exenta_25_laboral" && it.calculoAutomatico;
+        const valorLimitado = esAuto25 && resultado.auto25CalculadoValor != null
+          ? resultado.auto25CalculadoValor
+          : calcularValorLimitado(it.valor, it.tipoDeduccion, ingresoBrutoCedula);
         itemsGeneral.push({ clave: it, cedula: nombre, valor: valorLimitado, marcado: !!it.limiteGeneral, orden: it.limiteGeneralOrden });
       }
     }
@@ -1232,8 +1274,11 @@ export async function generarAnexosRenta(
 
     const ingresoBrutoCedula = c.ingresoBruto.reduce((a, it) => a + it.valor, 0);
     const lineaLimitada = (it: ItemValor) => {
-      const limitado = ajustesGeneralPorItem.get(it) ?? calcularValorLimitado(it.valor, it.tipoDeduccion, ingresoBrutoCedula);
-      const nota = limitado < it.valor ? ` (digitado: ${fmt(it.valor)})` : "";
+      const esAuto25 = it.tipoDeduccion === "renta_exenta_25_laboral" && it.calculoAutomatico;
+      const limitado = esAuto25 && resultado.auto25CalculadoValor != null
+        ? resultado.auto25CalculadoValor
+        : (ajustesGeneralPorItem.get(it) ?? calcularValorLimitado(it.valor, it.tipoDeduccion, ingresoBrutoCedula));
+      const nota = esAuto25 ? " (calculado automáticamente)" : (limitado < it.valor ? ` (digitado: ${fmt(it.valor)})` : "");
       filaTexto(it.concepto, `-${fmt(limitado)}${nota}`, { indent: 8, color: "#b91c1c" });
     };
 

@@ -624,6 +624,11 @@ export const rentaClientes = mysqlTable("rentaClientes", {
   /** Cliente inactivo — ya no aparece por defecto en el listado, sin
    * borrar su historial. */
   activo: boolean("activo").default(true).notNull(),
+  /** Último estado marcado en la Solicitud de Documentos al Cliente
+   * (JSON: {seleccionados, documentosExtra, observaciones}) — se guarda
+   * al cerrar el diálogo para no perder lo marcado la próxima vez que
+   * se abra. Null si nunca se ha usado para este cliente. */
+  solicitudDocumentosEstado: text("solicitudDocumentosEstado"),
 }, (table) => ({
   cedulaAnioIdx: uniqueIndex("rentaClientes_cedula_anio_idx").on(table.cedula, table.anioGravable),
 }));
@@ -739,6 +744,12 @@ export const rentaLiquidacionItems = mysqlTable("rentaLiquidacionItems", {
    * así el asesor controla exactamente cuál partida se sacrifica
    * primero. Null si no está marcada. */
   limiteGeneralOrden: double("limiteGeneralOrden"),
+  /** Solo para renta_exenta_25_laboral en la cédula de trabajo: si está
+   * en true, el "valor" digitado se ignora y el 25% se calcula solo
+   * (sobre el ingreso ya depurado de INCRNGO, deducciones y demás
+   * rentas exentas de esa cédula) — se recalcula cada vez que cambia
+   * cualquiera de esas otras partidas. */
+  calculoAutomatico: boolean("calculoAutomatico").default(false).notNull(),
   concepto: varchar("concepto", { length: 255 }).notNull(),
   valor: double("valor").notNull(),
   origen: mysqlEnum("origen", ["exogena", "manual"]).default("manual").notNull(),

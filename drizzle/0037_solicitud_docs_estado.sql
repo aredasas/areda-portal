@@ -1,0 +1,1 @@
+ALTER TABLE `rentaClientes` ADD `solicitudDocumentosEstado` text;
