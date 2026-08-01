@@ -2345,6 +2345,19 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
             return { ...it, valorLimitado };
           });
 
+          // Si hay una partida de 25% laboral en cálculo automático, se
+          // calcula su valor real ANTES de repartir el tope entre las
+          // demás partidas — de lo contrario el reparto de abajo la
+          // trataría como si valiera $0 (su "valor" digitado, que no se
+          // usa cuando está en automático), subestimando cuánto hay que
+          // ajustar a las demás y descuadrando lo que se ve en pantalla.
+          const itemAuto25 = conLimitado.find(it => it.tipoDeduccion === "renta_exenta_25_laboral" && it.calculoAutomatico);
+          let auto25Real: number | null = null;
+          if (itemAuto25) {
+            const datosCompletos = await db.getDatosLiquidacion(input.rentaClienteId);
+            if (datosCompletos) auto25Real = rentaDb.armarLiquidacion(datosCompletos as any).auto25CalculadoValor;
+          }
+
           const esGeneral = (cedula: string | null) => cedula != null && (rentaDb.SUBRENTAS_GENERAL as readonly string[]).includes(cedula);
           const itemsGeneral = conLimitado.filter(it => (it.tipoValor === "deduccion" || it.tipoValor === "renta_exenta") && esGeneral(it.cedula));
           let resultado = conLimitado;
@@ -2355,25 +2368,25 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
             const topeUVT = rentaDb.redondearPesosDian(rentaDb.TOPES_DEDUCCION_2025.limiteGlobalDeduccionesRentasExentas * rentaDb.UVT_2025);
             const limiteGlobal = Math.min(baseCalculoLimite * 0.4, topeUVT);
             const ajustes = rentaDb.repartirLimiteGeneral(
-              itemsGeneral.map(it => ({ clave: it.id, cedula: it.cedula, valor: it.valorLimitado, marcado: !!it.limiteGeneral, orden: it.limiteGeneralOrden })),
+              itemsGeneral.map(it => {
+                const esEsteAuto25 = itemAuto25 && it.id === itemAuto25.id;
+                return {
+                  clave: it.id, cedula: it.cedula,
+                  valor: esEsteAuto25 && auto25Real != null ? auto25Real : it.valorLimitado,
+                  // El 25% automático siempre "marcado" y con la última
+                  // prioridad — mismo criterio que dentro de armarLiquidacion,
+                  // para que la reducción de las demás partidas sea
+                  // consistente con lo que el 25% realmente terminó usando.
+                  marcado: esEsteAuto25 ? true : !!it.limiteGeneral,
+                  orden: esEsteAuto25 ? Infinity : it.limiteGeneralOrden,
+                };
+              }),
               limiteGlobal, rentaDb.SUBRENTAS_GENERAL, true,
             );
             resultado = conLimitado.map(it => ajustes.has(it.id) ? { ...it, valorAjustadoGeneral: ajustes.get(it.id) } : it);
           }
-          // Si hay una partida de 25% laboral en cálculo automático, su
-          // "Limitado" no sale del reparto de arriba (que usa el valor
-          // digitado, irrelevante aquí) sino del cálculo iterativo
-          // completo — se reutiliza armarLiquidacion para no duplicar esa
-          // lógica (marcados/no marcados, recálculo tras cada ajuste).
-          const itemAuto25 = resultado.find(it => it.tipoDeduccion === "renta_exenta_25_laboral" && it.calculoAutomatico);
-          if (itemAuto25) {
-            const datosCompletos = await db.getDatosLiquidacion(input.rentaClienteId);
-            if (datosCompletos) {
-              const r = rentaDb.armarLiquidacion(datosCompletos as any);
-              if (r.auto25CalculadoValor != null) {
-                resultado = resultado.map(it => it.id === itemAuto25.id ? { ...it, valorAjustadoGeneral: r.auto25CalculadoValor, valorLimitado: r.auto25CalculadoValor } : it);
-              }
-            }
+          if (itemAuto25 && auto25Real != null) {
+            resultado = resultado.map(it => it.id === itemAuto25.id ? { ...it, valorAjustadoGeneral: auto25Real, valorLimitado: auto25Real } : it);
           }
           return resultado;
         }),

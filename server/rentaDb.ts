@@ -1275,7 +1275,11 @@ export async function generarAnexosRenta(
         const valorLimitado = esAuto25 && resultado.auto25CalculadoValor != null
           ? resultado.auto25CalculadoValor
           : calcularValorLimitado(it.valor, it.tipoDeduccion, ingresoBrutoCedula);
-        itemsGeneral.push({ clave: it, cedula: nombre, valor: valorLimitado, marcado: !!it.limiteGeneral, orden: it.limiteGeneralOrden });
+        // El 25% automático siempre "marcado" con la última prioridad —
+        // mismo criterio que en armarLiquidacion y en el endpoint de
+        // pantalla, para que el ajuste de las demás partidas sea
+        // consistente con lo que el 25% realmente terminó usando.
+        itemsGeneral.push({ clave: it, cedula: nombre, valor: valorLimitado, marcado: esAuto25 ? true : !!it.limiteGeneral, orden: esAuto25 ? Infinity : it.limiteGeneralOrden });
       }
     }
     const ajustes = repartirLimiteGeneral(itemsGeneral, resultado.limite40PorcientoOMil340UVT, SUBRENTAS_GENERAL, true);
