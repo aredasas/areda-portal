@@ -584,10 +584,24 @@ export function armarLiquidacion(datos: DatosLiquidacion): ResultadoLiquidacion 
       }
       if (nombre === "trabajo" && itemAuto25) {
         claveAuto25 = claveSecuencial++;
-        itemsGeneral.push({ clave: claveAuto25, cedula: "trabajo", valor: auto25Valor, marcado: !!itemAuto25.limiteGeneral, orden: itemAuto25.limiteGeneralOrden });
+        // El 25% automático queda SIEMPRE "marcado" internamente (sin
+        // importar si el asesor lo marcó a mano) — al ser la partida que
+        // se calcula de último, es la que naturalmente debe absorber el
+        // ajuste del 40% general si nada más se marcó, en vez de que otra
+        // partida se reduzca en silencio (lo que antes descuadraba lo que
+        // se ve en pantalla contra lo que el 25% terminaba usando). Se le
+        // da la ÚLTIMA prioridad en el orden secuencial (Infinity) para
+        // que, si el asesor SÍ marcó otra(s) partida(s) a mano, esas se
+        // agoten primero — el 25% solo entra como último recurso.
+        itemsGeneral.push({ clave: claveAuto25, cedula: "trabajo", valor: auto25Valor, marcado: true, orden: Infinity });
       }
     }
-    ajustesPorClave = repartirLimiteGeneral(itemsGeneral, limite40PorcientoOMil340UVT, SUBRENTAS_GENERAL);
+    // soloMarcados=true cuando hay 25% automático: como esa partida queda
+    // siempre marcada (línea de arriba), ya hay garantía de que algo
+    // absorbe el excedente sin necesidad del reparto de respaldo — así
+    // ninguna OTRA partida sin marcar se reduce en silencio, ni para
+    // mostrar en pantalla ni para el cálculo real de impuestos.
+    ajustesPorClave = repartirLimiteGeneral(itemsGeneral, limite40PorcientoOMil340UVT, SUBRENTAS_GENERAL, !!itemAuto25);
 
     if (!itemAuto25) break; // sin cálculo automático, una sola pasada alcanza
 
