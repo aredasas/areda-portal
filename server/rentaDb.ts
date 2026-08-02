@@ -584,24 +584,20 @@ export function armarLiquidacion(datos: DatosLiquidacion): ResultadoLiquidacion 
       }
       if (nombre === "trabajo" && itemAuto25) {
         claveAuto25 = claveSecuencial++;
-        // El 25% automático queda SIEMPRE "marcado" internamente (sin
-        // importar si el asesor lo marcó a mano) — al ser la partida que
-        // se calcula de último, es la que naturalmente debe absorber el
-        // ajuste del 40% general si nada más se marcó, en vez de que otra
-        // partida se reduzca en silencio (lo que antes descuadraba lo que
-        // se ve en pantalla contra lo que el 25% terminaba usando). Se le
-        // da la ÚLTIMA prioridad en el orden secuencial (Infinity) para
-        // que, si el asesor SÍ marcó otra(s) partida(s) a mano, esas se
-        // agoten primero — el 25% solo entra como último recurso.
-        itemsGeneral.push({ clave: claveAuto25, cedula: "trabajo", valor: auto25Valor, marcado: true, orden: Infinity });
+        // El 25% automático es UNA PARTIDA MÁS del reparto — se reduce
+        // solo si el asesor lo marca a mano como "límite general", igual
+        // que cualquier otra. Si no lo marca (y no marca nada más),
+        // muestra su valor natural calculado aunque el conjunto supere
+        // el tope — el aviso rojo existe para eso, y es el asesor quien
+        // decide qué partida ajustar, no el sistema en silencio.
+        itemsGeneral.push({ clave: claveAuto25, cedula: "trabajo", valor: auto25Valor, marcado: !!itemAuto25.limiteGeneral, orden: itemAuto25.limiteGeneralOrden });
       }
     }
-    // soloMarcados=true cuando hay 25% automático: como esa partida queda
-    // siempre marcada (línea de arriba), ya hay garantía de que algo
-    // absorbe el excedente sin necesidad del reparto de respaldo — así
-    // ninguna OTRA partida sin marcar se reduce en silencio, ni para
-    // mostrar en pantalla ni para el cálculo real de impuestos.
-    ajustesPorClave = repartirLimiteGeneral(itemsGeneral, limite40PorcientoOMil340UVT, SUBRENTAS_GENERAL, !!itemAuto25);
+    // soloMarcados=true SIEMPRE: ninguna partida sin marcar se reduce en
+    // silencio (ni para pantalla ni para el cálculo real) — si nada está
+    // marcado y el conjunto supera el tope, el aviso de "Validar Renta"
+    // lo señala y el asesor decide qué marcar para resolverlo.
+    ajustesPorClave = repartirLimiteGeneral(itemsGeneral, limite40PorcientoOMil340UVT, SUBRENTAS_GENERAL, true);
 
     if (!itemAuto25) break; // sin cálculo automático, una sola pasada alcanza
 
@@ -765,21 +761,14 @@ export function validarRenta(
     }
   }
 
-  // 2. Tope global de la Cédula General (40% / 1.340 UVT).
-  const topeGlobalPesos = redondearPesosDian(TOPES_DEDUCCION_2025.limiteGlobalDeduccionesRentasExentas * UVT_2025);
-  const totalGeneralSinCapear = SUBRENTAS_GENERAL.reduce((a, n) => {
-    const c = datos.cedulas[n];
-    if (!c) return a;
-    const ingresoBrutoCedula = sumaItems(c.ingresoBruto);
-    const totalCedula = [...c.deduccion, ...c.rentaExenta].reduce(
-      (s, it) => s + calcularValorLimitado(it.valor, it.tipoDeduccion, ingresoBrutoCedula), 0,
-    );
-    return a + totalCedula;
-  }, 0);
-  if (totalGeneralSinCapear > resultado.limite40PorcientoOMil340UVT) {
+  // 2. Tope global de la Cédula General (40% / 1.340 UVT). Se usa
+  // resultado.totalDisponibleGeneral (ya calculado dentro de
+  // armarLiquidacion, incluye correctamente el valor real de cualquier
+  // renta exenta en cálculo automático) en vez de recalcular aparte.
+  if (resultado.totalDisponibleGeneral > resultado.limite40PorcientoOMil340UVT) {
     hallazgos.push({
       severidad: "advertencia", categoria: "Tope global Cédula General",
-      mensaje: `Las deducciones y rentas exentas cargadas (${fmt(totalGeneralSinCapear)}) superan el límite calculado (${fmt(resultado.limite40PorcientoOMil340UVT)}) — el sistema ya repartió el máximo permitido entre las sub-rentas, pero el excedente no se aprovecha.`,
+      mensaje: `Las deducciones y rentas exentas cargadas (${fmt(resultado.totalDisponibleGeneral)}) superan el límite calculado (${fmt(resultado.limite40PorcientoOMil340UVT)}) — marca cuál partida (o partidas) debe absorber el ajuste con "Límite general" para resolverlo; mientras no se marque nada, el excedente queda sin resolver.`,
     });
   }
 
@@ -1275,11 +1264,10 @@ export async function generarAnexosRenta(
         const valorLimitado = esAuto25 && resultado.auto25CalculadoValor != null
           ? resultado.auto25CalculadoValor
           : calcularValorLimitado(it.valor, it.tipoDeduccion, ingresoBrutoCedula);
-        // El 25% automático siempre "marcado" con la última prioridad —
-        // mismo criterio que en armarLiquidacion y en el endpoint de
-        // pantalla, para que el ajuste de las demás partidas sea
-        // consistente con lo que el 25% realmente terminó usando.
-        itemsGeneral.push({ clave: it, cedula: nombre, valor: valorLimitado, marcado: esAuto25 ? true : !!it.limiteGeneral, orden: esAuto25 ? Infinity : it.limiteGeneralOrden });
+        // El 25% automático se reduce solo si el asesor lo marca a mano,
+        // igual que cualquier otra partida — el valor ya inyectado arriba
+        // (resultado.auto25CalculadoValor) refleja su estado final real.
+        itemsGeneral.push({ clave: it, cedula: nombre, valor: valorLimitado, marcado: !!it.limiteGeneral, orden: it.limiteGeneralOrden });
       }
     }
     const ajustes = repartirLimiteGeneral(itemsGeneral, resultado.limite40PorcientoOMil340UVT, SUBRENTAS_GENERAL, true);

@@ -2373,12 +2373,12 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
                 return {
                   clave: it.id, cedula: it.cedula,
                   valor: esEsteAuto25 && auto25Real != null ? auto25Real : it.valorLimitado,
-                  // El 25% automático siempre "marcado" y con la última
-                  // prioridad — mismo criterio que dentro de armarLiquidacion,
-                  // para que la reducción de las demás partidas sea
-                  // consistente con lo que el 25% realmente terminó usando.
-                  marcado: esEsteAuto25 ? true : !!it.limiteGeneral,
-                  orden: esEsteAuto25 ? Infinity : it.limiteGeneralOrden,
+                  // El 25% automático se reduce solo si el asesor lo marca a
+                  // mano, igual que cualquier otra partida — si no lo marca
+                  // (ni marca nada más), muestra su valor natural calculado
+                  // aunque el conjunto supere el tope.
+                  marcado: !!it.limiteGeneral,
+                  orden: it.limiteGeneralOrden,
                 };
               }),
               limiteGlobal, rentaDb.SUBRENTAS_GENERAL, true,
