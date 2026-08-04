@@ -1,5 +1,6 @@
 import { and, eq, sql, isNull, desc, inArray } from "drizzle-orm";
 import ExcelJS from "exceljs";
+import * as XLSX from "xlsx";
 import { Readable } from "stream";
 import { getDb } from "./db";
 import {
@@ -95,26 +96,28 @@ export async function detectarCentrosCostoDesdeSaldos(clienteId: number): Promis
 /** Lee un archivo de CATÁLOGO de centros de costo (código+nombre, formato
  * flexible igual que el de cuentas) y devuelve código -> nombre. */
 export async function parseCatalogoCentrosCosto(filePathOrBuffer: string | Buffer): Promise<Map<string, string>> {
+  // Ni ExcelJS (algunos archivos no los lee, sin dar error — mismo motivo
+  // por el que ya se usa SheetJS para los archivos de la DIAN y de
+  // exógena) ni `pareceCodigoDeCuenta` (exige solo dígitos, pero los
+  // códigos de centro de costo suelen ser alfabéticos, ej. "ADMI",
+  // "RSUR") sirven aquí — este parser usa su propia validación, solo que
+  // el código no venga vacío.
   const nombres = new Map<string, string>();
-  const entrada = Buffer.isBuffer(filePathOrBuffer) ? Readable.from(filePathOrBuffer) : filePathOrBuffer;
-  const reader = new ExcelJS.stream.xlsx.WorkbookReader(entrada as any, {});
-  let header: any[] | null = null;
-  let cols: { cuenta: number; nombre: number } | null = null;
+  const buffer = Buffer.isBuffer(filePathOrBuffer) ? filePathOrBuffer : require("fs").readFileSync(filePathOrBuffer);
+  const wb = XLSX.read(buffer, { type: "buffer" });
+  const hoja = wb.Sheets[wb.SheetNames[0]];
+  const filas: any[][] = XLSX.utils.sheet_to_json(hoja, { header: 1, defval: null });
+  if (filas.length === 0) return nombres;
 
-  for await (const worksheetReader of reader) {
-    for await (const row of worksheetReader) {
-      const values = row.values as any[];
-      if (!header) {
-        header = values;
-        cols = resolverColumnasCatalogo(header);
-        continue;
-      }
-      const codigoRaw = values[cols!.cuenta];
-      if (!pareceCodigoDeCuenta(codigoRaw)) continue;
-      const nombreRaw = values[cols!.nombre];
-      const nombre = nombreRaw !== null && nombreRaw !== undefined ? String(nombreRaw).trim() : "";
-      if (nombre) nombres.set(String(codigoRaw).trim().padStart(2, "0"), nombre);
-    }
+  const cols = resolverColumnasCatalogo(filas[0]);
+  for (let i = 1; i < filas.length; i++) {
+    const values = filas[i];
+    if (!values) continue;
+    const codigoRaw = values[cols.cuenta];
+    if (codigoRaw === null || codigoRaw === undefined || String(codigoRaw).trim() === "") continue;
+    const nombreRaw = values[cols.nombre];
+    const nombre = nombreRaw !== null && nombreRaw !== undefined ? String(nombreRaw).trim() : "";
+    if (nombre) nombres.set(String(codigoRaw).trim().padStart(2, "0"), nombre);
   }
   return nombres;
 }
@@ -484,25 +487,21 @@ export async function marcarCargaError(cargaId: number, mensaje: string) {
  * que tengan un código numérico y un nombre. */
 export async function parseCatalogoCuentas(filePathOrBuffer: string | Buffer): Promise<Map<string, string>> {
   const nombres = new Map<string, string>();
-  const entrada = Buffer.isBuffer(filePathOrBuffer) ? Readable.from(filePathOrBuffer) : filePathOrBuffer;
-  const reader = new ExcelJS.stream.xlsx.WorkbookReader(entrada as any, {});
-  let header: any[] | null = null;
-  let cols: { cuenta: number; nombre: number } | null = null;
+  const buffer = Buffer.isBuffer(filePathOrBuffer) ? filePathOrBuffer : require("fs").readFileSync(filePathOrBuffer);
+  const wb = XLSX.read(buffer, { type: "buffer" });
+  const hoja = wb.Sheets[wb.SheetNames[0]];
+  const filas: any[][] = XLSX.utils.sheet_to_json(hoja, { header: 1, defval: null });
+  if (filas.length === 0) return nombres;
 
-  for await (const worksheetReader of reader) {
-    for await (const row of worksheetReader) {
-      const values = row.values as any[];
-      if (!header) {
-        header = values;
-        cols = resolverColumnasCatalogo(header);
-        continue;
-      }
-      const cuentaRaw = values[cols!.cuenta];
-      if (!pareceCodigoDeCuenta(cuentaRaw)) continue;
-      const nombreRaw = values[cols!.nombre];
-      const nombre = nombreRaw !== null && nombreRaw !== undefined ? String(nombreRaw).trim() : "";
-      if (nombre) nombres.set(String(cuentaRaw).trim(), nombre);
-    }
+  const cols = resolverColumnasCatalogo(filas[0]);
+  for (let i = 1; i < filas.length; i++) {
+    const values = filas[i];
+    if (!values) continue;
+    const cuentaRaw = values[cols.cuenta];
+    if (!pareceCodigoDeCuenta(cuentaRaw)) continue;
+    const nombreRaw = values[cols.nombre];
+    const nombre = nombreRaw !== null && nombreRaw !== undefined ? String(nombreRaw).trim() : "";
+    if (nombre) nombres.set(String(cuentaRaw).trim(), nombre);
   }
   return nombres;
 }

@@ -265,6 +265,18 @@ export function parseFecha(raw: any): { anio: number; mes: number } | null {
   if (raw === null || raw === undefined || raw === "") return null;
   if (raw instanceof Date) return { anio: raw.getFullYear(), mes: raw.getMonth() + 1 };
   if (typeof raw === "number") {
+    // Formato AAAAMMDD como número entero (ej. 20260101) — algunos
+    // softwares contables exportan la fecha así en vez de como fecha de
+    // Excel. Se distingue fácil de un serial de Excel real: los seriales
+    // de fechas de negocio actuales están en el rango ~25.000-60.000
+    // (años 1968-2064), muy por debajo de un AAAAMMDD de 8 dígitos.
+    if (raw >= 19000101 && raw <= 21001231) {
+      const texto = String(Math.trunc(raw));
+      const anio = Number(texto.slice(0, 4));
+      const mes = Number(texto.slice(4, 6));
+      const dia = Number(texto.slice(6, 8));
+      if (mes >= 1 && mes <= 12 && dia >= 1 && dia <= 31) return { anio, mes };
+    }
     const d = serialADate(raw);
     return { anio: d.getUTCFullYear(), mes: d.getUTCMonth() + 1 };
   }
@@ -278,6 +290,11 @@ export function parseFecha(raw: any): { anio: number; mes: number } | null {
     if (m) return { anio: Number(m[1]), mes: Number(m[2]) };
     m = s.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/); // DD/MM/YYYY (convención colombiana)
     if (m) return { anio: Number(m[3]), mes: Number(m[2]) };
+    m = s.match(/^(\d{4})(\d{2})(\d{2})$/); // AAAAMMDD sin separadores, como texto
+    if (m) {
+      const anio = Number(m[1]), mes = Number(m[2]), dia = Number(m[3]);
+      if (mes >= 1 && mes <= 12 && dia >= 1 && dia <= 31) return { anio, mes };
+    }
   }
   return null;
 }
