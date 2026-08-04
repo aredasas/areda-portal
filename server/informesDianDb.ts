@@ -1,5 +1,5 @@
 import ExcelJS from "exceljs";
-import { Readable } from "stream";
+import * as XLSX from "xlsx";
 
 // Utilidades de reconocimiento de columnas — mismo enfoque que el resto del
 // módulo Informes (sinónimo + coincidencia de palabra completa), pero
@@ -106,38 +106,41 @@ function resolverColumnasDian(headerRaw: any[]): ColsDian {
 }
 
 export async function parseArchivoDian(filePathOrBuffer: string | Buffer): Promise<FilaDian[]> {
-  const filas: FilaDian[] = [];
-  const entrada = Buffer.isBuffer(filePathOrBuffer) ? Readable.from(filePathOrBuffer) : filePathOrBuffer;
-  const reader = new ExcelJS.stream.xlsx.WorkbookReader(entrada as any, {});
-  let header: any[] | null = null;
-  let cols: ColsDian | null = null;
+  // ExcelJS (incluso en modo streaming) no logra leer algunos archivos de
+  // relación de documentos electrónicos que exporta la DIAN — se
+  // confirmó con un archivo real: no lanza error, simplemente no
+  // encuentra ninguna fila. SheetJS sí los lee bien (mismo motivo por el
+  // que ya se usa SheetJS para los archivos de exógena).
+  const buffer = Buffer.isBuffer(filePathOrBuffer) ? filePathOrBuffer : require("fs").readFileSync(filePathOrBuffer);
+  const wb = XLSX.read(buffer, { type: "buffer" });
+  const hoja = wb.Sheets[wb.SheetNames[0]];
+  const todasLasFilas: any[][] = XLSX.utils.sheet_to_json(hoja, { header: 1, defval: null });
+  if (todasLasFilas.length === 0) return [];
 
-  for await (const worksheetReader of reader) {
-    for await (const row of worksheetReader) {
-      const values = row.values as any[];
-      if (!header) {
-        header = values;
-        cols = resolverColumnasDian(header);
-        continue;
-      }
-      const c = cols!;
-      const folioRaw = values[c.folio];
-      if (folioRaw === null || folioRaw === undefined || folioRaw === "") continue;
-      const grupoTexto = c.grupo !== null ? String(values[c.grupo] ?? "").toLowerCase() : "";
-      const grupo: FilaDian["grupo"] = grupoTexto.includes("emit") ? "Emitido" : grupoTexto.includes("recib") ? "Recibido" : "Desconocido";
-      filas.push({
-        tipo: c.tipo !== null ? String(values[c.tipo] ?? "").trim() : "",
-        folio: String(folioRaw).trim(),
-        prefijo: c.prefijo !== null ? String(values[c.prefijo] ?? "").trim() : "",
-        fecha: c.fecha !== null ? formatearFecha(values[c.fecha]) : "",
-        nitEmisor: String(values[c.nitEmisor] ?? "").trim(),
-        nombreEmisor: c.nombreEmisor !== null ? String(values[c.nombreEmisor] ?? "").trim() : "",
-        nitReceptor: String(values[c.nitReceptor] ?? "").trim(),
-        nombreReceptor: c.nombreReceptor !== null ? String(values[c.nombreReceptor] ?? "").trim() : "",
-        total: Number(values[c.total]) || 0,
-        grupo,
-      });
-    }
+  const header = todasLasFilas[0];
+  const cols = resolverColumnasDian(header);
+  const filas: FilaDian[] = [];
+
+  for (let i = 1; i < todasLasFilas.length; i++) {
+    const values = todasLasFilas[i];
+    if (!values) continue;
+    const c = cols;
+    const folioRaw = values[c.folio];
+    if (folioRaw === null || folioRaw === undefined || folioRaw === "") continue;
+    const grupoTexto = c.grupo !== null ? String(values[c.grupo] ?? "").toLowerCase() : "";
+    const grupo: FilaDian["grupo"] = grupoTexto.includes("emit") ? "Emitido" : grupoTexto.includes("recib") ? "Recibido" : "Desconocido";
+    filas.push({
+      tipo: c.tipo !== null ? String(values[c.tipo] ?? "").trim() : "",
+      folio: String(folioRaw).trim(),
+      prefijo: c.prefijo !== null ? String(values[c.prefijo] ?? "").trim() : "",
+      fecha: c.fecha !== null ? formatearFecha(values[c.fecha]) : "",
+      nitEmisor: String(values[c.nitEmisor] ?? "").trim(),
+      nombreEmisor: c.nombreEmisor !== null ? String(values[c.nombreEmisor] ?? "").trim() : "",
+      nitReceptor: String(values[c.nitReceptor] ?? "").trim(),
+      nombreReceptor: c.nombreReceptor !== null ? String(values[c.nombreReceptor] ?? "").trim() : "",
+      total: Number(values[c.total]) || 0,
+      grupo,
+    });
   }
   return filas;
 }
@@ -233,53 +236,51 @@ export async function parseAuxiliarParaDian(
   // serie con un valor totalmente distinto (confirmado con datos reales:
   // el mismo número aparecía en 2-3 series con montos diferentes).
   const documentos = new Map<string, DocumentoAuxiliar>();
-  const entrada = Buffer.isBuffer(filePathOrBuffer) ? Readable.from(filePathOrBuffer) : filePathOrBuffer;
-  const reader = new ExcelJS.stream.xlsx.WorkbookReader(entrada as any, {});
-  let header: any[] | null = null;
-  let cols: ColsAuxiliarDian | null = null;
+  const buffer = Buffer.isBuffer(filePathOrBuffer) ? filePathOrBuffer : require("fs").readFileSync(filePathOrBuffer);
+  const wb = XLSX.read(buffer, { type: "buffer" });
+  const hoja = wb.Sheets[wb.SheetNames[0]];
+  const todasLasFilas: any[][] = XLSX.utils.sheet_to_json(hoja, { header: 1, defval: null });
+  if (todasLasFilas.length === 0) return documentos;
+
+  const header = todasLasFilas[0];
+  const cols = resolverColumnasAuxiliarDian(header);
   const valorPorClaveDoc = new Map<string, number>();
   const filasCrudas: { claveDoc: string; numero: string; tercero: string; nombreTercero: string; tipo: string; fecha: string; valorFila: number }[] = [];
 
-  for await (const worksheetReader of reader) {
-    for await (const row of worksheetReader) {
-      const values = row.values as any[];
-      if (!header) {
-        header = values;
-        cols = resolverColumnasAuxiliarDian(header);
-        continue;
-      }
-      const c = cols!;
-      let periodoFila: { anio: number; mes: number } | null = null;
-      if (c.modoFecha !== "ninguna") {
-        periodoFila = periodoDeFilaAuxiliarDian(values, c);
-        if (!periodoFila || periodoFila.anio !== anioObjetivo || periodoFila.mes !== mesObjetivo) continue;
-      }
-      const numeroRaw = values[c.numero];
-      if (numeroRaw === null || numeroRaw === undefined || numeroRaw === "") continue;
-      // El número puede venir limpio (ej. "0000006990") o combinado con el
-      // tipo dentro de un solo texto (ej. "RP-999-65" en un campo
-      // "Comprobante") — se extrae la corrida de dígitos más larga.
-      const numeroTexto = String(numeroRaw);
-      const numeroNorm = extraerNumeroDocumento(numeroTexto);
-      // Si hay una columna de tipo dedicada, se usa; si no, se toma el
-      // prefijo alfabético del mismo campo de número/comprobante como
-      // sustituto (ej. "RP" de "RP-999-65") — así igual se puede distinguir
-      // entre series distintas aunque no haya una columna de tipo aparte.
-      const tipoRaw = c.tipo !== null
-        ? String(values[c.tipo] ?? "").trim()
-        : (numeroTexto.match(/^[A-Za-z]+/)?.[0] || "");
-      const claveDoc = `${tipoRaw}|${numeroNorm}`;
-      const tercero = String(values[c.tercero] ?? "").trim();
-      const nombreTercero = c.nombreTercero !== null ? String(values[c.nombreTercero] ?? "").trim() : "";
-      const fechaTexto = c.modoFecha === "combinada" && c.fecha !== null
-        ? formatearFecha(values[c.fecha])
-        : periodoFila ? `${periodoFila.mes}/${periodoFila.anio}` : "";
-      const debito = Number(values[c.debito]) || 0;
-      const credito = Number(values[c.credito]) || 0;
-      const valorFila = Math.max(Math.abs(debito), Math.abs(credito));
-      filasCrudas.push({ claveDoc, numero: numeroNorm, tercero, nombreTercero, tipo: tipoRaw, fecha: fechaTexto, valorFila });
-      valorPorClaveDoc.set(claveDoc, Math.max(valorPorClaveDoc.get(claveDoc) || 0, valorFila));
+  for (let i = 1; i < todasLasFilas.length; i++) {
+    const values = todasLasFilas[i];
+    if (!values) continue;
+    const c = cols;
+    let periodoFila: { anio: number; mes: number } | null = null;
+    if (c.modoFecha !== "ninguna") {
+      periodoFila = periodoDeFilaAuxiliarDian(values, c);
+      if (!periodoFila || periodoFila.anio !== anioObjetivo || periodoFila.mes !== mesObjetivo) continue;
     }
+    const numeroRaw = values[c.numero];
+    if (numeroRaw === null || numeroRaw === undefined || numeroRaw === "") continue;
+    // El número puede venir limpio (ej. "0000006990") o combinado con el
+    // tipo dentro de un solo texto (ej. "RP-999-65" en un campo
+    // "Comprobante") — se extrae la corrida de dígitos más larga.
+    const numeroTexto = String(numeroRaw);
+    const numeroNorm = extraerNumeroDocumento(numeroTexto);
+    // Si hay una columna de tipo dedicada, se usa; si no, se toma el
+    // prefijo alfabético del mismo campo de número/comprobante como
+    // sustituto (ej. "RP" de "RP-999-65") — así igual se puede distinguir
+    // entre series distintas aunque no haya una columna de tipo aparte.
+    const tipoRaw = c.tipo !== null
+      ? String(values[c.tipo] ?? "").trim()
+      : (numeroTexto.match(/^[A-Za-z]+/)?.[0] || "");
+    const claveDoc = `${tipoRaw}|${numeroNorm}`;
+    const tercero = String(values[c.tercero] ?? "").trim();
+    const nombreTercero = c.nombreTercero !== null ? String(values[c.nombreTercero] ?? "").trim() : "";
+    const fechaTexto = c.modoFecha === "combinada" && c.fecha !== null
+      ? formatearFecha(values[c.fecha])
+      : periodoFila ? `${periodoFila.mes}/${periodoFila.anio}` : "";
+    const debito = Number(values[c.debito]) || 0;
+    const credito = Number(values[c.credito]) || 0;
+    const valorFila = Math.max(Math.abs(debito), Math.abs(credito));
+    filasCrudas.push({ claveDoc, numero: numeroNorm, tercero, nombreTercero, tipo: tipoRaw, fecha: fechaTexto, valorFila });
+    valorPorClaveDoc.set(claveDoc, Math.max(valorPorClaveDoc.get(claveDoc) || 0, valorFila));
   }
 
   for (const fila of filasCrudas) {
