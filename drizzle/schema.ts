@@ -771,6 +771,12 @@ export const rentaDependientes = mysqlTable("rentaDependientes", {
   nombre: varchar("nombre", { length: 255 }).notNull(),
   tipoDocumento: varchar("tipoDocumento", { length: 10 }).notNull(),
   numeroDocumento: varchar("numeroDocumento", { length: 20 }).notNull(),
+  /** Cuál deducción corresponde a este dependiente: "diez_por_ciento" (el
+   * 10% de ingresos general, Art. 387 E.T. — uno solo por cliente, no
+   * aumenta con más dependientes) o "adicional_72uvt" (72 UVT por ESTE
+   * dependiente en particular, Art. 336 núm. 3 E.T., fuera del límite del
+   * 40%, máx. 4). Null en dependientes cargados antes de este cambio. */
+  tipoDeduccion: varchar("tipoDeduccion", { length: 20 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 export type RentaDependiente = typeof rentaDependientes.$inferSelect;

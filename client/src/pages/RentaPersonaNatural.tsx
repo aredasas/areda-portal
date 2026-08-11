@@ -786,9 +786,10 @@ function DependientesCard({ rentaClienteId, soloLectura }: { rentaClienteId: num
   const [nombre, setNombre] = useState("");
   const [tipoDocumento, setTipoDocumento] = useState("CC");
   const [numeroDocumento, setNumeroDocumento] = useState("");
+  const [tipoDeduccionDep, setTipoDeduccionDep] = useState("");
 
   const agregarMutation = trpc.renta.dependientes.agregar.useMutation({
-    onSuccess: () => { setNombre(""); setNumeroDocumento(""); utils.renta.dependientes.list.invalidate({ rentaClienteId }); },
+    onSuccess: () => { setNombre(""); setNumeroDocumento(""); setTipoDeduccionDep(""); utils.renta.dependientes.list.invalidate({ rentaClienteId }); },
     onError: (err) => toast.error(err.message || "No se pudo agregar"),
   });
   const eliminarMutation = trpc.renta.dependientes.eliminar.useMutation({
@@ -800,7 +801,14 @@ function DependientesCard({ rentaClienteId, soloLectura }: { rentaClienteId: num
       toast.error("Nombre y número de documento son obligatorios");
       return;
     }
-    agregarMutation.mutate({ rentaClienteId, nombre: nombre.trim(), tipoDocumento, numeroDocumento: numeroDocumento.trim() });
+    agregarMutation.mutate({
+      rentaClienteId, nombre: nombre.trim(), tipoDocumento, numeroDocumento: numeroDocumento.trim(),
+      tipoDeduccion: (tipoDeduccionDep || undefined) as any,
+    });
+  };
+
+  const NOMBRE_TIPO_DEP: Record<string, string> = {
+    diez_por_ciento: "10% ingresos", adicional_72uvt: "Adicional (72 UVT)",
   };
 
   return (
@@ -809,7 +817,10 @@ function DependientesCard({ rentaClienteId, soloLectura }: { rentaClienteId: num
         <div className="space-y-1">
           {query.data.map((d: any) => (
             <div key={d.id} className="flex items-center justify-between text-sm border-b py-1.5">
-              <span>{d.nombre} <span className="text-muted-foreground text-xs">— {d.tipoDocumento} {d.numeroDocumento}</span></span>
+              <span>
+                {d.nombre} <span className="text-muted-foreground text-xs">— {d.tipoDocumento} {d.numeroDocumento}</span>
+                {d.tipoDeduccion && <span className="ml-1.5 text-[10px] text-indigo-700 bg-indigo-100 rounded px-1.5 py-0.5">{NOMBRE_TIPO_DEP[d.tipoDeduccion] || d.tipoDeduccion}</span>}
+              </span>
               {!soloLectura && (
                 <Button variant="ghost" size="icon" className="h-7 w-7 text-red-600" onClick={() => eliminarMutation.mutate({ id: d.id })}>
                   <Trash2 className="w-3.5 h-3.5" />
@@ -820,7 +831,7 @@ function DependientesCard({ rentaClienteId, soloLectura }: { rentaClienteId: num
         </div>
       )}
       {!soloLectura && (
-        <div className="grid sm:grid-cols-[1fr_100px_140px_auto] gap-2 items-end">
+        <div className="grid sm:grid-cols-[1fr_90px_120px_150px_auto] gap-2 items-end">
           <div className="space-y-1">
             <Label className="text-xs">Nombre</Label>
             <Input value={nombre} onChange={(e) => setNombre(e.target.value)} className="h-8" />
@@ -841,6 +852,16 @@ function DependientesCard({ rentaClienteId, soloLectura }: { rentaClienteId: num
           <div className="space-y-1">
             <Label className="text-xs">Número</Label>
             <Input value={numeroDocumento} onChange={(e) => setNumeroDocumento(e.target.value)} className="h-8" />
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">Deducción</Label>
+            <Select value={tipoDeduccionDep} onValueChange={setTipoDeduccionDep}>
+              <SelectTrigger className="h-8"><SelectValue placeholder="Elegir..." /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="diez_por_ciento">10% ingresos (único, no aumenta)</SelectItem>
+                <SelectItem value="adicional_72uvt">Adicional (72 UVT, fuera del 40%)</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
           <Button size="sm" variant="outline" className="gap-1" onClick={handleAgregar} disabled={agregarMutation.isPending}>
             <Plus className="w-3.5 h-3.5" /> Agregar
@@ -1270,7 +1291,7 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
   const tieneCostos = cedulaInfo?.tieneCostos ?? false;
 
   const itemsDeEstaCedula = todosItems.filter((it: any) => (it.cedula || "trabajo") === cedulaSeleccionada);
-  const TIPOS_FUERA_LIMITE = ["dependiente_adicional_72uvt", "exceso_salario_militares"];
+  const TIPOS_FUERA_LIMITE = ["dependiente_adicional_72uvt", "exceso_salario_militares", "compras_1pct_fe"];
   const porTipo = (tipo: string) => itemsDeEstaCedula.filter((it: any) => it.tipoValor === tipo && !TIPOS_FUERA_LIMITE.includes(it.tipoDeduccion));
   const porTipoFueraLimite = () => itemsDeEstaCedula.filter((it: any) => TIPOS_FUERA_LIMITE.includes(it.tipoDeduccion));
   const totalPorTipo = (tipo: string) => porTipo(tipo).reduce((a: number, it: any) => a + it.valor, 0);
@@ -1318,14 +1339,29 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
 
   // Sugerencia de deducción por dependientes: 10% de los ingresos brutos
   // de esta cédula, limitado al tope de 384 UVT/año — solo se sugiere si
-  // hay al menos un dependiente registrado y todavía no se ha agregado
-  // esta deducción específica en esta cédula.
+  // hay al menos un dependiente marcado como "10% ingresos" y todavía no
+  // se ha agregado esta deducción específica en esta cédula.
+  const dependientesDiez = (dependientesQuery.data || []).filter((d: any) => d.tipoDeduccion === "diez_por_ciento");
+  const dependientesAdicionales = (dependientesQuery.data || []).filter((d: any) => d.tipoDeduccion === "adicional_72uvt");
   const yaTieneDependientes = porTipo("deduccion").some((it: any) => it.tipoDeduccion === "dependientes_economicos");
   const topeDependientesUVT = catalogoQuery.data?.tipos.find((t: any) => t.tipo === "dependientes_economicos")?.topeUVT;
   const topeDependientes = topeDependientesUVT && catalogoQuery.data ? redondearPesosDian(topeDependientesUVT * catalogoQuery.data.uvt) : 0;
   const sugerenciaDependientes = Math.min(totalIngresoBruto * 0.10, topeDependientes);
-  const mostrarSugerenciaDependientes = (dependientesQuery.data?.length || 0) > 0 && !yaTieneDependientes
+  const mostrarSugerenciaDependientes = dependientesDiez.length > 0 && !yaTieneDependientes
     && ["trabajo", "trabajo_honorarios"].includes(cedulaSeleccionada) && sugerenciaDependientes > 0;
+
+  // Sugerencia de dependientes ADICIONALES (72 UVT c/u, fuera del 40%) —
+  // solo en la cédula de trabajo (ahí vive esa sección), y solo para los
+  // que todavía no tienen su partida ya cargada (se identifican por
+  // nombre, para no duplicar si ya se agregó una vez).
+  const itemsAdicionalesYaCargados = new Set(
+    itemsDeEstaCedula.filter((it: any) => it.tipoDeduccion === "dependiente_adicional_72uvt").map((it: any) => it.concepto),
+  );
+  const dependientesAdicionalesFaltantes = cedulaSeleccionada === "trabajo"
+    ? dependientesAdicionales.filter((d: any) => !itemsAdicionalesYaCargados.has(d.nombre))
+    : [];
+  const tope72UVT = catalogoQuery.data?.tipos.find((t: any) => t.tipo === "dependiente_adicional_72uvt")?.topeUVT;
+  const valor72UVT = tope72UVT && catalogoQuery.data ? redondearPesosDian(tope72UVT * catalogoQuery.data.uvt) : 0;
 
   const nombreCatalogo = (tipoDed: string | null | undefined) => catalogoQuery.data?.tipos.find((t: any) => t.tipo === tipoDed)?.nombre || tipoDed || "";
 
@@ -1368,9 +1404,17 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
     crearMutation.mutate({
       rentaClienteId, seccion: "cedula", cedula: cedulaSeleccionada as any, tipoValor: "deduccion",
       tipoDeduccion: "dependientes_economicos",
-      concepto: `Deducción por dependientes económicos (10% ingresos, ${dependientesQuery.data?.length} dependiente(s))`,
+      concepto: `Deducción por dependientes económicos (10% ingresos, ${dependientesDiez.length} dependiente(s))`,
       valor: Math.round(sugerenciaDependientes),
     });
+  };
+  const handleAgregarDependientesAdicionales = () => {
+    for (const d of dependientesAdicionalesFaltantes) {
+      crearMutation.mutate({
+        rentaClienteId, seccion: "cedula", cedula: "trabajo", tipoValor: "deduccion",
+        tipoDeduccion: "dependiente_adicional_72uvt", concepto: d.nombre, valor: valor72UVT,
+      });
+    }
   };
   const handleAgregarRetencion = () => {
     if (!conceptoRetencion.trim() || !valorRetencion) return;
@@ -1546,7 +1590,7 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
         )}
         {mostrarSugerenciaDependientes && (
           <div className="flex items-center justify-between gap-2 bg-purple-100 rounded px-2.5 py-1.5 text-xs">
-            <span>Sugerencia: 10% de ingresos por {dependientesQuery.data?.length} dependiente(s), tope aplicado → {fmt(sugerenciaDependientes)}</span>
+            <span>Sugerencia: 10% de ingresos por {dependientesDiez.length} dependiente(s), tope aplicado → {fmt(sugerenciaDependientes)}</span>
             <Button size="sm" variant="outline" className="h-6 text-xs shrink-0" onClick={handleAgregarDependientes} disabled={crearMutation.isPending || soloLectura}>
               <Plus className="w-3 h-3 mr-1" /> Agregar
             </Button>
@@ -1725,6 +1769,16 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
               <p className="text-xs text-amber-700 flex items-center gap-1.5"><AlertTriangle className="w-3.5 h-3.5 shrink-0" /> Ya hay 4 dependientes adicionales cargados — es el máximo que permite la ley, uno más no se contaría en el cálculo.</p>
             ) : null;
           })()}
+          {dependientesAdicionalesFaltantes.length > 0 && (
+            <div className="flex items-center justify-between gap-2 bg-indigo-100 rounded px-2.5 py-1.5 text-xs">
+              <span>
+                Sugerencia: {dependientesAdicionalesFaltantes.length} dependiente(s) marcado(s) como "Adicional" en Dependientes económicos aún sin cargar aquí — {dependientesAdicionalesFaltantes.map((d: any) => d.nombre).join(", ")} ({fmt(valor72UVT)} c/u)
+              </span>
+              <Button size="sm" variant="outline" className="h-6 text-xs shrink-0" onClick={handleAgregarDependientesAdicionales} disabled={crearMutation.isPending || soloLectura}>
+                <Plus className="w-3 h-3 mr-1" /> Agregar {dependientesAdicionalesFaltantes.length > 1 ? "todos" : ""}
+              </Button>
+            </div>
+          )}
           <div className="grid sm:grid-cols-[1.2fr_1fr_140px_auto] gap-2 items-end pt-1">
             <div className="space-y-1">
               <Label className="text-xs">Tipo</Label>
@@ -1733,6 +1787,7 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
                 <SelectContent>
                   <SelectItem value="dependiente_adicional_72uvt">Dependiente adicional (72 UVT c/u, máx. 4)</SelectItem>
                   <SelectItem value="exceso_salario_militares">Exceso salario — Fuerzas Militares/Policía</SelectItem>
+                  <SelectItem value="compras_1pct_fe">1% compras con factura electrónica y bancarizadas</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -1858,7 +1913,7 @@ function ResumenPendiente210Card({ rentaClienteId }: { rentaClienteId: number })
             const lineaLimitada = (it: any) => {
               const limitado = it.valorAjustadoGeneral ?? it.valorLimitado ?? it.valor;
               const fueLimitado = limitado < it.valor;
-              const esFueraLimite = ["dependiente_adicional_72uvt", "exceso_salario_militares"].includes(it.tipoDeduccion);
+              const esFueraLimite = ["dependiente_adicional_72uvt", "exceso_salario_militares", "compras_1pct_fe"].includes(it.tipoDeduccion);
               return (
                 <div key={it.id} className="flex items-center justify-between py-0.5 gap-2">
                   <span className="text-muted-foreground flex-1 min-w-0 truncate">

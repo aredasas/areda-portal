@@ -174,6 +174,7 @@ export const TOPES_DEDUCCION_2025 = {
   saludPrepagada: 192, // 16 UVT/mes
   dependientes: 384, // 32 UVT/mes, 10% del ingreso
   interesesVivienda: 1200, // Art. 119 E.T.
+  compras1PctFE: 240, // Art. 336 núm. 5 E.T. — 1% de compras con factura electrónica, fuera del límite del 40%
   limiteGlobalDeduccionesRentasExentas: 1340, // 40% de la renta líquida, o este tope, el que sea menor
 };
 
@@ -202,6 +203,8 @@ export const TIPOS_DEDUCCION_RENTA_EXENTA: {
     nota: "Se resta DESPUÉS de calcular el tope del 40%/1.340 UVT, no compite por ese cupo (Ley 2277 de 2022, «en adición al límite»). Máximo 4 dependientes — el sistema solo permite 4 partidas de este tipo por cliente/año." },
   { tipo: "exceso_salario_militares", nombre: "Exceso de salario básico — Fuerzas Militares/Policía (Art. 206 núm. 8 E.T.)", tipoValor: "renta_exenta", topeUVT: null,
     nota: "Exenta en su totalidad, sin tope — y se resta DESPUÉS de calcular el tope del 40%/1.340 UVT, no compite por ese cupo (Parágrafo 4, Art. 206 E.T.). Solo aplica a Oficiales, Suboficiales, Soldados Profesionales, Nivel Ejecutivo, Patrulleros y Agentes." },
+  { tipo: "compras_1pct_fe", nombre: "1% de compras con factura electrónica y bancarizadas (Art. 336 núm. 5 E.T.)", tipoValor: "deduccion", topeUVT: TOPES_DEDUCCION_2025.compras1PctFE,
+    nota: "Se resta DESPUÉS de calcular el tope del 40%/1.340 UVT, no compite por ese cupo ni entra en la base del 25% laboral (Art. 336 núm. 5.4 E.T.). Requiere factura electrónica con validación previa y pago bancarizado — no aplica a compras en efectivo." },
   { tipo: "otro", nombre: "Otra deducción/renta exenta (verificar manualmente)", tipoValor: "deduccion", topeUVT: null },
 ];
 
@@ -209,7 +212,7 @@ export const TIPOS_DEDUCCION_RENTA_EXENTA: {
  * 40%/1.340 UVT de la Cédula General — se restan de la renta líquida
  * DESPUÉS de calcular y repartir ese tope, sin competir por ese cupo con
  * las demás partidas. Solo aplican a rentas de trabajo. */
-export const TIPOS_FUERA_DE_LIMITE_40 = new Set(["dependiente_adicional_72uvt", "exceso_salario_militares"]);
+export const TIPOS_FUERA_DE_LIMITE_40 = new Set(["dependiente_adicional_72uvt", "exceso_salario_militares", "compras_1pct_fe"]);
 /** Máximo de partidas de "dependiente adicional" que la ley permite (Art.
  * 336 núm. 3 E.T.) — el sistema no debe sumar más de 4 aunque el asesor
  * cargue más filas. */

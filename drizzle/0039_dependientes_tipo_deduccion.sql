@@ -1,0 +1,1 @@
+ALTER TABLE `rentaDependientes` ADD `tipoDeduccion` varchar(20);

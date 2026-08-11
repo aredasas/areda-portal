@@ -633,7 +633,7 @@ function RentaResumenDialog({ cliente, onClose, onAprobar, onRechazar, aprobando
               const lineaLimitada = (it: any) => {
                 const limitado = it.valorAjustadoGeneral ?? it.valorLimitado ?? it.valor;
                 const fueLimitado = limitado < it.valor;
-                const esFueraLimite = ["dependiente_adicional_72uvt", "exceso_salario_militares"].includes(it.tipoDeduccion);
+                const esFueraLimite = ["dependiente_adicional_72uvt", "exceso_salario_militares", "compras_1pct_fe"].includes(it.tipoDeduccion);
                 return (
                   <div key={it.id} className="flex items-center justify-between py-0.5 gap-2">
                     <span className="text-muted-foreground flex-1 min-w-0 truncate">

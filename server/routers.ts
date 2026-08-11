@@ -2579,10 +2579,13 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           return db.getDependientes(input.rentaClienteId);
         }),
       agregar: protectedProcedure
-        .input(z.object({ rentaClienteId: z.number(), nombre: z.string().min(1), tipoDocumento: z.string().min(1), numeroDocumento: z.string().min(1) }))
+        .input(z.object({
+          rentaClienteId: z.number(), nombre: z.string().min(1), tipoDocumento: z.string().min(1), numeroDocumento: z.string().min(1),
+          tipoDeduccion: z.enum(["diez_por_ciento", "adicional_72uvt"]).optional(),
+        }))
         .mutation(async ({ input, ctx }) => {
           assertRentaPNAccess(ctx.user.role);
-          const id = await db.agregarDependiente(input.rentaClienteId, input.nombre, input.tipoDocumento, input.numeroDocumento);
+          const id = await db.agregarDependiente(input.rentaClienteId, input.nombre, input.tipoDocumento, input.numeroDocumento, input.tipoDeduccion);
           return { id };
         }),
       eliminar: protectedProcedure
