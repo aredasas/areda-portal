@@ -198,8 +198,22 @@ export const TIPOS_DEDUCCION_RENTA_EXENTA: {
   { tipo: "intereses_vivienda", nombre: "Intereses de vivienda (crédito hipotecario/leasing)", tipoValor: "deduccion", topeUVT: TOPES_DEDUCCION_2025.interesesVivienda },
   { tipo: "gmf_25", nombre: "GMF (4×1000) — 50% deducible (Art. 115 E.T.)", tipoValor: "deduccion", topeUVT: null,
     nota: "Solo el 50% del GMF efectivamente pagado y certificado por el banco es deducible — digitar ya ese 50%, no el GMF total." },
+  { tipo: "dependiente_adicional_72uvt", nombre: "Dependiente adicional (72 UVT c/u, máx. 4 — Art. 336 núm. 3 E.T.)", tipoValor: "deduccion", topeUVT: 72,
+    nota: "Se resta DESPUÉS de calcular el tope del 40%/1.340 UVT, no compite por ese cupo (Ley 2277 de 2022, «en adición al límite»). Máximo 4 dependientes — el sistema solo permite 4 partidas de este tipo por cliente/año." },
+  { tipo: "exceso_salario_militares", nombre: "Exceso de salario básico — Fuerzas Militares/Policía (Art. 206 núm. 8 E.T.)", tipoValor: "renta_exenta", topeUVT: null,
+    nota: "Exenta en su totalidad, sin tope — y se resta DESPUÉS de calcular el tope del 40%/1.340 UVT, no compite por ese cupo (Parágrafo 4, Art. 206 E.T.). Solo aplica a Oficiales, Suboficiales, Soldados Profesionales, Nivel Ejecutivo, Patrulleros y Agentes." },
   { tipo: "otro", nombre: "Otra deducción/renta exenta (verificar manualmente)", tipoValor: "deduccion", topeUVT: null },
 ];
+
+/** Deducciones/rentas exentas que la ley excluye EXPRESAMENTE del tope del
+ * 40%/1.340 UVT de la Cédula General — se restan de la renta líquida
+ * DESPUÉS de calcular y repartir ese tope, sin competir por ese cupo con
+ * las demás partidas. Solo aplican a rentas de trabajo. */
+export const TIPOS_FUERA_DE_LIMITE_40 = new Set(["dependiente_adicional_72uvt", "exceso_salario_militares"]);
+/** Máximo de partidas de "dependiente adicional" que la ley permite (Art.
+ * 336 núm. 3 E.T.) — el sistema no debe sumar más de 4 aunque el asesor
+ * cargue más filas. */
+const MAX_DEPENDIENTES_ADICIONALES = 4;
 
 /** Valida un valor digitado contra el tope individual de su tipo de
  * deducción/renta exenta — no reemplaza el criterio del contador, es una
@@ -455,6 +469,10 @@ export type ResultadoLiquidacion = {
    * exenta laboral cuando está marcado como cálculo automático — null si
    * no hay ninguna partida así en la cédula de trabajo. */
   auto25CalculadoValor: number | null;
+  /** Suma de conceptos de "trabajo" excluidos por ley del tope del
+   * 40%/1.340 UVT (dependiente adicional 72 UVT c/u máx. 4, exceso
+   * salario militares) — ya restados de rentaLiquidaOrdinaria. */
+  totalFueraDeLimite40: number;
   baseCalculoLimite: number;
   limite40PorcientoOMil340UVT: number;
   totalDisponibleGeneral: number;
@@ -553,10 +571,15 @@ export function armarLiquidacion(datos: DatosLiquidacion): ResultadoLiquidacion 
       const ingresoNoConstitutivo = sumaItems(c.ingresoNoConstitutivo);
       const costoDeduccionProcedente = nombre === "trabajo" ? 0 : sumaItems(c.costoDeduccionProcedente);
       const rentaLiquida = Math.max(0, ingresoBruto - ingresoNoConstitutivo - costoDeduccionProcedente);
-      const rentaExentaItems = nombre === "trabajo" ? c.rentaExenta.filter(it => it !== itemAuto25) : c.rentaExenta;
+      const rentaExentaItems = nombre === "trabajo"
+        ? c.rentaExenta.filter(it => it !== itemAuto25 && !TIPOS_FUERA_DE_LIMITE_40.has(it.tipoDeduccion || ""))
+        : c.rentaExenta;
+      const deduccionItems = nombre === "trabajo"
+        ? c.deduccion.filter(it => !TIPOS_FUERA_DE_LIMITE_40.has(it.tipoDeduccion || ""))
+        : c.deduccion;
       let rentaExentaDisponible = rentaExentaItems.reduce((a, it) => a + calcularValorLimitado(it.valor, it.tipoDeduccion, ingresoBruto), 0);
       if (nombre === "trabajo" && itemAuto25) rentaExentaDisponible += auto25Valor;
-      const deduccionDisponible = c.deduccion.reduce((a, it) => a + calcularValorLimitado(it.valor, it.tipoDeduccion, ingresoBruto), 0);
+      const deduccionDisponible = deduccionItems.reduce((a, it) => a + calcularValorLimitado(it.valor, it.tipoDeduccion, ingresoBruto), 0);
       subRentasBase[nombre] = {
         ingresoBruto, ingresoNoConstitutivo, costoDeduccionProcedente, rentaLiquida,
         rentaExentaDisponible, deduccionDisponible, rentaExentaDeduccionAsignada: 0, rentaLiquidaOrdinaria: rentaLiquida,
@@ -577,8 +600,13 @@ export function armarLiquidacion(datos: DatosLiquidacion): ResultadoLiquidacion 
     for (const nombre of SUBRENTAS_GENERAL) {
       const c = datos.cedulas[nombre] || vacio;
       const ingresoBrutoCedula = subRentasBase[nombre].ingresoBruto;
-      const rentaExentaItems = nombre === "trabajo" ? c.rentaExenta.filter(it => it !== itemAuto25) : c.rentaExenta;
-      for (const it of [...c.deduccion, ...rentaExentaItems]) {
+      const rentaExentaItems = nombre === "trabajo"
+        ? c.rentaExenta.filter(it => it !== itemAuto25 && !TIPOS_FUERA_DE_LIMITE_40.has(it.tipoDeduccion || ""))
+        : c.rentaExenta;
+      const deduccionItems = nombre === "trabajo"
+        ? c.deduccion.filter(it => !TIPOS_FUERA_DE_LIMITE_40.has(it.tipoDeduccion || ""))
+        : c.deduccion;
+      for (const it of [...deduccionItems, ...rentaExentaItems]) {
         const valorLimitado = calcularValorLimitado(it.valor, it.tipoDeduccion, ingresoBrutoCedula);
         itemsGeneral.push({ clave: claveSecuencial++, cedula: nombre, valor: valorLimitado, marcado: !!it.limiteGeneral, orden: it.limiteGeneralOrden });
       }
@@ -620,6 +648,28 @@ export function armarLiquidacion(datos: DatosLiquidacion): ResultadoLiquidacion 
     const asignado = itemsGeneral.filter(it => it.cedula === nombre).reduce((a, it) => a + (ajustesPorClave.get(it.clave) ?? it.valor), 0);
     sr.rentaExentaDeduccionAsignada = Math.min(sr.rentaLiquida, asignado);
     sr.rentaLiquidaOrdinaria = Math.max(0, sr.rentaLiquida - sr.rentaExentaDeduccionAsignada);
+  }
+
+  // Conceptos que la ley excluye expresamente del tope del 40%/1.340 UVT
+  // (dependiente adicional 72 UVT c/u máx. 4, exceso salario militares) —
+  // se restan aquí, DESPUÉS de todo el reparto de arriba, para que nunca
+  // compitan por ese cupo con las demás deducciones/rentas exentas.
+  let totalFueraDeLimite40 = 0;
+  {
+    const ingresoBrutoTrabajo = subRentasBase.trabajo?.ingresoBruto ?? 0;
+    const itemsFuera = [...cTrabajo.deduccion, ...cTrabajo.rentaExenta].filter(it => TIPOS_FUERA_DE_LIMITE_40.has(it.tipoDeduccion || ""));
+    let contadorDependientesAdicionales = 0;
+    for (const it of itemsFuera) {
+      const valorLimitado = calcularValorLimitado(it.valor, it.tipoDeduccion, ingresoBrutoTrabajo);
+      if (it.tipoDeduccion === "dependiente_adicional_72uvt") {
+        if (contadorDependientesAdicionales >= MAX_DEPENDIENTES_ADICIONALES) continue; // la ley tope a 4
+        contadorDependientesAdicionales++;
+      }
+      totalFueraDeLimite40 += valorLimitado;
+    }
+  }
+  if (subRentasBase.trabajo) {
+    subRentasBase.trabajo.rentaLiquidaOrdinaria = Math.max(0, subRentasBase.trabajo.rentaLiquidaOrdinaria - totalFueraDeLimite40);
   }
 
   const rentaLiquidaCedulaGeneral = SUBRENTAS_GENERAL.reduce((a, n) => a + subRentasBase[n].rentaLiquidaOrdinaria, 0);
@@ -706,6 +756,7 @@ export function armarLiquidacion(datos: DatosLiquidacion): ResultadoLiquidacion 
   return {
     patrimonioBruto, deudas, patrimonioLiquido, subRentas: subRentasBase,
     auto25CalculadoValor: itemAuto25 ? (ajustesPorClave.get(claveAuto25 as number) ?? auto25Valor) : null,
+    totalFueraDeLimite40,
     baseCalculoLimite, limite40PorcientoOMil340UVT, totalDisponibleGeneral, valorDistribuido,
     rentaLiquidaCedulaGeneral,
     ingresoBrutoPensiones, rentaLiquidaPensiones, rentaExentaPensiones, rentaLiquidaGravablePensiones,
@@ -1260,6 +1311,7 @@ export async function generarAnexosRenta(
       if (!c) continue;
       const ingresoBrutoCedula = c.ingresoBruto.reduce((a, it) => a + it.valor, 0);
       for (const it of [...c.deduccion, ...c.rentaExenta]) {
+        if (TIPOS_FUERA_DE_LIMITE_40.has(it.tipoDeduccion || "")) continue; // no compiten por el tope del 40%
         const esAuto25 = it.tipoDeduccion === "renta_exenta_25_laboral" && it.calculoAutomatico;
         const valorLimitado = esAuto25 && resultado.auto25CalculadoValor != null
           ? resultado.auto25CalculadoValor
@@ -1279,8 +1331,23 @@ export async function generarAnexosRenta(
     if (!c || c.ingresoBruto.length === 0) continue; // solo las cédulas con datos, para no saturar
 
     const ingresoBrutoCedula = c.ingresoBruto.reduce((a, it) => a + it.valor, 0);
+    let contadorDependientesAnexo = 0;
     const lineaLimitada = (it: ItemValor) => {
       const esAuto25 = it.tipoDeduccion === "renta_exenta_25_laboral" && it.calculoAutomatico;
+      const esFueraDeLimite = TIPOS_FUERA_DE_LIMITE_40.has(it.tipoDeduccion || "");
+      if (esFueraDeLimite) {
+        if (it.tipoDeduccion === "dependiente_adicional_72uvt") {
+          contadorDependientesAnexo++;
+          if (contadorDependientesAnexo > 4) {
+            filaTexto(it.concepto, `$0 (supera el máximo de 4 dependientes)`, { indent: 8, color: "#b91c1c" });
+            return;
+          }
+        }
+        const limitado = calcularValorLimitado(it.valor, it.tipoDeduccion, ingresoBrutoCedula);
+        const nota = ` (fuera del límite del 40%${limitado < it.valor ? `; digitado: ${fmt(it.valor)}` : ""})`;
+        filaTexto(it.concepto, `-${fmt(limitado)}${nota}`, { indent: 8, color: "#b91c1c" });
+        return;
+      }
       const limitado = esAuto25 && resultado.auto25CalculadoValor != null
         ? resultado.auto25CalculadoValor
         : (ajustesGeneralPorItem.get(it) ?? calcularValorLimitado(it.valor, it.tipoDeduccion, ingresoBrutoCedula));

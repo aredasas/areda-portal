@@ -633,9 +633,13 @@ function RentaResumenDialog({ cliente, onClose, onAprobar, onRechazar, aprobando
               const lineaLimitada = (it: any) => {
                 const limitado = it.valorAjustadoGeneral ?? it.valorLimitado ?? it.valor;
                 const fueLimitado = limitado < it.valor;
+                const esFueraLimite = ["dependiente_adicional_72uvt", "exceso_salario_militares"].includes(it.tipoDeduccion);
                 return (
                   <div key={it.id} className="flex items-center justify-between py-0.5 gap-2">
-                    <span className="text-muted-foreground flex-1 min-w-0 truncate">{it.concepto}</span>
+                    <span className="text-muted-foreground flex-1 min-w-0 truncate">
+                      {it.concepto}
+                      {esFueraLimite && <span className="ml-1.5 text-[10px] text-indigo-700 bg-indigo-100 rounded px-1.5 py-0.5">fuera del 40%</span>}
+                    </span>
                     {fueLimitado && <span className="text-[10px] text-amber-700 shrink-0">(digitado: {fmt(it.valor)})</span>}
                     <span className={`shrink-0 ${fueLimitado ? "font-semibold text-amber-700" : "text-red-600"}`}>−{fmt(limitado)}</span>
                   </div>

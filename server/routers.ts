@@ -2359,7 +2359,10 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           }
 
           const esGeneral = (cedula: string | null) => cedula != null && (rentaDb.SUBRENTAS_GENERAL as readonly string[]).includes(cedula);
-          const itemsGeneral = conLimitado.filter(it => (it.tipoValor === "deduccion" || it.tipoValor === "renta_exenta") && esGeneral(it.cedula));
+          const itemsGeneral = conLimitado.filter(it =>
+            (it.tipoValor === "deduccion" || it.tipoValor === "renta_exenta") && esGeneral(it.cedula)
+            && !rentaDb.TIPOS_FUERA_DE_LIMITE_40.has(it.tipoDeduccion || ""),
+          );
           let resultado = conLimitado;
           if (itemsGeneral.length > 0) {
             const baseCalculoLimite = rentaDb.SUBRENTAS_GENERAL.reduce(

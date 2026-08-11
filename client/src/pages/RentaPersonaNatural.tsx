@@ -1242,6 +1242,9 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
   const [limiteGeneralNuevo, setLimiteGeneralNuevo] = useState(false);
   const [calculoAutomaticoNuevo, setCalculoAutomaticoNuevo] = useState(false);
   const [conceptoRetencion, setConceptoRetencion] = useState("");
+  const [tipoFueraLimite, setTipoFueraLimite] = useState("");
+  const [conceptoFueraLimite, setConceptoFueraLimite] = useState("");
+  const [valorFueraLimite, setValorFueraLimite] = useState("");
   const [valorRetencion, setValorRetencion] = useState("");
   const [eliminarId, setEliminarId] = useState<number | null>(null);
 
@@ -1267,7 +1270,9 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
   const tieneCostos = cedulaInfo?.tieneCostos ?? false;
 
   const itemsDeEstaCedula = todosItems.filter((it: any) => (it.cedula || "trabajo") === cedulaSeleccionada);
-  const porTipo = (tipo: string) => itemsDeEstaCedula.filter((it: any) => it.tipoValor === tipo);
+  const TIPOS_FUERA_LIMITE = ["dependiente_adicional_72uvt", "exceso_salario_militares"];
+  const porTipo = (tipo: string) => itemsDeEstaCedula.filter((it: any) => it.tipoValor === tipo && !TIPOS_FUERA_LIMITE.includes(it.tipoDeduccion));
+  const porTipoFueraLimite = () => itemsDeEstaCedula.filter((it: any) => TIPOS_FUERA_LIMITE.includes(it.tipoDeduccion));
   const totalPorTipo = (tipo: string) => porTipo(tipo).reduce((a: number, it: any) => a + it.valor, 0);
   const totalLimitadoPorTipo = (tipo: string) => porTipo(tipo).reduce((a: number, it: any) => a + (it.valorAjustadoGeneral ?? it.valorLimitado ?? it.valor), 0);
 
@@ -1296,7 +1301,7 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
   };
 
   const totalGeneral = todosItems
-    .filter((it: any) => ["renta_exenta", "deduccion"].includes(it.tipoValor) && CEDULAS_GENERAL.includes(it.cedula || "trabajo"))
+    .filter((it: any) => ["renta_exenta", "deduccion"].includes(it.tipoValor) && CEDULAS_GENERAL.includes(it.cedula || "trabajo") && !TIPOS_FUERA_LIMITE.includes(it.tipoDeduccion))
     .reduce((a: number, it: any) => a + (it.valorAjustadoGeneral ?? it.valorLimitado ?? it.valor), 0);
   const totalOtrasCedulas = todosItems
     .filter((it: any) => ["renta_exenta", "deduccion"].includes(it.tipoValor) && !CEDULAS_GENERAL.includes(it.cedula || "trabajo"))
@@ -1373,6 +1378,18 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
       rentaClienteId, seccion: "cedula", cedula: cedulaSeleccionada as any,
       tipoValor: "retencion", concepto: conceptoRetencion.trim(), valor: Number(valorRetencion),
     }, { onSuccess: () => { setConceptoRetencion(""); setValorRetencion(""); } });
+  };
+  const handleAgregarFueraLimite = () => {
+    if (!conceptoFueraLimite.trim() || !valorFueraLimite || !tipoFueraLimite) {
+      toast.error("Selecciona el tipo, y digita concepto y valor");
+      return;
+    }
+    const tipoInfo = catalogoQuery.data?.tipos.find((t: any) => t.tipo === tipoFueraLimite);
+    crearMutation.mutate({
+      rentaClienteId, seccion: "cedula", cedula: "trabajo",
+      tipoValor: (tipoInfo?.tipoValor || "deduccion") as any,
+      tipoDeduccion: tipoFueraLimite, concepto: conceptoFueraLimite.trim(), valor: Number(valorFueraLimite),
+    }, { onSuccess: () => { setConceptoFueraLimite(""); setValorFueraLimite(""); setTipoFueraLimite(""); } });
   };
 
   return (
@@ -1670,6 +1687,64 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
         )}
       </div>
 
+      {/* Dependiente adicional / Exceso salario militares — fuera del tope del 40% */}
+      {cedulaSeleccionada === "trabajo" && (
+        <div className="border-2 border-indigo-200 rounded-md p-3 space-y-2 bg-indigo-50/30">
+          <span className="text-sm font-semibold text-indigo-800">Rentas de Trabajo — Fuera del límite del 40%</span>
+          <p className="text-xs text-muted-foreground">
+            Dependiente adicional (72 UVT c/u, máx. 4) y exceso de salario de Fuerzas Militares/Policía — la ley los excluye del tope del 40%/1.340 UVT, así que se calculan aparte y no afectan el reparto de las demás deducciones/rentas exentas.
+          </p>
+          {!!porTipoFueraLimite().length && (
+            <div className="space-y-1 max-h-40 overflow-y-auto">
+              <div className="flex items-center gap-2 text-[10px] text-muted-foreground uppercase tracking-wide px-0.5">
+                <span className="flex-1">Concepto</span>
+                <span className="w-24 text-right shrink-0">Digitado</span>
+                <span className="w-24 text-right shrink-0">Limitado</span>
+                <span className="w-6 shrink-0" />
+              </div>
+              {porTipoFueraLimite().map((it: any) => {
+                const limitado = it.valorLimitado ?? it.valor;
+                const fueLimitado = limitado < it.valor;
+                return (
+                  <div key={it.id} className="flex items-center text-sm border-b py-1 gap-2">
+                    <div className="flex-1 min-w-0">
+                      <div className="truncate">{it.concepto}</div>
+                      <div className="text-xs text-muted-foreground">{nombreCatalogo(it.tipoDeduccion)}</div>
+                    </div>
+                    <span className="w-24 text-right shrink-0">{fmt(it.valor)}</span>
+                    <span className={`w-24 text-right shrink-0 ${fueLimitado ? "font-semibold text-indigo-700" : ""}`}>{fmt(limitado)}</span>
+                    <Button variant="ghost" size="icon" className="h-6 w-6 text-red-600 shrink-0" onClick={() => eliminarMutation.mutate({ id: it.id })} disabled={soloLectura}><Trash2 className="w-3.5 h-3.5" /></Button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          {(() => {
+            const dependientesActuales = porTipoFueraLimite().filter((it: any) => it.tipoDeduccion === "dependiente_adicional_72uvt").length;
+            return dependientesActuales >= 4 ? (
+              <p className="text-xs text-amber-700 flex items-center gap-1.5"><AlertTriangle className="w-3.5 h-3.5 shrink-0" /> Ya hay 4 dependientes adicionales cargados — es el máximo que permite la ley, uno más no se contaría en el cálculo.</p>
+            ) : null;
+          })()}
+          <div className="grid sm:grid-cols-[1.2fr_1fr_140px_auto] gap-2 items-end pt-1">
+            <div className="space-y-1">
+              <Label className="text-xs">Tipo</Label>
+              <Select value={tipoFueraLimite} onValueChange={setTipoFueraLimite}>
+                <SelectTrigger className="h-8"><SelectValue placeholder="Selecciona..." /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="dependiente_adicional_72uvt">Dependiente adicional (72 UVT c/u, máx. 4)</SelectItem>
+                  <SelectItem value="exceso_salario_militares">Exceso salario — Fuerzas Militares/Policía</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <Input value={conceptoFueraLimite} onChange={(e) => setConceptoFueraLimite(e.target.value)} placeholder="Concepto (ej. nombre del dependiente)" className="h-8" />
+            <Input value={valorFueraLimite} onChange={(e) => setValorFueraLimite(e.target.value)} placeholder="Valor" type="number" className="h-8" />
+            <Button size="sm" variant="outline" className="gap-1" onClick={handleAgregarFueraLimite} disabled={crearMutation.isPending || soloLectura}>
+              <Plus className="w-3.5 h-3.5" /> Agregar
+            </Button>
+          </div>
+        </div>
+      )}
+
       {/* Retenciones Practicadas */}
       <div className="border-2 border-gray-300 rounded-md p-3 space-y-2 bg-gray-50">
         <span className="text-sm font-semibold text-gray-800">Retenciones Practicadas</span>
@@ -1783,9 +1858,13 @@ function ResumenPendiente210Card({ rentaClienteId }: { rentaClienteId: number })
             const lineaLimitada = (it: any) => {
               const limitado = it.valorAjustadoGeneral ?? it.valorLimitado ?? it.valor;
               const fueLimitado = limitado < it.valor;
+              const esFueraLimite = ["dependiente_adicional_72uvt", "exceso_salario_militares"].includes(it.tipoDeduccion);
               return (
                 <div key={it.id} className="flex items-center justify-between py-0.5 gap-2">
-                  <span className="text-muted-foreground flex-1 min-w-0 truncate">{it.concepto}</span>
+                  <span className="text-muted-foreground flex-1 min-w-0 truncate">
+                    {it.concepto}
+                    {esFueraLimite && <span className="ml-1.5 text-[10px] text-indigo-700 bg-indigo-100 rounded px-1.5 py-0.5">fuera del 40%</span>}
+                  </span>
                   {fueLimitado && <span className="text-[10px] text-amber-700 shrink-0">(digitado: {fmt(it.valor)})</span>}
                   <span className={`shrink-0 ${fueLimitado ? "font-semibold text-amber-700" : "text-red-600"}`}>{fmtFirmado(-limitado)}</span>
                 </div>
