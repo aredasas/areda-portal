@@ -1936,12 +1936,12 @@ function ResumenPendiente210Card({ rentaClienteId }: { rentaClienteId: number })
             const ingresosDeEstaCedula = deEstaCedula.filter((it: any) => it.tipoValor === "ingreso_bruto");
             const totalIngresosCedula = ingresosDeEstaCedula.reduce((a: number, it: any) => a + it.valor, 0);
             const deduccionesRentasExentas = deEstaCedula.filter((it: any) => it.tipoValor === "deduccion" || it.tipoValor === "renta_exenta");
-            const subtotalDentroLimite = deduccionesRentasExentas
-              .filter((it: any) => !["dependiente_adicional_72uvt", "exceso_salario_militares", "compras_1pct_fe"].includes(it.tipoDeduccion))
-              .reduce((a: number, it: any) => a + (it.valorAjustadoGeneral ?? it.valorLimitado ?? it.valor), 0);
-            const subtotalFueraLimite = deduccionesRentasExentas
-              .filter((it: any) => ["dependiente_adicional_72uvt", "exceso_salario_militares", "compras_1pct_fe"].includes(it.tipoDeduccion))
-              .reduce((a: number, it: any) => a + (it.valorLimitado ?? it.valor), 0);
+            const esFueraLimiteTipo = (it: any) => ["dependiente_adicional_72uvt", "exceso_salario_militares", "compras_1pct_fe"].includes(it.tipoDeduccion);
+            const dentroDelLimite = deduccionesRentasExentas.filter((it: any) => !esFueraLimiteTipo(it));
+            const fueraDelLimite = deduccionesRentasExentas.filter((it: any) => esFueraLimiteTipo(it));
+            const subtotalDentroLimite = dentroDelLimite.reduce((a: number, it: any) => a + (it.valorAjustadoGeneral ?? it.valorLimitado ?? it.valor), 0);
+            const subtotalFueraLimite = fueraDelLimite.reduce((a: number, it: any) => a + (it.valorLimitado ?? it.valor), 0);
+            const etiquetaTipo = (it: any) => it.tipoValor === "deduccion" ? "deducción" : "renta exenta";
             return (
               <div key={k} className="border rounded-md p-3">
                 <p className="font-semibold text-sm mb-1.5">{NOMBRE_SUBRENTA[k] || k}</p>
@@ -1952,15 +1952,18 @@ function ResumenPendiente210Card({ rentaClienteId }: { rentaClienteId: number })
                   )}
                   {deEstaCedula.filter((it: any) => it.tipoValor === "ingreso_no_constitutivo").map((it: any) => linea(it, -1, "INCRNGO"))}
                   {deEstaCedula.filter((it: any) => it.tipoValor === "costo_deduccion_procedente").map((it: any) => linea(it, -1, "costo/deducción procedente"))}
-                  {deEstaCedula.filter((it: any) => it.tipoValor === "deduccion").map((it: any) => lineaLimitada(it, "deducción"))}
-                  {deEstaCedula.filter((it: any) => it.tipoValor === "renta_exenta").map((it: any) => lineaLimitada(it, "renta exenta"))}
+                  {dentroDelLimite.map((it: any) => lineaLimitada(it, etiquetaTipo(it)))}
                 </div>
                 {deduccionesRentasExentas.length > 0 && (
                   <div className="pl-1 pt-1 mt-1 border-t space-y-0.5 text-xs">
                     <div className="flex items-center justify-between"><span className="text-muted-foreground">Subtotal dentro del límite del 40%</span><span>{fmt(subtotalDentroLimite)}</span></div>
-                    {subtotalFueraLimite > 0 && (
-                      <div className="flex items-center justify-between"><span className="text-muted-foreground">Subtotal fuera del límite del 40%</span><span>{fmt(subtotalFueraLimite)}</span></div>
-                    )}
+                  </div>
+                )}
+                {fueraDelLimite.length > 0 && (
+                  <div className="pl-1 pt-1.5 mt-1.5 border-t">
+                    <p className="text-xs font-semibold text-indigo-700 mb-1">Fuera del límite del 40%</p>
+                    {fueraDelLimite.map((it: any) => lineaLimitada(it, etiquetaTipo(it)))}
+                    <div className="flex items-center justify-between text-xs pt-1 mt-1 border-t"><span className="text-muted-foreground">Subtotal fuera del límite del 40%</span><span>{fmt(subtotalFueraLimite)}</span></div>
                   </div>
                 )}
                 <div className="flex items-center justify-between border-t mt-1.5 pt-1.5 font-bold">
