@@ -1337,43 +1337,62 @@ export async function generarAnexosRenta(
     let contadorDependientesAnexo = 0;
     let subtotalDentroLimite = 0;
     let subtotalFueraLimite = 0;
-    const lineaLimitada = (it: ItemValor, etiquetaCategoria: string) => {
+    // Se calcula todo primero (sin imprimir) para poder agrupar la
+    // impresión: primero las partidas limitadas por el 40%, luego las que
+    // quedan fuera — en vez de mezclarlas en el orden en que se
+    // digitaron, que dificultaba revisar cada grupo por separado.
+    const filasDentro: { label: string; valor: string }[] = [];
+    const filasFuera: { label: string; valor: string }[] = [];
+    const calcularLinea = (it: ItemValor, etiquetaCategoria: string) => {
       const esAuto25 = it.tipoDeduccion === "renta_exenta_25_laboral" && it.calculoAutomatico;
       const esFueraDeLimite = TIPOS_FUERA_DE_LIMITE_40.has(it.tipoDeduccion || "");
       if (esFueraDeLimite) {
         if (it.tipoDeduccion === "dependiente_adicional_72uvt") {
           contadorDependientesAnexo++;
           if (contadorDependientesAnexo > 4) {
-            filaTexto(it.concepto, `$0 (${etiquetaCategoria}; supera el máximo de 4 dependientes)`, { indent: 8, color: "#b91c1c" });
+            filasFuera.push({ label: `${it.concepto} (${etiquetaCategoria}; supera el máximo de 4 dependientes)`, valor: "$0" });
             return;
           }
         }
         const limitado = calcularValorLimitado(it.valor, it.tipoDeduccion, ingresoBrutoCedula);
         subtotalFueraLimite += limitado;
-        const nota = ` (${etiquetaCategoria}, fuera del límite del 40%${limitado < it.valor ? `; digitado: ${fmt(it.valor)}` : ""})`;
-        filaTexto(it.concepto, `-${fmt(limitado)}${nota}`, { indent: 8, color: "#b91c1c" });
+        const nota = `${etiquetaCategoria}${limitado < it.valor ? `; digitado: ${fmt(it.valor)}` : ""}`;
+        filasFuera.push({ label: `${it.concepto} (${nota})`, valor: `-${fmt(limitado)}` });
         return;
       }
       const limitado = esAuto25 && resultado.auto25CalculadoValor != null
         ? resultado.auto25CalculadoValor
         : (ajustesGeneralPorItem.get(it) ?? calcularValorLimitado(it.valor, it.tipoDeduccion, ingresoBrutoCedula));
       subtotalDentroLimite += limitado;
-      const nota = esAuto25 ? ` (${etiquetaCategoria}, calculado automáticamente)` : ` (${etiquetaCategoria}${limitado < it.valor ? `; digitado: ${fmt(it.valor)}` : ""})`;
-      filaTexto(it.concepto, `-${fmt(limitado)}${nota}`, { indent: 8, color: "#b91c1c" });
+      const nota = esAuto25 ? `${etiquetaCategoria}, calculado automáticamente` : `${etiquetaCategoria}${limitado < it.valor ? `; digitado: ${fmt(it.valor)}` : ""}`;
+      filasDentro.push({ label: `${it.concepto} (${nota})`, valor: `-${fmt(limitado)}` });
     };
 
     doc.font("Helvetica-Bold").fontSize(11).text(titulo);
     doc.moveDown(0.2);
     for (const it of c.ingresoBruto) filaTexto(it.concepto, fmt(it.valor), { indent: 8 });
     if (c.ingresoBruto.length > 1) filaTexto("Total ingresos", fmt(ingresoBrutoCedula), { indent: 8, negrita: true });
-    for (const it of c.ingresoNoConstitutivo) filaTexto(it.concepto, `-${fmt(it.valor)} (INCRNGO)`, { indent: 8, color: "#b91c1c" });
-    for (const it of c.costoDeduccionProcedente) filaTexto(it.concepto, `-${fmt(it.valor)} (costo/deducción procedente)`, { indent: 8, color: "#b91c1c" });
-    for (const it of c.deduccion) lineaLimitada(it, "deducción");
-    for (const it of c.rentaExenta) lineaLimitada(it, "renta exenta");
+    for (const it of c.ingresoNoConstitutivo) filasDentro.push({ label: `${it.concepto} (INCRNGO)`, valor: `-${fmt(it.valor)}` });
+    for (const it of c.costoDeduccionProcedente) filasDentro.push({ label: `${it.concepto} (costo/deducción procedente)`, valor: `-${fmt(it.valor)}` });
+    for (const it of c.deduccion) calcularLinea(it, "deducción");
+    for (const it of c.rentaExenta) calcularLinea(it, "renta exenta");
+
+    for (const fila of filasDentro) filaTexto(fila.label, fila.valor, { indent: 8, color: "#b91c1c" });
     doc.moveDown(0.2);
     lineaDivisoria();
     filaTexto("Subtotal deducciones/rentas exentas dentro del límite del 40%", fmt(subtotalDentroLimite), { indent: 8 });
-    if (subtotalFueraLimite > 0) filaTexto("Subtotal fuera del límite del 40%", fmt(subtotalFueraLimite), { indent: 8 });
+
+    if (filasFuera.length > 0) {
+      doc.moveDown(0.2);
+      doc.font("Helvetica-Bold").fontSize(9.5).fillColor("#4338ca").text("Fuera del límite del 40%", xLabel + 8, doc.y);
+      doc.fillColor("#000000");
+      doc.moveDown(0.1);
+      for (const fila of filasFuera) filaTexto(fila.label, fila.valor, { indent: 8, color: "#b91c1c" });
+      doc.moveDown(0.2);
+      lineaDivisoria();
+      filaTexto("Subtotal fuera del límite del 40%", fmt(subtotalFueraLimite), { indent: 8 });
+    }
+
     lineaDivisoria();
     const sr = resultado.subRentas[key];
     filaTexto("Total renta cédula", fmt(sr?.rentaLiquidaOrdinaria || 0), { negrita: true });
@@ -1387,11 +1406,11 @@ export async function generarAnexosRenta(
     const ingresoBrutoPensionesItems = datos.cedulas["pensiones"]?.ingresoBruto || [];
     for (const it of ingresoBrutoPensionesItems) filaTexto(it.concepto, fmt(it.valor), { indent: 8 });
     if (ingresoBrutoPensionesItems.length > 1) filaTexto("Total ingresos", fmt(ingresoBrutoPensionesCedula), { indent: 8, negrita: true });
-    for (const it of datos.cedulas["pensiones"]?.ingresoNoConstitutivo || []) filaTexto(it.concepto, `-${fmt(it.valor)} (INCRNGO)`, { indent: 8, color: "#b91c1c" });
+    for (const it of datos.cedulas["pensiones"]?.ingresoNoConstitutivo || []) filaTexto(`${it.concepto} (INCRNGO)`, `-${fmt(it.valor)}`, { indent: 8, color: "#b91c1c" });
     for (const it of datos.cedulas["pensiones"]?.rentaExenta || []) {
       const limitado = calcularValorLimitado(it.valor, it.tipoDeduccion, ingresoBrutoPensionesCedula);
-      const nota = ` (renta exenta${limitado < it.valor ? `; digitado: ${fmt(it.valor)}` : ""})`;
-      filaTexto(it.concepto, `-${fmt(limitado)}${nota}`, { indent: 8, color: "#b91c1c" });
+      const nota = `renta exenta${limitado < it.valor ? `; digitado: ${fmt(it.valor)}` : ""}`;
+      filaTexto(`${it.concepto} (${nota})`, `-${fmt(limitado)}`, { indent: 8, color: "#b91c1c" });
     }
     lineaDivisoria();
     filaTexto("Renta líquida gravable cédula de pensiones", fmt(resultado.rentaLiquidaGravablePensiones), { negrita: true });
