@@ -1904,20 +1904,20 @@ function ResumenPendiente210Card({ rentaClienteId }: { rentaClienteId: number })
           {/* Cada cédula como una lista limpia terminando en su total */}
           {CEDULAS_ORDEN.filter(k => items.some((it: any) => (it.cedula || "trabajo") === k && it.tipoValor === "ingreso_bruto")).map((k) => {
             const deEstaCedula = items.filter((it: any) => (it.cedula || "trabajo") === k);
-            const linea = (it: any, signo: 1 | -1) => (
+            const linea = (it: any, signo: 1 | -1, etiqueta?: string) => (
               <div key={it.id} className="flex items-center justify-between py-0.5">
-                <span className="text-muted-foreground">{it.concepto}</span>
+                <span className="text-muted-foreground">{it.concepto}{etiqueta && <span className="text-xs"> ({etiqueta})</span>}</span>
                 <span className={signo < 0 ? "text-red-600" : ""}>{fmtFirmado(signo * it.valor)}</span>
               </div>
             );
-            const lineaLimitada = (it: any) => {
+            const lineaLimitada = (it: any, etiqueta: string) => {
               const limitado = it.valorAjustadoGeneral ?? it.valorLimitado ?? it.valor;
               const fueLimitado = limitado < it.valor;
               const esFueraLimite = ["dependiente_adicional_72uvt", "exceso_salario_militares", "compras_1pct_fe"].includes(it.tipoDeduccion);
               return (
                 <div key={it.id} className="flex items-center justify-between py-0.5 gap-2">
                   <span className="text-muted-foreground flex-1 min-w-0 truncate">
-                    {it.concepto}
+                    {it.concepto} <span className="text-xs">({etiqueta})</span>
                     {esFueraLimite && <span className="ml-1.5 text-[10px] text-indigo-700 bg-indigo-100 rounded px-1.5 py-0.5">fuera del 40%</span>}
                   </span>
                   {fueLimitado && <span className="text-[10px] text-amber-700 shrink-0">(digitado: {fmt(it.valor)})</span>}
@@ -1933,16 +1933,36 @@ function ResumenPendiente210Card({ rentaClienteId }: { rentaClienteId: number })
               return a;
             }, 0);
             const ajustadoPorTope = sr && Math.abs(sumaSimple - sr.rentaLiquidaOrdinaria) > 1;
+            const ingresosDeEstaCedula = deEstaCedula.filter((it: any) => it.tipoValor === "ingreso_bruto");
+            const totalIngresosCedula = ingresosDeEstaCedula.reduce((a: number, it: any) => a + it.valor, 0);
+            const deduccionesRentasExentas = deEstaCedula.filter((it: any) => it.tipoValor === "deduccion" || it.tipoValor === "renta_exenta");
+            const subtotalDentroLimite = deduccionesRentasExentas
+              .filter((it: any) => !["dependiente_adicional_72uvt", "exceso_salario_militares", "compras_1pct_fe"].includes(it.tipoDeduccion))
+              .reduce((a: number, it: any) => a + (it.valorAjustadoGeneral ?? it.valorLimitado ?? it.valor), 0);
+            const subtotalFueraLimite = deduccionesRentasExentas
+              .filter((it: any) => ["dependiente_adicional_72uvt", "exceso_salario_militares", "compras_1pct_fe"].includes(it.tipoDeduccion))
+              .reduce((a: number, it: any) => a + (it.valorLimitado ?? it.valor), 0);
             return (
               <div key={k} className="border rounded-md p-3">
                 <p className="font-semibold text-sm mb-1.5">{NOMBRE_SUBRENTA[k] || k}</p>
                 <div className="pl-1">
-                  {deEstaCedula.filter((it: any) => it.tipoValor === "ingreso_bruto").map((it: any) => linea(it, 1))}
-                  {deEstaCedula.filter((it: any) => it.tipoValor === "ingreso_no_constitutivo").map((it: any) => linea(it, -1))}
-                  {deEstaCedula.filter((it: any) => it.tipoValor === "costo_deduccion_procedente").map((it: any) => linea(it, -1))}
-                  {deEstaCedula.filter((it: any) => it.tipoValor === "deduccion").map((it: any) => lineaLimitada(it))}
-                  {deEstaCedula.filter((it: any) => it.tipoValor === "renta_exenta").map((it: any) => lineaLimitada(it))}
+                  {ingresosDeEstaCedula.map((it: any) => linea(it, 1))}
+                  {ingresosDeEstaCedula.length > 1 && (
+                    <div className="flex items-center justify-between py-0.5 font-medium border-t"><span>Total ingresos</span><span>{fmt(totalIngresosCedula)}</span></div>
+                  )}
+                  {deEstaCedula.filter((it: any) => it.tipoValor === "ingreso_no_constitutivo").map((it: any) => linea(it, -1, "INCRNGO"))}
+                  {deEstaCedula.filter((it: any) => it.tipoValor === "costo_deduccion_procedente").map((it: any) => linea(it, -1, "costo/deducción procedente"))}
+                  {deEstaCedula.filter((it: any) => it.tipoValor === "deduccion").map((it: any) => lineaLimitada(it, "deducción"))}
+                  {deEstaCedula.filter((it: any) => it.tipoValor === "renta_exenta").map((it: any) => lineaLimitada(it, "renta exenta"))}
                 </div>
+                {deduccionesRentasExentas.length > 0 && (
+                  <div className="pl-1 pt-1 mt-1 border-t space-y-0.5 text-xs">
+                    <div className="flex items-center justify-between"><span className="text-muted-foreground">Subtotal dentro del límite del 40%</span><span>{fmt(subtotalDentroLimite)}</span></div>
+                    {subtotalFueraLimite > 0 && (
+                      <div className="flex items-center justify-between"><span className="text-muted-foreground">Subtotal fuera del límite del 40%</span><span>{fmt(subtotalFueraLimite)}</span></div>
+                    )}
+                  </div>
+                )}
                 <div className="flex items-center justify-between border-t mt-1.5 pt-1.5 font-bold">
                   <span>Total renta cédula</span>
                   <span>{fmt(sr?.rentaLiquidaOrdinaria)}</span>
@@ -2019,7 +2039,9 @@ function ResumenPendiente210Card({ rentaClienteId }: { rentaClienteId: number })
                 Comparación patrimonial (Arts. 236-239 E.T.)
               </p>
               <div className="space-y-1 text-xs">
-                <div className="flex items-center justify-between"><span className="text-muted-foreground">Diferencia patrimonial (este año − año anterior)</span><span>{fmt(r.comparacionPatrimonial.diferenciaPatrimonial)}</span></div>
+                <div className="flex items-center justify-between"><span className="text-muted-foreground">Patrimonio líquido año anterior</span><span>{fmt(r.patrimonioLiquidoAnioAnterior)}</span></div>
+                <div className="flex items-center justify-between"><span className="text-muted-foreground">Patrimonio líquido declarado (año actual)</span><span>{fmt(r.patrimonioLiquido)}</span></div>
+                <div className="flex items-center justify-between border-t pt-1"><span className="text-muted-foreground">Diferencia patrimonial (este año − año anterior)</span><span>{fmt(r.comparacionPatrimonial.diferenciaPatrimonial)}</span></div>
                 <div className="flex items-center justify-between"><span className="text-muted-foreground">+ Rentas exentas del año</span><span>{fmt(r.comparacionPatrimonial.totalRentasExentas)}</span></div>
                 <div className="flex items-center justify-between"><span className="text-muted-foreground">− Impuesto pagado durante el año (retenciones + anticipo)</span><span>{fmt(r.comparacionPatrimonial.impuestoPagadoDuranteElAnio)}</span></div>
                 <div className="flex items-center justify-between font-medium border-t pt-1"><span>Renta líquida ajustada</span><span>{fmt(r.comparacionPatrimonial.rentaLiquidaAjustada)}</span></div>
