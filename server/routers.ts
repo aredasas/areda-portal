@@ -1105,17 +1105,17 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
     requestCorrection: adminProcedure
       .input(z.object({
         id: z.number(), reviewNotes: z.string().min(1, "Debe indicar qué corregir"),
-        adjunto: z.object({ fileName: z.string(), fileBase64: z.string(), contentType: z.string() }).optional(),
+        adjuntos: z.array(z.object({ fileName: z.string(), fileBase64: z.string(), contentType: z.string() })).optional(),
       }))
       .mutation(async ({ input, ctx }) => {
         await db.requestTaskCorrection(input.id, ctx.user.id, input.reviewNotes);
-        if (input.adjunto) {
-          const buffer = Buffer.from(input.adjunto.fileBase64, "base64");
-          const rawKey = `tasks/${input.id}/${Date.now()}_${input.adjunto.fileName}`;
-          const { url, key } = await storagePut(rawKey, buffer, input.adjunto.contentType);
+        for (const adjunto of input.adjuntos || []) {
+          const buffer = Buffer.from(adjunto.fileBase64, "base64");
+          const rawKey = `tasks/${input.id}/${Date.now()}_${adjunto.fileName}`;
+          const { url, key } = await storagePut(rawKey, buffer, adjunto.contentType);
           await db.createTaskAttachment({
-            taskId: input.id, fileName: input.adjunto.fileName, fileUrl: url, fileKey: key,
-            contentType: input.adjunto.contentType, fileSize: buffer.length, uploadedById: ctx.user.id,
+            taskId: input.id, fileName: adjunto.fileName, fileUrl: url, fileKey: key,
+            contentType: adjunto.contentType, fileSize: buffer.length, uploadedById: ctx.user.id,
           });
         }
         const task = await db.getTaskById(input.id);
