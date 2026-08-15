@@ -176,6 +176,22 @@ function extraerCentroCodigo(valorCrudo: any): string {
   return primerToken.padStart(2, "0");
 }
 
+/** El PUC colombiano se arma en pares de dígitos (clase-grupo-cuenta-
+ * subcuenta-auxiliar: 2-2-2-2...) — un código con longitud impar nunca es
+ * válido en ese esquema. Algunos softwares contables (confirmado con un
+ * archivo real, formato "Syscafe") rellenan el ÚLTIMO grupo con un cero a
+ * la izquierda de más — ej. "613505001" en vez de "61350501" (el "01"
+ * real queda como "001"). Se corrige quitando ese cero sobrante SOLO
+ * cuando el código es impar y el último grupo de 3 empieza en "0" — un
+ * código impar cuyo último grupo NO empieza en cero se deja intacto, para
+ * no alterar un auxiliar que legítimamente necesite 3 dígitos ahí. */
+function normalizarCuentaPUC(codigo: string): string {
+  if (codigo.length % 2 === 1 && codigo.length >= 3 && codigo[codigo.length - 3] === "0") {
+    return codigo.slice(0, -3) + codigo.slice(-2);
+  }
+  return codigo;
+}
+
 function procesarFila(
   values: any[], cols: ColumnasResueltas, porPeriodo: Record<string, DetallePeriodo>,
   cuentasConocidas: Set<string>, cuentasNuevas: Set<string>, nombresEncontrados: Map<string, string>,
@@ -184,7 +200,7 @@ function procesarFila(
 
   const cuentaRaw = values[cols.cuenta];
   if (!pareceCodigoDeCuenta(cuentaRaw)) return null; // fila de resumen/subtotal, no una transacción
-  const cuentaKey = String(cuentaRaw).trim();
+  const cuentaKey = normalizarCuentaPUC(String(cuentaRaw).trim());
   const primerDigito = cuentaKey[0];
   if (!"456".includes(primerDigito)) return null;
 
@@ -501,7 +517,7 @@ export async function parseCatalogoCuentas(filePathOrBuffer: string | Buffer): P
     if (!pareceCodigoDeCuenta(cuentaRaw)) continue;
     const nombreRaw = values[cols.nombre];
     const nombre = nombreRaw !== null && nombreRaw !== undefined ? String(nombreRaw).trim() : "";
-    if (nombre) nombres.set(String(cuentaRaw).trim(), nombre);
+    if (nombre) nombres.set(normalizarCuentaPUC(String(cuentaRaw).trim()), nombre);
   }
   return nombres;
 }
