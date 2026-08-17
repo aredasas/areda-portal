@@ -2456,7 +2456,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
       // Trae al listado de activos/pasivos/ingresos los ítems ya
       // clasificados en la exógena que aún no se hayan importado.
       importarDesdeExogena: protectedProcedure
-        .input(z.object({ rentaClienteId: z.number(), seccion: z.enum(["activo", "pasivo", "ingreso"]) }))
+        .input(z.object({ rentaClienteId: z.number(), seccion: z.enum(["activo", "pasivo", "ingreso", "retencion"]) }))
         .mutation(async ({ input, ctx }) => {
           assertRentaPNAccess(ctx.user.role);
           const importados = await db.importarDesdeExogena(input.rentaClienteId, input.seccion);
@@ -2465,14 +2465,14 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
       // Lista los ítems de exógena todavía sin importar, para elegir
       // manualmente cuáles van a la cédula seleccionada.
       exogenaDisponibles: protectedProcedure
-        .input(z.object({ rentaClienteId: z.number(), seccion: z.enum(["activo", "pasivo", "ingreso"]) }))
+        .input(z.object({ rentaClienteId: z.number(), seccion: z.enum(["activo", "pasivo", "ingreso", "retencion"]) }))
         .query(async ({ input, ctx }) => {
           assertRentaPNAccess(ctx.user.role);
           return db.getExogenaItemsDisponibles(input.rentaClienteId, input.seccion);
         }),
       importarSeleccionDesdeExogena: protectedProcedure
         .input(z.object({
-          rentaClienteId: z.number(), seccion: z.enum(["activo", "pasivo", "ingreso"]),
+          rentaClienteId: z.number(), seccion: z.enum(["activo", "pasivo", "ingreso", "retencion"]),
           exogenaItemIds: z.array(z.number()), cedula: z.enum(["trabajo", "trabajo_honorarios", "capital", "no_laboral", "pensiones", "dividendos"]).optional(),
         }))
         .mutation(async ({ input, ctx }) => {

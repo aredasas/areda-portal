@@ -1165,14 +1165,14 @@ function DescuentosTributariosCard({ rentaClienteId, soloLectura }: { rentaClien
 
 
 function ImportarExogenaDialog({ rentaClienteId, seccion, cedula, open, onOpenChange, onImportado }: {
-  rentaClienteId: number; seccion: "activo" | "pasivo" | "ingreso"; cedula?: string; open: boolean; onOpenChange: (open: boolean) => void; onImportado: () => void;
+  rentaClienteId: number; seccion: "activo" | "pasivo" | "ingreso" | "retencion"; cedula?: string; open: boolean; onOpenChange: (open: boolean) => void; onImportado: () => void;
 }) {
   const disponiblesQuery = trpc.renta.liquidacion.exogenaDisponibles.useQuery(
     { rentaClienteId, seccion }, { enabled: open },
   );
   const [seleccionados, setSeleccionados] = useState<Set<number>>(new Set());
   const fmt = (n: number) => `$${n.toLocaleString("es-CO")}`;
-  const nombreSeccion = seccion === "activo" ? "activos" : seccion === "pasivo" ? "pasivos" : "ingresos";
+  const nombreSeccion = seccion === "activo" ? "activos" : seccion === "pasivo" ? "pasivos" : seccion === "retencion" ? "retenciones" : "ingresos";
 
   const importarMutation = trpc.renta.liquidacion.importarSeleccionDesdeExogena.useMutation({
     onSuccess: (data) => {
@@ -1249,6 +1249,7 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
   const dependientesQuery = trpc.renta.dependientes.list.useQuery({ rentaClienteId });
   const [cedulaSeleccionada, setCedulaSeleccionada] = useState("trabajo");
   const [showImportarDialog, setShowImportarDialog] = useState(false);
+  const [showImportarRetencionDialog, setShowImportarRetencionDialog] = useState(false);
 
   const cedulaItemsQuery = trpc.renta.liquidacion.list.useQuery({ rentaClienteId, seccion: "cedula" });
 
@@ -1803,7 +1804,12 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
 
       {/* Retenciones Practicadas */}
       <div className="border-2 border-gray-300 rounded-md p-3 space-y-2 bg-gray-50">
-        <span className="text-sm font-semibold text-gray-800">Retenciones Practicadas</span>
+        <div className="flex items-center justify-between">
+          <span className="text-sm font-semibold text-gray-800">Retenciones Practicadas</span>
+          <Button size="sm" variant="outline" className="gap-1.5 h-7 text-xs" onClick={() => setShowImportarRetencionDialog(true)} disabled={soloLectura}>
+            <Upload className="w-3.5 h-3.5" /> Importar de exógena
+          </Button>
+        </div>
         {!!porTipo("retencion").length && (
           <div className="space-y-1 max-h-40 overflow-y-auto">
             {porTipo("retencion").map((it: any) => (
@@ -1851,6 +1857,11 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
       <ImportarExogenaDialog
         rentaClienteId={rentaClienteId} seccion="ingreso" cedula={cedulaSeleccionada}
         open={showImportarDialog} onOpenChange={setShowImportarDialog}
+        onImportado={invalidarTodo}
+      />
+      <ImportarExogenaDialog
+        rentaClienteId={rentaClienteId} seccion="retencion" cedula={cedulaSeleccionada}
+        open={showImportarRetencionDialog} onOpenChange={setShowImportarRetencionDialog}
         onImportado={invalidarTodo}
       />
     </ColapsableCard>

@@ -2237,22 +2237,26 @@ export async function eliminarLiquidacionItem(id: number) {
  * (no son cedulares); para "ingreso", ahora vive como seccion="cedula" con
  * tipoValor="ingreso_bruto" (la cédula específica la asigna quien importa,
  * ver `cedula` más abajo). */
-function condicionSeccionImportacion(seccionImport: "activo" | "pasivo" | "ingreso") {
+function condicionSeccionImportacion(seccionImport: "activo" | "pasivo" | "ingreso" | "retencion") {
   if (seccionImport === "ingreso") {
     return and(eq(rentaLiquidacionItems.seccion, "cedula"), eq(rentaLiquidacionItems.tipoValor, "ingreso_bruto"));
+  }
+  if (seccionImport === "retencion") {
+    return and(eq(rentaLiquidacionItems.seccion, "cedula"), eq(rentaLiquidacionItems.tipoValor, "retencion"));
   }
   return eq(rentaLiquidacionItems.seccion, seccionImport);
 }
 
 /** Importa como ítems de liquidación los que ya vinieron clasificados en
- * la exógena para una sección (activo/pasivo/ingreso) — no duplica los que
- * ya se hayan importado antes (se identifican por exogenaItemId). */
-export async function importarDesdeExogena(rentaClienteId: number, seccion: "activo" | "pasivo" | "ingreso"): Promise<number> {
+ * la exógena para una sección (activo/pasivo/ingreso/retencion) — no
+ * duplica los que ya se hayan importado antes (se identifican por
+ * exogenaItemId). */
+export async function importarDesdeExogena(rentaClienteId: number, seccion: "activo" | "pasivo" | "ingreso" | "retencion"): Promise<number> {
   const db = await getDb();
   if (!db) return 0;
   const exogena = await getExogenaRenta(rentaClienteId);
   if (!exogena) return 0;
-  const categoriaOrigen = seccion === "activo" ? "patrimonio" : seccion === "pasivo" ? "deuda" : "ingreso";
+  const categoriaOrigen = seccion === "activo" ? "patrimonio" : seccion === "pasivo" ? "deuda" : seccion === "retencion" ? "retencion" : "ingreso";
   const candidatos = exogena.items.filter(it => it.categoria === categoriaOrigen);
   if (candidatos.length === 0) return 0;
 
@@ -2265,8 +2269,8 @@ export async function importarDesdeExogena(rentaClienteId: number, seccion: "act
     if (idsImportados.has(item.id)) continue;
     await db.insert(rentaLiquidacionItems).values({
       rentaClienteId,
-      seccion: seccion === "ingreso" ? "cedula" : seccion,
-      tipoValor: seccion === "ingreso" ? "ingreso_bruto" : null,
+      seccion: (seccion === "ingreso" || seccion === "retencion") ? "cedula" : seccion,
+      tipoValor: seccion === "ingreso" ? "ingreso_bruto" : seccion === "retencion" ? "retencion" : null,
       concepto: `${item.nombreTercero ? item.nombreTercero + " — " : ""}${item.detalle}`,
       valor: item.valor, origen: "exogena", exogenaItemId: item.id,
     });
@@ -2278,12 +2282,12 @@ export async function importarDesdeExogena(rentaClienteId: number, seccion: "act
 /** Lista los ítems de la exógena de una sección que todavía NO se han
  * importado a la liquidación (de ningún cliente/cédula) — para mostrarlos
  * como opciones marcables antes de decidir a cuál cédula van. */
-export async function getExogenaItemsDisponibles(rentaClienteId: number, seccion: "activo" | "pasivo" | "ingreso") {
+export async function getExogenaItemsDisponibles(rentaClienteId: number, seccion: "activo" | "pasivo" | "ingreso" | "retencion") {
   const db = await getDb();
   if (!db) return [];
   const exogena = await getExogenaRenta(rentaClienteId);
   if (!exogena) return [];
-  const categoriaOrigen = seccion === "activo" ? "patrimonio" : seccion === "pasivo" ? "deuda" : "ingreso";
+  const categoriaOrigen = seccion === "activo" ? "patrimonio" : seccion === "pasivo" ? "deuda" : seccion === "retencion" ? "retencion" : "ingreso";
   const candidatos = exogena.items.filter(it => it.categoria === categoriaOrigen);
   if (candidatos.length === 0) return [];
 
@@ -2297,7 +2301,7 @@ export async function getExogenaItemsDisponibles(rentaClienteId: number, seccion
  * asignándolos a la cédula indicada — los que no se elijan quedan
  * disponibles para importarse después bajo otra cédula. */
 export async function importarItemsExogenaSeleccionados(
-  rentaClienteId: number, seccion: "activo" | "pasivo" | "ingreso", exogenaItemIds: number[],
+  rentaClienteId: number, seccion: "activo" | "pasivo" | "ingreso" | "retencion", exogenaItemIds: number[],
   cedula?: "trabajo" | "trabajo_honorarios" | "capital" | "no_laboral" | "pensiones" | "dividendos",
 ): Promise<number> {
   const db = await getDb();
@@ -2315,11 +2319,12 @@ export async function importarItemsExogenaSeleccionados(
   let importados = 0;
   for (const item of seleccionados) {
     if (idsImportados.has(item.id)) continue;
+    const asignaCedula = seccion === "ingreso" || seccion === "retencion";
     await db.insert(rentaLiquidacionItems).values({
       rentaClienteId,
-      seccion: seccion === "ingreso" ? "cedula" : seccion,
-      cedula: seccion === "ingreso" ? (cedula || null) : null,
-      tipoValor: seccion === "ingreso" ? "ingreso_bruto" : null,
+      seccion: asignaCedula ? "cedula" : seccion,
+      cedula: asignaCedula ? (cedula || null) : null,
+      tipoValor: seccion === "ingreso" ? "ingreso_bruto" : seccion === "retencion" ? "retencion" : null,
       concepto: `${item.nombreTercero ? item.nombreTercero + " — " : ""}${item.detalle}`,
       valor: item.valor, origen: "exogena", exogenaItemId: item.id,
     });
