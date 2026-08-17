@@ -49,7 +49,7 @@ export type ItemExogena = {
   detalle: string;
   valor: number;
   renglon: string | null;
-  categoria: "ingreso" | "patrimonio" | "deuda" | "otro";
+  categoria: "ingreso" | "patrimonio" | "deuda" | "retencion" | "otro";
   infoAdicional: string;
 };
 
@@ -80,6 +80,12 @@ function extraerRenglon(usoSugerido: string | null | undefined): string | null {
 // independiente sin factura), que Areda confirmó que sí son ingresos
 // reales y deben poder importarse a una cédula.
 const FRASES_INGRESO_SIN_RENGLON = ["documento soporte", "documentos soporte"];
+// La DIAN sugiere un renglón (ej. "R74") también para las retenciones
+// que le practicaron al declarante — pero ese número no indica por sí
+// solo que sea una retención y no un ingreso (confirmado con un caso
+// real: R74 agrupaba retenciones, no ingresos, y se mostraba con la
+// etiqueta "ingreso"). Se detecta por el texto del concepto.
+const FRASES_RETENCION = ["retencion en la fuente", "retenciones", "autorretencion", "retencion practicada", "retefuente"];
 
 function quitarTildes(s: string): string {
   return s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
@@ -88,8 +94,9 @@ function quitarTildes(s: string): string {
 function categorizar(renglon: string | null, detalle: string = ""): ItemExogena["categoria"] {
   if (renglon === "R29") return "patrimonio";
   if (renglon === "R30") return "deuda";
-  if (renglon) return "ingreso";
   const detalleNormalizado = quitarTildes(detalle.toLowerCase());
+  if (FRASES_RETENCION.some(f => detalleNormalizado.includes(f))) return "retencion";
+  if (renglon) return "ingreso";
   if (FRASES_INGRESO_SIN_RENGLON.some(f => detalleNormalizado.includes(f))) return "ingreso";
   return "otro";
 }

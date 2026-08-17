@@ -1,0 +1,1 @@
+ALTER TABLE `rentaExogenaItems` MODIFY COLUMN `categoria` enum('ingreso','patrimonio','deuda','retencion','otro') NOT NULL DEFAULT 'otro';

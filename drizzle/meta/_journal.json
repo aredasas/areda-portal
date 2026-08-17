@@ -281,6 +281,13 @@
       "when": 1786413516099,
       "tag": "0039_dependientes_tipo_deduccion",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "5",
+      "when": 1786997674262,
+      "tag": "0040_categoria_retencion",
+      "breakpoints": true
     }
   ]
 }

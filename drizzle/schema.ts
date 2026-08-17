@@ -669,7 +669,7 @@ export const rentaExogenaItems = mysqlTable("rentaExogenaItems", {
   detalle: text("detalle"),
   valor: double("valor").notNull(),
   renglon: varchar("renglon", { length: 10 }), // ej. "R32", "R29" — null si la fila no trae uno
-  categoria: mysqlEnum("categoria", ["ingreso", "patrimonio", "deuda", "otro"]).default("otro").notNull(),
+  categoria: mysqlEnum("categoria", ["ingreso", "patrimonio", "deuda", "retencion", "otro"]).default("otro").notNull(),
   infoAdicional: text("infoAdicional"),
 }, (table) => ({
   rentaExogenaIdx: index("rentaExogenaItems_rentaExogena_idx").on(table.rentaExogenaId),
