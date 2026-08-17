@@ -4,6 +4,7 @@ import { alias } from "drizzle-orm/mysql-core";
 import { InsertUser, users, clients, InsertClient, taxObligations, InsertTaxObligation, clientObligations, InsertClientObligation, taxDeadlines, InsertTaxDeadline, tasks, InsertTask, taskAttachments, InsertTaskAttachment, deadlineAttachments, InsertDeadlineAttachment, appSettings, InsertAppSetting, dianCalendar, InsertDianCalendar, clientDriveSubfolders, timeEntries, InsertTimeEntry, comments, InsertComment, historyEvents, notifications, workLocationEntries, taskRecurrences, InsertTaskRecurrence, boardPosts, boardAttachments, rentaClientes, InsertRentaCliente, rentaExogena, InsertRentaExogena, rentaExogenaItems, InsertRentaExogenaItem, rentaDeclaracionAnterior, InsertRentaDeclaracionAnterior, rentaLiquidacionItems, InsertRentaLiquidacionItem, rentaDependientes, InsertRentaDependiente, rentaReportes, InsertRentaReporte } from "../drizzle/schema";
 import { ENV } from './_core/env';
 import { bogotaTodayUTCMidnight } from "./dateUtils";
+import { categorizar as categorizarExogena } from "./rentaDb";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
@@ -2184,7 +2185,14 @@ export async function getExogenaRenta(rentaClienteId: number) {
   const filas = await db.select().from(rentaExogena).where(eq(rentaExogena.rentaClienteId, rentaClienteId)).limit(1);
   if (filas.length === 0) return null;
   const items = await db.select().from(rentaExogenaItems).where(eq(rentaExogenaItems.rentaExogenaId, filas[0].id));
-  return { ...filas[0], items };
+  // La categoría se recalcula aquí (no se confía ciegamente en la que
+  // quedó guardada al subir el archivo) — así, si se corrige o mejora la
+  // lógica de categorización más adelante, los archivos ya cargados se
+  // benefician de inmediato sin tener que volver a subirlos (evita el
+  // riesgo de romper la relación con ítems que ya se hubieran importado
+  // a una cédula, que sí pasaría si se borrara y recreara todo).
+  const itemsRecategorizados = items.map(it => ({ ...it, categoria: categorizarExogena(it.renglon, it.detalle || "") }));
+  return { ...filas[0], items: itemsRecategorizados };
 }
 
 // ---- Declaración anterior (para el anticipo) ----

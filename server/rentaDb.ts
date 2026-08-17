@@ -91,7 +91,7 @@ function quitarTildes(s: string): string {
   return s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 }
 
-function categorizar(renglon: string | null, detalle: string = ""): ItemExogena["categoria"] {
+export function categorizar(renglon: string | null, detalle: string = ""): ItemExogena["categoria"] {
   if (renglon === "R29") return "patrimonio";
   if (renglon === "R30") return "deuda";
   const detalleNormalizado = quitarTildes(detalle.toLowerCase());
