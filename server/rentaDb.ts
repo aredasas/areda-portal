@@ -1279,6 +1279,17 @@ export async function generarAnexosRenta(
   }
 
   function filaTexto(label: string, valor: string, opciones?: { negrita?: boolean; color?: string; indent?: number }) {
+    // Antes, las dos llamadas a doc.text() de esta misma fila (concepto y
+    // valor) podían decidir el salto de página cada una por su cuenta —
+    // pdfkit calculaba la altura necesaria de forma distinta para cada
+    // una, así que a veces el concepto cabía justo al pie de una página
+    // pero el valor ya no, quedando cada mitad de la fila en una página
+    // distinta. Se verifica el espacio ANTES de dibujar cualquiera de
+    // las dos, para que la fila completa se mueva junta si hace falta.
+    if (doc.y + 14 > doc.page.height - doc.page.margins.bottom) {
+      dibujarPiePaginaAreda(doc);
+      doc.addPage();
+    }
     const anchoLabel = anchoUtil - 150 - (opciones?.indent || 0);
     const y = doc.y;
     doc.font(opciones?.negrita ? "Helvetica-Bold" : "Helvetica").fontSize(9.5).fillColor(opciones?.color || "#000000");
@@ -1368,6 +1379,13 @@ export async function generarAnexosRenta(
       filasDentro.push({ label: `${it.concepto} (${nota})`, valor: `-${fmt(limitado)}` });
     };
 
+    // El título de la cédula nunca debe quedar solo al pie de una
+    // página con su contenido empezando en la siguiente — se reserva
+    // espacio mínimo para el título más al menos su primera línea.
+    if (doc.y + 30 > doc.page.height - doc.page.margins.bottom) {
+      dibujarPiePaginaAreda(doc);
+      doc.addPage();
+    }
     doc.font("Helvetica-Bold").fontSize(11).text(titulo);
     doc.moveDown(0.2);
     for (const it of c.ingresoBruto) filaTexto(it.concepto, fmt(it.valor), { indent: 8 });
@@ -1401,6 +1419,10 @@ export async function generarAnexosRenta(
 
   if (resultado.ingresoBrutoPensiones > 0) {
     const ingresoBrutoPensionesCedula = (datos.cedulas["pensiones"]?.ingresoBruto || []).reduce((a, it) => a + it.valor, 0);
+    if (doc.y + 30 > doc.page.height - doc.page.margins.bottom) {
+      dibujarPiePaginaAreda(doc);
+      doc.addPage();
+    }
     doc.font("Helvetica-Bold").fontSize(11).text("Pensiones");
     doc.moveDown(0.2);
     const ingresoBrutoPensionesItems = datos.cedulas["pensiones"]?.ingresoBruto || [];
@@ -1425,6 +1447,10 @@ export async function generarAnexosRenta(
   }
 
   if (resultado.gananciaOcasional.totalIngresoBruto > 0) {
+    if (doc.y + 30 > doc.page.height - doc.page.margins.bottom) {
+      dibujarPiePaginaAreda(doc);
+      doc.addPage();
+    }
     doc.font("Helvetica-Bold").fontSize(11).text("Ganancia Ocasional (tarifa fija propia, no la tabla del Art. 241)");
     doc.moveDown(0.2);
     const cGO = datos.cedulas["ganancia_ocasional"];
@@ -1451,6 +1477,10 @@ export async function generarAnexosRenta(
     doc.moveDown(0.8);
   }
 
+  if (doc.y + 30 > doc.page.height - doc.page.margins.bottom) {
+    dibujarPiePaginaAreda(doc);
+    doc.addPage();
+  }
   lineaDivisoria();
   filaTexto("Renta líquida gravable total (Cédula General + Pensiones)", fmt(resultado.rentaLiquidaGravableTotal), { negrita: true });
   filaTexto(`Impuesto de renta (tarifa marginal ${(resultado.impuestoRenta.tarifaMarginal * 100).toFixed(0)}%, Art. 241 E.T.)`, fmt(resultado.impuestoRenta.impuesto), { negrita: true });
@@ -1463,6 +1493,16 @@ export async function generarAnexosRenta(
   doc.moveDown(0.8);
   filaTexto("Total retenciones practicadas", fmt(resultado.totalRetenciones));
   doc.moveDown(0.3);
+  // Este bloque son 3 líneas cortas y relacionadas (título + 2 métodos) —
+  // si al llegar aquí ya no cabe completo antes del margen inferior,
+  // mejor pasarlo entero a la siguiente página que dejarlo partido (el
+  // salto automático de PDFKit lo hacía caer solo, en una hoja casi en
+  // blanco, mientras el resto de este anexo quedaba en la anterior).
+  const ALTO_BLOQUE_ANTICIPO = 65;
+  if (doc.y + ALTO_BLOQUE_ANTICIPO > doc.page.height - doc.page.margins.bottom) {
+    dibujarPiePaginaAreda(doc);
+    doc.addPage();
+  }
   doc.fontSize(8.5).font("Helvetica-Oblique").fillColor("#555555")
     .text("Anticipo de renta para el próximo año — dos métodos (Art. 807 E.T.), verificar cuál aplica:");
   doc.fillColor("#000000");
@@ -1470,8 +1510,16 @@ export async function generarAnexosRenta(
   filaTexto("Método 2: promedio(impuesto anterior, actual) × 75% - retenciones", fmt(resultado.anticipoMetodo2));
 
   // ================= ANEXO 2: Activos y Pasivos =================
-  dibujarPiePaginaAreda(doc);
-  doc.addPage();
+  // Antes se saltaba de página SIEMPRE aquí, sin importar cuánto espacio
+  // quedara — eso dejaba páginas casi en blanco cuando el Anexo 1
+  // terminaba temprano (ej. solo el bloque de anticipo). Ahora solo
+  // salta si de verdad no cabe el encabezado más un par de líneas.
+  if (doc.y + 90 > doc.page.height - doc.page.margins.bottom) {
+    dibujarPiePaginaAreda(doc);
+    doc.addPage();
+  } else {
+    doc.moveDown(1.5);
+  }
   encabezado("ANEXO 2 — DETALLE DE ACTIVOS Y PASIVOS");
 
   doc.font("Helvetica-Bold").fontSize(11).text("Activos");
