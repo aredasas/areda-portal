@@ -215,7 +215,7 @@ export default function Revision() {
                   className="flex items-center justify-between border rounded-md p-3 gap-2 w-full text-left hover:bg-muted/50"
                   onClick={() => setRentaClienteRevisando(c)}
                 >
-                  <span className="font-medium truncate">Renta de {c.nombre} — año gravable {c.anioGravable}</span>
+                  <span className="font-medium flex-1 min-w-0 truncate">Renta de {c.nombre} — año gravable {c.anioGravable}</span>
                   <ArrowRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                 </button>
               ))}
@@ -489,7 +489,7 @@ export default function Revision() {
                           </Button>
                           {adjuntosCorreccion.map((archivo, i) => (
                             <div key={i} className="flex items-center justify-between text-xs bg-muted/50 rounded px-2 py-1">
-                              <span className="truncate">{archivo.name}</span>
+                              <span className="flex-1 min-w-0 truncate">{archivo.name}</span>
                               <Button variant="ghost" size="sm" className="h-6 px-2" onClick={() => setAdjuntosCorreccion((prev) => prev.filter((_, j) => j !== i))}>Quitar</Button>
                             </div>
                           ))}
@@ -575,7 +575,7 @@ function RentaTerminadaRow({ cliente, onReabrir, reabriendo }: { cliente: any; o
     <div className="flex items-center justify-between border rounded-md p-3 gap-2">
       <button className="flex items-center gap-2 text-left flex-1 min-w-0 hover:underline" onClick={handleVerDeclaracion}>
         <Download className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-        <span className="font-medium truncate">Renta de {cliente.nombre} — año gravable {cliente.anioGravable}</span>
+        <span className="font-medium flex-1 min-w-0 truncate">Renta de {cliente.nombre} — año gravable {cliente.anioGravable}</span>
       </button>
       <Button size="sm" variant="outline" className="gap-1.5 shrink-0" onClick={onReabrir} disabled={reabriendo}>
         {reabriendo ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />} Reabrir
@@ -609,7 +609,7 @@ function RentaResumenDialog({ cliente, onClose, onAprobar, onRechazar, aprobando
 
   return (
     <Dialog open={!!cliente} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="sm:max-w-2xl max-h-[85vh] overflow-y-auto overflow-x-hidden min-w-0">
+      <DialogContent className="sm:max-w-3xl max-h-[85vh] overflow-y-auto overflow-x-hidden min-w-0">
         <DialogHeader>
           <DialogTitle>Resumen Declaración Renta 2025 — {cliente?.nombre} (año gravable {cliente?.anioGravable})</DialogTitle>
         </DialogHeader>
@@ -664,7 +664,7 @@ function RentaResumenDialog({ cliente, onClose, onAprobar, onRechazar, aprobando
                   <div className="pl-1">
                     {ingresosDeEstaCedula.map((it: any) => linea(it, 1))}
                     {ingresosDeEstaCedula.length > 1 && (
-                      <div className="flex items-center justify-between py-0.5 font-medium border-t gap-2"><span className="truncate">Total ingresos</span><span className="shrink-0">{fmt(totalIngresosCedula)}</span></div>
+                      <div className="flex items-center justify-between py-0.5 font-medium border-t gap-2"><span className="flex-1 min-w-0 truncate">Total ingresos</span><span className="shrink-0">{fmt(totalIngresosCedula)}</span></div>
                     )}
                     {deEstaCedula.filter((it: any) => it.tipoValor === "ingreso_no_constitutivo").map((it: any) => linea(it, -1, "INCRNGO"))}
                     {deEstaCedula.filter((it: any) => it.tipoValor === "costo_deduccion_procedente").map((it: any) => linea(it, -1, "costo/deducción procedente"))}
@@ -672,18 +672,18 @@ function RentaResumenDialog({ cliente, onClose, onAprobar, onRechazar, aprobando
                   </div>
                   {deduccionesRentasExentas.length > 0 && (
                     <div className="pl-1 pt-1 mt-1 border-t space-y-0.5 text-xs">
-                      <div className="flex items-center justify-between gap-2"><span className="text-muted-foreground truncate">Subtotal dentro del límite del 40%</span><span className="shrink-0">{fmt(subtotalDentroLimite)}</span></div>
+                      <div className="flex items-center justify-between gap-2"><span className="text-muted-foreground flex-1 min-w-0 truncate">Subtotal dentro del límite del 40%</span><span className="shrink-0">{fmt(subtotalDentroLimite)}</span></div>
                     </div>
                   )}
                   {fueraDelLimite.length > 0 && (
                     <div className="pl-1 pt-1.5 mt-1.5 border-t">
                       <p className="text-xs font-semibold text-indigo-700 mb-1">Fuera del límite del 40%</p>
                       {fueraDelLimite.map((it: any) => lineaLimitada(it, etiquetaTipo(it)))}
-                      <div className="flex items-center justify-between text-xs pt-1 mt-1 border-t gap-2"><span className="text-muted-foreground truncate">Subtotal fuera del límite del 40%</span><span className="shrink-0">{fmt(subtotalFueraLimite)}</span></div>
+                      <div className="flex items-center justify-between text-xs pt-1 mt-1 border-t gap-2"><span className="text-muted-foreground flex-1 min-w-0 truncate">Subtotal fuera del límite del 40%</span><span className="shrink-0">{fmt(subtotalFueraLimite)}</span></div>
                     </div>
                   )}
                   <div className="flex items-center justify-between border-t mt-1.5 pt-1.5 font-bold gap-2">
-                    <span className="truncate">Total renta cédula</span>
+                    <span className="flex-1 min-w-0 truncate">Total renta cédula</span>
                     <span className="shrink-0">{fmt(sr?.rentaLiquidaOrdinaria)}</span>
                   </div>
                 </div>
@@ -691,18 +691,18 @@ function RentaResumenDialog({ cliente, onClose, onAprobar, onRechazar, aprobando
             })}
 
             <div className="flex items-center justify-between border-t pt-2 font-semibold text-base gap-2">
-              <span className="truncate">Renta líquida gravable total</span><span className="shrink-0">{fmt(r.rentaLiquidaGravableTotal)}</span>
+              <span className="flex-1 min-w-0 truncate">Renta líquida gravable total</span><span className="shrink-0">{fmt(r.rentaLiquidaGravableTotal)}</span>
             </div>
             <div className="flex items-center justify-between font-semibold text-base gap-2">
-              <span className="truncate">Impuesto de renta ({(r.impuestoRenta.tarifaMarginal * 100).toFixed(0)}%)</span><span className="shrink-0">{fmt(r.impuestoRenta.impuesto)}</span>
+              <span className="flex-1 min-w-0 truncate">Impuesto de renta ({(r.impuestoRenta.tarifaMarginal * 100).toFixed(0)}%)</span><span className="shrink-0">{fmt(r.impuestoRenta.impuesto)}</span>
             </div>
             {r.totalDescuentosTributarios > 0 && (
               <>
                 <div className="flex items-center justify-between text-red-600 gap-2">
-                  <span className="truncate">(-) Descuentos tributarios</span><span className="shrink-0">-{fmt(r.totalDescuentosTributarios)}</span>
+                  <span className="flex-1 min-w-0 truncate">(-) Descuentos tributarios</span><span className="shrink-0">-{fmt(r.totalDescuentosTributarios)}</span>
                 </div>
                 <div className="flex items-center justify-between font-semibold text-base border-t pt-1.5 gap-2">
-                  <span className="truncate">Impuesto neto de renta</span><span className="shrink-0">{fmt(r.impuestoNetoDespuesDescuentos)}</span>
+                  <span className="flex-1 min-w-0 truncate">Impuesto neto de renta</span><span className="shrink-0">{fmt(r.impuestoNetoDespuesDescuentos)}</span>
                 </div>
               </>
             )}
@@ -718,13 +718,13 @@ function RentaResumenDialog({ cliente, onClose, onAprobar, onRechazar, aprobando
                 <div className="space-y-1">
                   {Object.entries(r.gananciaOcasional.porTipo).map(([tipo, v]: any) => (
                     <div key={tipo} className="flex items-center justify-between text-xs gap-2">
-                      <span className="text-muted-foreground truncate">{tipo} ({(v.tarifa * 100).toFixed(0)}%)</span>
+                      <span className="text-muted-foreground flex-1 min-w-0 truncate">{tipo} ({(v.tarifa * 100).toFixed(0)}%)</span>
                       <span className="shrink-0 text-right">Neto {fmt(v.netoGravable)} → Impuesto {fmt(v.impuesto)}</span>
                     </div>
                   ))}
                 </div>
                 <div className="flex items-center justify-between border-t mt-1.5 pt-1.5 font-bold gap-2">
-                  <span className="truncate">Total impuesto ganancia ocasional</span>
+                  <span className="flex-1 min-w-0 truncate">Total impuesto ganancia ocasional</span>
                   <span className="shrink-0">{fmt(r.gananciaOcasional.totalImpuesto)}</span>
                 </div>
               </div>
@@ -737,15 +737,15 @@ function RentaResumenDialog({ cliente, onClose, onAprobar, onRechazar, aprobando
                   Comparación patrimonial (Arts. 236-239 E.T.)
                 </p>
                 <div className="space-y-1 text-xs">
-                  <div className="flex items-center justify-between gap-2"><span className="text-muted-foreground truncate">Patrimonio líquido año anterior</span><span className="shrink-0">{fmt(r.patrimonioLiquidoAnioAnterior)}</span></div>
-                  <div className="flex items-center justify-between gap-2"><span className="text-muted-foreground truncate">Patrimonio líquido declarado (año actual)</span><span className="shrink-0">{fmt(r.patrimonioLiquido)}</span></div>
-                  <div className="flex items-center justify-between border-t pt-1 gap-2"><span className="text-muted-foreground truncate">Diferencia patrimonial (este año − año anterior)</span><span className="shrink-0">{fmt(r.comparacionPatrimonial.diferenciaPatrimonial)}</span></div>
-                  <div className="flex items-center justify-between gap-2"><span className="text-muted-foreground truncate">+ Rentas exentas del año</span><span className="shrink-0">{fmt(r.comparacionPatrimonial.totalRentasExentas)}</span></div>
-                  <div className="flex items-center justify-between gap-2"><span className="text-muted-foreground truncate">− Impuesto pagado durante el año (retenciones + anticipo)</span><span className="shrink-0">{fmt(r.comparacionPatrimonial.impuestoPagadoDuranteElAnio)}</span></div>
-                  <div className="flex items-center justify-between font-medium border-t pt-1 gap-2"><span className="truncate">Renta líquida ajustada</span><span className="shrink-0">{fmt(r.comparacionPatrimonial.rentaLiquidaAjustada)}</span></div>
+                  <div className="flex items-center justify-between gap-2"><span className="text-muted-foreground flex-1 min-w-0 truncate">Patrimonio líquido año anterior</span><span className="shrink-0">{fmt(r.patrimonioLiquidoAnioAnterior)}</span></div>
+                  <div className="flex items-center justify-between gap-2"><span className="text-muted-foreground flex-1 min-w-0 truncate">Patrimonio líquido declarado (año actual)</span><span className="shrink-0">{fmt(r.patrimonioLiquido)}</span></div>
+                  <div className="flex items-center justify-between border-t pt-1 gap-2"><span className="text-muted-foreground flex-1 min-w-0 truncate">Diferencia patrimonial (este año − año anterior)</span><span className="shrink-0">{fmt(r.comparacionPatrimonial.diferenciaPatrimonial)}</span></div>
+                  <div className="flex items-center justify-between gap-2"><span className="text-muted-foreground flex-1 min-w-0 truncate">+ Rentas exentas del año</span><span className="shrink-0">{fmt(r.comparacionPatrimonial.totalRentasExentas)}</span></div>
+                  <div className="flex items-center justify-between gap-2"><span className="text-muted-foreground flex-1 min-w-0 truncate">− Impuesto pagado durante el año (retenciones + anticipo)</span><span className="shrink-0">{fmt(r.comparacionPatrimonial.impuestoPagadoDuranteElAnio)}</span></div>
+                  <div className="flex items-center justify-between font-medium border-t pt-1 gap-2"><span className="flex-1 min-w-0 truncate">Renta líquida ajustada</span><span className="shrink-0">{fmt(r.comparacionPatrimonial.rentaLiquidaAjustada)}</span></div>
                 </div>
                 <div className={`flex items-center justify-between border-t mt-1.5 pt-1.5 font-bold gap-2 ${r.comparacionPatrimonial.excedente > 0 ? "text-amber-700" : ""}`}>
-                  <span className="truncate">{r.comparacionPatrimonial.excedente > 0 ? "Incremento patrimonial sin justificar" : "Sin incremento sin justificar"}</span>
+                  <span className="flex-1 min-w-0 truncate">{r.comparacionPatrimonial.excedente > 0 ? "Incremento patrimonial sin justificar" : "Sin incremento sin justificar"}</span>
                   <span className="shrink-0">{fmt(Math.max(0, r.comparacionPatrimonial.excedente))}</span>
                 </div>
                 <p className="text-xs text-muted-foreground mt-1">
