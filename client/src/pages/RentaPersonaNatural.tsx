@@ -11,10 +11,12 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Textarea } from "@/components/ui/textarea";
 import { trpc } from "@/lib/trpc";
 import {
   UserSquare2, Construction, Plus, Loader2, Pencil, Trash2, CheckCircle2, Clock, Users, FileSpreadsheet,
-  Upload, AlertTriangle, Wallet, ChevronDown, Download, Calculator, Eye, FolderOpen, File, Send, ThumbsUp, ThumbsDown, ShieldCheck, Search, Ban, RotateCcw, ClipboardList,
+  Upload, AlertTriangle, Wallet, ChevronDown, Download, Calculator, Eye, FolderOpen, File, Send, ThumbsUp, ThumbsDown, ShieldCheck, Search, Ban, RotateCcw, ClipboardList, MessageSquare,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -22,6 +24,54 @@ import { toast } from "sonner";
 // (confirmado contra el archivo Ayuda Renta 2025) — no una multiplicación
 // directa sin redondear. Mismo criterio que en el backend (rentaDb.ts).
 const redondearPesosDian = (valorExacto: number) => Math.round(valorExacto / 1000) * 1000;
+
+/** Botón pequeño (ícono de mensaje) que abre un editor inline para el
+ * comentario de un ítem de liquidación — se usa junto a cada partida de
+ * activos/pasivos/ingresos/deducciones/rentas exentas/retenciones/
+ * ganancia ocasional/descuentos tributarios. El comentario sale impreso
+ * en el PDF de anexos, justo debajo de esa partida. El ícono se rellena
+ * cuando ya hay un comentario guardado, para que se note de un vistazo
+ * cuáles partidas ya tienen una nota sin tener que abrir cada una. */
+function ComentarioItemBoton({ itemId, comentarioActual, soloLectura }: { itemId: number; comentarioActual?: string | null; soloLectura?: boolean }) {
+  const utils = trpc.useUtils();
+  const [abierto, setAbierto] = useState(false);
+  const [texto, setTexto] = useState(comentarioActual || "");
+  const tieneComentario = !!comentarioActual?.trim();
+
+  const actualizarMutation = trpc.renta.liquidacion.actualizar.useMutation({
+    onSuccess: () => { utils.renta.liquidacion.list.invalidate(); setAbierto(false); },
+    onError: (err) => toast.error(err.message || "No se pudo guardar el comentario"),
+  });
+
+  return (
+    <Popover open={abierto} onOpenChange={(o) => { setAbierto(o); if (o) setTexto(comentarioActual || ""); }}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="ghost" size="icon"
+          className={`h-7 w-7 shrink-0 ${tieneComentario ? "text-amber-600" : "text-muted-foreground"}`}
+          title={tieneComentario ? "Ver/editar comentario" : "Agregar comentario (sale en el PDF)"}
+        >
+          <MessageSquare className="w-3.5 h-3.5" fill={tieneComentario ? "currentColor" : "none"} />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-80 space-y-2" align="end">
+        <Label className="text-xs">Comentario — sale impreso en el PDF de anexos</Label>
+        <Textarea
+          value={texto} onChange={(e) => setTexto(e.target.value)} rows={3}
+          placeholder="Ej. de dónde sale el soporte, qué falta verificar..." disabled={soloLectura}
+        />
+        {!soloLectura && (
+          <div className="flex justify-end gap-2">
+            <Button size="sm" variant="outline" onClick={() => setAbierto(false)}>Cancelar</Button>
+            <Button size="sm" onClick={() => actualizarMutation.mutate({ id: itemId, comentario: texto })} disabled={actualizarMutation.isPending}>
+              Guardar
+            </Button>
+          </div>
+        )}
+      </PopoverContent>
+    </Popover>
+  );
+}
 
 export default function RentaPersonaNatural() {
   const now = new Date();
@@ -666,6 +716,7 @@ function LiquidacionTab({ anioGravable, rentaClienteIdInicial }: { anioGravable:
           <IngresosDeduccionesPorCedulaCard key={`ced-${rentaClienteId}`} rentaClienteId={rentaClienteId} soloLectura={soloLectura} />
           <GananciaOcasionalCard key={`go-${rentaClienteId}`} rentaClienteId={rentaClienteId} soloLectura={soloLectura} />
           <DescuentosTributariosCard key={`dt-${rentaClienteId}`} rentaClienteId={rentaClienteId} soloLectura={soloLectura} />
+          <ComentariosGeneralesCard key={`comentarios-${rentaClienteId}`} rentaClienteId={rentaClienteId} anioGravable={anioGravable} soloLectura={soloLectura} />
           <ResumenPendiente210Card key={`resumen-${rentaClienteId}`} rentaClienteId={rentaClienteId} />
           <ValidarRentaCard key={`validar-${rentaClienteId}`} rentaClienteId={rentaClienteId} />
           <Borrador210Card key={`borrador-${rentaClienteId}`} rentaClienteId={rentaClienteId} anioGravable={anioGravable} />
@@ -938,6 +989,7 @@ function SeccionItemsCard({ rentaClienteId, seccion, titulo, puedeImportar, solo
                     <span className="flex-1 min-w-0 truncate">{it.concepto}</span>
                     {it.origen === "exogena" && <Badge variant="outline" className="text-[10px] shrink-0">Exógena</Badge>}
                     <span className="font-medium shrink-0">{fmt(it.valor)}</span>
+                    <ComentarioItemBoton itemId={it.id} comentarioActual={it.comentario} soloLectura={soloLectura} />
                     <Button variant="ghost" size="icon" className="h-7 w-7 text-red-600 shrink-0" onClick={() => eliminarMutation.mutate({ id: it.id })} disabled={soloLectura}>
                       <Trash2 className="w-3.5 h-3.5" />
                     </Button>
@@ -1051,6 +1103,7 @@ function GananciaOcasionalCard({ rentaClienteId, soloLectura }: { rentaClienteId
                 </div>
               </div>
               <span className="font-medium shrink-0">{fmt(it.valor)}</span>
+              <ComentarioItemBoton itemId={it.id} comentarioActual={it.comentario} soloLectura={soloLectura} />
               {!soloLectura && (
                 <Button variant="ghost" size="icon" className="h-7 w-7 text-red-600 shrink-0" onClick={() => eliminarMutation.mutate({ id: it.id })}>
                   <Trash2 className="w-3.5 h-3.5" />
@@ -1138,6 +1191,7 @@ function DescuentosTributariosCard({ rentaClienteId, soloLectura }: { rentaClien
             <div key={it.id} className="flex items-center justify-between text-sm border-b py-1.5 gap-2">
               <span className="flex-1 min-w-0 truncate">{it.concepto}</span>
               <span className="font-medium shrink-0">{fmt(it.valor)}</span>
+              <ComentarioItemBoton itemId={it.id} comentarioActual={it.comentario} soloLectura={soloLectura} />
               {!soloLectura && (
                 <Button variant="ghost" size="icon" className="h-7 w-7 text-red-600 shrink-0" onClick={() => eliminarMutation.mutate({ id: it.id })}>
                   <Trash2 className="w-3.5 h-3.5" />
@@ -1163,6 +1217,56 @@ function DescuentosTributariosCard({ rentaClienteId, soloLectura }: { rentaClien
   );
 }
 
+/** Nota libre sobre la liquidación en general, no ligada a un ítem en
+ * particular (ej. pendientes de conciliar, acuerdos con el cliente,
+ * contexto para quien revise después) — se imprime al final del PDF de
+ * anexos, después de la comparación patrimonial y los dependientes. */
+function ComentariosGeneralesCard({ rentaClienteId, anioGravable, soloLectura }: { rentaClienteId: number; anioGravable: number; soloLectura?: boolean }) {
+  const utils = trpc.useUtils();
+  const clientesQuery = trpc.renta.clientes.list.useQuery({ anioGravable });
+  const cliente = clientesQuery.data?.find((c: any) => c.id === rentaClienteId);
+  const [texto, setTexto] = useState("");
+  const [inicializado, setInicializado] = useState(false);
+
+  // Se carga el valor guardado una sola vez que llega — si se sincronizara
+  // en cada render, se perdería lo que el usuario esté escribiendo cada
+  // vez que refresque la query por otro cambio en la pantalla.
+  if (!inicializado && cliente) {
+    setTexto(cliente.comentariosGenerales || "");
+    setInicializado(true);
+  }
+
+  const guardarMutation = trpc.renta.clientes.update.useMutation({
+    onSuccess: () => { utils.renta.clientes.list.invalidate({ anioGravable }); toast.success("Comentarios generales guardados"); },
+    onError: (err) => toast.error(err.message || "No se pudo guardar"),
+  });
+
+  const cambios = texto !== (cliente?.comentariosGenerales || "");
+
+  return (
+    <ColapsableCard titulo="Comentarios Generales" defaultOpen={false}>
+      <p className="text-sm text-muted-foreground">
+        Nota libre sobre esta liquidación — no ligada a una partida en particular. Sale impresa al final
+        del PDF de anexos.
+      </p>
+      <Textarea
+        value={texto} onChange={(e) => setTexto(e.target.value)} rows={5}
+        placeholder="Ej. pendientes de conciliar con el cliente, contexto para quien revise después..."
+        disabled={soloLectura}
+      />
+      {!soloLectura && (
+        <div className="flex justify-end">
+          <Button
+            size="sm" onClick={() => guardarMutation.mutate({ id: rentaClienteId, comentariosGenerales: texto })}
+            disabled={guardarMutation.isPending || !cambios}
+          >
+            Guardar comentarios
+          </Button>
+        </div>
+      )}
+    </ColapsableCard>
+  );
+}
 
 function ImportarExogenaDialog({ rentaClienteId, seccion, cedula, open, onOpenChange, onImportado }: {
   rentaClienteId: number; seccion: "activo" | "pasivo" | "ingreso" | "retencion"; cedula?: string; open: boolean; onOpenChange: (open: boolean) => void; onImportado: () => void;
@@ -1467,6 +1571,7 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
                 <span className="flex-1 min-w-0 truncate">{it.concepto}</span>
                 {it.origen === "exogena" && <Badge variant="outline" className="text-[10px] shrink-0">Exógena</Badge>}
                 <span className="shrink-0">{fmt(it.valor)}</span>
+                <ComentarioItemBoton itemId={it.id} comentarioActual={it.comentario} soloLectura={soloLectura} />
                 <Button variant="ghost" size="icon" className="h-6 w-6 text-red-600 shrink-0" onClick={() => eliminarMutation.mutate({ id: it.id })} disabled={soloLectura}><Trash2 className="w-3.5 h-3.5" /></Button>
               </div>
             ))}
@@ -1493,6 +1598,7 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
               <div key={it.id} className="flex items-center justify-between text-sm border-b py-1 gap-2">
                 <span className="flex-1 min-w-0 truncate">{it.concepto}</span>
                 <span className="shrink-0">{fmt(it.valor)}</span>
+                <ComentarioItemBoton itemId={it.id} comentarioActual={it.comentario} soloLectura={soloLectura} />
                 <Button variant="ghost" size="icon" className="h-6 w-6 text-red-600 shrink-0" onClick={() => eliminarMutation.mutate({ id: it.id })} disabled={soloLectura}><Trash2 className="w-3.5 h-3.5" /></Button>
               </div>
             ))}
@@ -1520,7 +1626,8 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
                 <div key={it.id} className="flex items-center justify-between text-sm border-b py-1 gap-2">
                   <span className="flex-1 min-w-0 truncate">{it.concepto}</span>
                   <span className="shrink-0">{fmt(it.valor)}</span>
-                  <Button variant="ghost" size="icon" className="h-6 w-6 text-red-600 shrink-0" onClick={() => eliminarMutation.mutate({ id: it.id })} disabled={soloLectura}><Trash2 className="w-3.5 h-3.5" /></Button>
+                  <ComentarioItemBoton itemId={it.id} comentarioActual={it.comentario} soloLectura={soloLectura} />
+                <Button variant="ghost" size="icon" className="h-6 w-6 text-red-600 shrink-0" onClick={() => eliminarMutation.mutate({ id: it.id })} disabled={soloLectura}><Trash2 className="w-3.5 h-3.5" /></Button>
                 </div>
               ))}
             </div>
@@ -1584,7 +1691,8 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
                   </span>
                   <span className="w-24 text-right shrink-0">{fmt(it.valor)}</span>
                   <span className={`w-24 text-right shrink-0 ${fueLimitado ? "font-semibold text-amber-700" : ""}`}>{fmt(limitado)}</span>
-                  <Button variant="ghost" size="icon" className="h-6 w-6 text-red-600 shrink-0" onClick={() => eliminarMutation.mutate({ id: it.id })} disabled={soloLectura}><Trash2 className="w-3.5 h-3.5" /></Button>
+                  <ComentarioItemBoton itemId={it.id} comentarioActual={it.comentario} soloLectura={soloLectura} />
+                <Button variant="ghost" size="icon" className="h-6 w-6 text-red-600 shrink-0" onClick={() => eliminarMutation.mutate({ id: it.id })} disabled={soloLectura}><Trash2 className="w-3.5 h-3.5" /></Button>
                 </div>
               );
             })}
@@ -1673,7 +1781,8 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
                   </span>
                   <span className="w-24 text-right shrink-0">{esAuto ? "—" : fmt(it.valor)}</span>
                   <span className={`w-24 text-right shrink-0 ${fueLimitado || esAuto ? "font-semibold text-teal-700" : ""}`}>{fmt(limitado)}</span>
-                  <Button variant="ghost" size="icon" className="h-6 w-6 text-red-600 shrink-0" onClick={() => eliminarMutation.mutate({ id: it.id })} disabled={soloLectura}><Trash2 className="w-3.5 h-3.5" /></Button>
+                  <ComentarioItemBoton itemId={it.id} comentarioActual={it.comentario} soloLectura={soloLectura} />
+                <Button variant="ghost" size="icon" className="h-6 w-6 text-red-600 shrink-0" onClick={() => eliminarMutation.mutate({ id: it.id })} disabled={soloLectura}><Trash2 className="w-3.5 h-3.5" /></Button>
                 </div>
               );
             })}
@@ -1759,7 +1868,8 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
                     </div>
                     <span className="w-24 text-right shrink-0">{fmt(it.valor)}</span>
                     <span className={`w-24 text-right shrink-0 ${fueLimitado ? "font-semibold text-indigo-700" : ""}`}>{fmt(limitado)}</span>
-                    <Button variant="ghost" size="icon" className="h-6 w-6 text-red-600 shrink-0" onClick={() => eliminarMutation.mutate({ id: it.id })} disabled={soloLectura}><Trash2 className="w-3.5 h-3.5" /></Button>
+                    <ComentarioItemBoton itemId={it.id} comentarioActual={it.comentario} soloLectura={soloLectura} />
+                <Button variant="ghost" size="icon" className="h-6 w-6 text-red-600 shrink-0" onClick={() => eliminarMutation.mutate({ id: it.id })} disabled={soloLectura}><Trash2 className="w-3.5 h-3.5" /></Button>
                   </div>
                 );
               })}
@@ -1816,6 +1926,7 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
               <div key={it.id} className="flex items-center justify-between text-sm border-b py-1 gap-2">
                 <span className="flex-1 min-w-0 truncate">{it.concepto}</span>
                 <span className="shrink-0">{fmt(it.valor)}</span>
+                <ComentarioItemBoton itemId={it.id} comentarioActual={it.comentario} soloLectura={soloLectura} />
                 <Button variant="ghost" size="icon" className="h-6 w-6 text-red-600 shrink-0" onClick={() => eliminarMutation.mutate({ id: it.id })} disabled={soloLectura}><Trash2 className="w-3.5 h-3.5" /></Button>
               </div>
             ))}

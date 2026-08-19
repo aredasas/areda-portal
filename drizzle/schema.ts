@@ -629,6 +629,9 @@ export const rentaClientes = mysqlTable("rentaClientes", {
    * al cerrar el diálogo para no perder lo marcado la próxima vez que
    * se abra. Null si nunca se ha usado para este cliente. */
   solicitudDocumentosEstado: text("solicitudDocumentosEstado"),
+  /** Nota libre del contador sobre la liquidación en general (no ligada a
+   * un ítem específico) — se imprime al final del PDF de anexos. */
+  comentariosGenerales: text("comentariosGenerales"),
 }, (table) => ({
   cedulaAnioIdx: uniqueIndex("rentaClientes_cedula_anio_idx").on(table.cedula, table.anioGravable),
 }));
@@ -754,6 +757,10 @@ export const rentaLiquidacionItems = mysqlTable("rentaLiquidacionItems", {
   valor: double("valor").notNull(),
   origen: mysqlEnum("origen", ["exogena", "manual"]).default("manual").notNull(),
   exogenaItemId: int("exogenaItemId"),
+  /** Nota libre del contador sobre esta partida (ej. de dónde sale el
+   * soporte, por qué se tomó ese valor, qué falta verificar) — se
+   * imprime junto al ítem en el PDF de anexos. */
+  comentario: text("comentario"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 }, (table) => ({
   rentaClienteIdx: index("rentaLiquidacionItems_rentaCliente_idx").on(table.rentaClienteId),

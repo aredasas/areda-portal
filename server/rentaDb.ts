@@ -321,7 +321,7 @@ export function repartirLimiteGeneral<T>(
   return new Map(ajustes.map(it => [it.clave, it.ajustado]));
 }
 
-export type ItemValor = { concepto: string; valor: number; tipoDeduccion?: string | null; tipoGananciaOcasional?: string | null; limiteGeneral?: boolean; limiteGeneralOrden?: number | null; calculoAutomatico?: boolean };
+export type ItemValor = { concepto: string; valor: number; tipoDeduccion?: string | null; tipoGananciaOcasional?: string | null; limiteGeneral?: boolean; limiteGeneralOrden?: number | null; calculoAutomatico?: boolean; comentario?: string | null };
 
 /** Los datos crudos de UNA de las 4 sub-rentas de la Cédula General, o de
  * Pensiones/Dividendos — cada casilla del Formulario 210 corresponde a uno
@@ -346,14 +346,14 @@ function sumaItems(items: ItemValor[]): number {
 }
 
 export type DatosLiquidacion = {
-  activos: { concepto: string; valor: number }[];
-  pasivos: { concepto: string; valor: number }[];
+  activos: { concepto: string; valor: number; comentario?: string | null }[];
+  pasivos: { concepto: string; valor: number; comentario?: string | null }[];
   cedulas: Record<string, DatosCedula>; // trabajo, trabajo_honorarios, capital, no_laboral, pensiones, dividendos
   /** Descuentos tributarios (Art. 254-260 E.T. — impuestos pagados en el
    * exterior, donaciones, etc.) — a diferencia de las deducciones/rentas
    * exentas, estos NO reducen la renta líquida gravable: se restan
    * DIRECTAMENTE del impuesto de renta ya calculado, peso a peso. */
-  descuentosTributarios: { concepto: string; valor: number }[];
+  descuentosTributarios: { concepto: string; valor: number; comentario?: string | null }[];
   patrimonioLiquidoAnioAnterior: number | null;
   impuestoNetoAnioAnterior: number | null;
   saldoAFavorAnterior: number | null;
@@ -1266,6 +1266,7 @@ export async function generarSolicitudDocumentos(
 export async function generarAnexosRenta(
   datos: DatosLiquidacion, resultado: ResultadoLiquidacion, clienteNombre: string, clienteCedula: string, anioGravable: number,
   dependientes: { nombre: string; tipoDocumento: string; numeroDocumento: string }[] = [],
+  comentariosGenerales: string | null = null,
 ): Promise<Buffer> {
   const fmt = (n: number) => `$${Math.round(n).toLocaleString("es-CO")}`;
   const chunks: Buffer[] = [];
@@ -1309,6 +1310,24 @@ export async function generarAnexosRenta(
     const yTrasValor = doc.y;
     doc.y = Math.max(yTrasLabel, yTrasValor);
     doc.fillColor("#000000");
+  }
+
+  /** Imprime la nota del contador para el ítem anterior, en cursiva gris
+   * chica, indentada un poco más que la fila a la que pertenece — se
+   * envuelve en varias líneas si hace falta (a diferencia de filaTexto,
+   * que trunca a una sola línea). No hace nada si no hay comentario. */
+  function filaComentario(comentario: string | null | undefined, indent: number = 8) {
+    if (!comentario || !comentario.trim()) return;
+    const anchoNota = anchoUtil - indent - 10;
+    const texto = `Nota: ${comentario}`;
+    doc.font("Helvetica-Oblique").fontSize(8).fillColor("#555555");
+    const alturaNecesaria = doc.heightOfString(texto, { width: anchoNota });
+    if (doc.y + alturaNecesaria + 4 > doc.page.height - doc.page.margins.bottom) {
+      dibujarPiePaginaAreda(doc);
+      doc.addPage();
+    }
+    doc.text(texto, xLabel + indent + 10, doc.y, { width: anchoNota });
+    doc.fillColor("#000000").font("Helvetica").fontSize(9.5);
   }
 
   function lineaDivisoria() {
@@ -1359,8 +1378,8 @@ export async function generarAnexosRenta(
     // impresión: primero las partidas limitadas por el 40%, luego las que
     // quedan fuera — en vez de mezclarlas en el orden en que se
     // digitaron, que dificultaba revisar cada grupo por separado.
-    const filasDentro: { label: string; valor: string }[] = [];
-    const filasFuera: { label: string; valor: string }[] = [];
+    const filasDentro: { label: string; valor: string; comentario?: string | null }[] = [];
+    const filasFuera: { label: string; valor: string; comentario?: string | null }[] = [];
     const calcularLinea = (it: ItemValor, etiquetaCategoria: string) => {
       const esAuto25 = it.tipoDeduccion === "renta_exenta_25_laboral" && it.calculoAutomatico;
       const esFueraDeLimite = TIPOS_FUERA_DE_LIMITE_40.has(it.tipoDeduccion || "");
@@ -1368,14 +1387,14 @@ export async function generarAnexosRenta(
         if (it.tipoDeduccion === "dependiente_adicional_72uvt") {
           contadorDependientesAnexo++;
           if (contadorDependientesAnexo > 4) {
-            filasFuera.push({ label: `${it.concepto} (${etiquetaCategoria}; supera el máximo de 4 dependientes)`, valor: "$0" });
+            filasFuera.push({ label: `${it.concepto} (${etiquetaCategoria}; supera el máximo de 4 dependientes)`, valor: "$0", comentario: it.comentario });
             return;
           }
         }
         const limitado = calcularValorLimitado(it.valor, it.tipoDeduccion, ingresoBrutoCedula);
         subtotalFueraLimite += limitado;
         const nota = `${etiquetaCategoria}${limitado < it.valor ? `; digitado: ${fmt(it.valor)}` : ""}`;
-        filasFuera.push({ label: `${it.concepto} (${nota})`, valor: `-${fmt(limitado)}` });
+        filasFuera.push({ label: `${it.concepto} (${nota})`, valor: `-${fmt(limitado)}`, comentario: it.comentario });
         return;
       }
       const limitado = esAuto25 && resultado.auto25CalculadoValor != null
@@ -1383,7 +1402,7 @@ export async function generarAnexosRenta(
         : (ajustesGeneralPorItem.get(it) ?? calcularValorLimitado(it.valor, it.tipoDeduccion, ingresoBrutoCedula));
       subtotalDentroLimite += limitado;
       const nota = esAuto25 ? `${etiquetaCategoria}, calculado automáticamente` : `${etiquetaCategoria}${limitado < it.valor ? `; digitado: ${fmt(it.valor)}` : ""}`;
-      filasDentro.push({ label: `${it.concepto} (${nota})`, valor: `-${fmt(limitado)}` });
+      filasDentro.push({ label: `${it.concepto} (${nota})`, valor: `-${fmt(limitado)}`, comentario: it.comentario });
     };
 
     // El título de la cédula nunca debe quedar solo al pie de una
@@ -1395,14 +1414,14 @@ export async function generarAnexosRenta(
     }
     doc.font("Helvetica-Bold").fontSize(11).text(titulo);
     doc.moveDown(0.2);
-    for (const it of c.ingresoBruto) filaTexto(it.concepto, fmt(it.valor), { indent: 8 });
+    for (const it of c.ingresoBruto) { filaTexto(it.concepto, fmt(it.valor), { indent: 8 }); filaComentario(it.comentario); }
     if (c.ingresoBruto.length > 1) filaTexto("Total ingresos", fmt(ingresoBrutoCedula), { indent: 8, negrita: true });
-    for (const it of c.ingresoNoConstitutivo) filasDentro.push({ label: `${it.concepto} (INCRNGO)`, valor: `-${fmt(it.valor)}` });
-    for (const it of c.costoDeduccionProcedente) filasDentro.push({ label: `${it.concepto} (costo/deducción procedente)`, valor: `-${fmt(it.valor)}` });
+    for (const it of c.ingresoNoConstitutivo) filasDentro.push({ label: `${it.concepto} (INCRNGO)`, valor: `-${fmt(it.valor)}`, comentario: it.comentario });
+    for (const it of c.costoDeduccionProcedente) filasDentro.push({ label: `${it.concepto} (costo/deducción procedente)`, valor: `-${fmt(it.valor)}`, comentario: it.comentario });
     for (const it of c.deduccion) calcularLinea(it, "deducción");
     for (const it of c.rentaExenta) calcularLinea(it, "renta exenta");
 
-    for (const fila of filasDentro) filaTexto(fila.label, fila.valor, { indent: 8, color: "#b91c1c" });
+    for (const fila of filasDentro) { filaTexto(fila.label, fila.valor, { indent: 8, color: "#b91c1c" }); filaComentario(fila.comentario); }
     doc.moveDown(0.2);
     lineaDivisoria();
     filaTexto("Subtotal deducciones/rentas exentas dentro del límite del 40%", fmt(subtotalDentroLimite), { indent: 8 });
@@ -1433,13 +1452,14 @@ export async function generarAnexosRenta(
     doc.font("Helvetica-Bold").fontSize(11).text("Pensiones");
     doc.moveDown(0.2);
     const ingresoBrutoPensionesItems = datos.cedulas["pensiones"]?.ingresoBruto || [];
-    for (const it of ingresoBrutoPensionesItems) filaTexto(it.concepto, fmt(it.valor), { indent: 8 });
+    for (const it of ingresoBrutoPensionesItems) { filaTexto(it.concepto, fmt(it.valor), { indent: 8 }); filaComentario(it.comentario); }
     if (ingresoBrutoPensionesItems.length > 1) filaTexto("Total ingresos", fmt(ingresoBrutoPensionesCedula), { indent: 8, negrita: true });
-    for (const it of datos.cedulas["pensiones"]?.ingresoNoConstitutivo || []) filaTexto(`${it.concepto} (INCRNGO)`, `-${fmt(it.valor)}`, { indent: 8, color: "#b91c1c" });
+    for (const it of datos.cedulas["pensiones"]?.ingresoNoConstitutivo || []) { filaTexto(`${it.concepto} (INCRNGO)`, `-${fmt(it.valor)}`, { indent: 8, color: "#b91c1c" }); filaComentario(it.comentario); }
     for (const it of datos.cedulas["pensiones"]?.rentaExenta || []) {
       const limitado = calcularValorLimitado(it.valor, it.tipoDeduccion, ingresoBrutoPensionesCedula);
       const nota = `renta exenta${limitado < it.valor ? `; digitado: ${fmt(it.valor)}` : ""}`;
       filaTexto(`${it.concepto} (${nota})`, `-${fmt(limitado)}`, { indent: 8, color: "#b91c1c" });
+      filaComentario(it.comentario);
     }
     lineaDivisoria();
     filaTexto("Renta líquida gravable cédula de pensiones", fmt(resultado.rentaLiquidaGravablePensiones), { negrita: true });
@@ -1449,7 +1469,7 @@ export async function generarAnexosRenta(
   if (resultado.ingresoBrutoDividendos > 0) {
     doc.font("Helvetica-Bold").fontSize(11).text("Dividendos y participaciones (referencia — tarifa especial Art. 242 E.T., no incluida aquí)");
     doc.moveDown(0.2);
-    for (const it of datos.cedulas["dividendos"]?.ingresoBruto || []) filaTexto(it.concepto, fmt(it.valor), { indent: 8 });
+    for (const it of datos.cedulas["dividendos"]?.ingresoBruto || []) { filaTexto(it.concepto, fmt(it.valor), { indent: 8 }); filaComentario(it.comentario); }
     doc.moveDown(0.8);
   }
 
@@ -1468,12 +1488,15 @@ export async function generarAnexosRenta(
       doc.moveDown(0.1);
       for (const it of (cGO?.ingresoBruto || []).filter(it => it.tipoGananciaOcasional === tipoInfo.tipo)) {
         filaTexto(it.concepto, fmt(it.valor), { indent: 16 });
+        filaComentario(it.comentario, 16);
       }
       for (const it of (cGO?.costoDeduccionProcedente || []).filter(it => it.tipoGananciaOcasional === tipoInfo.tipo)) {
         filaTexto(it.concepto, `-${fmt(it.valor)}`, { indent: 16, color: "#b91c1c" });
+        filaComentario(it.comentario, 16);
       }
       for (const it of (cGO?.rentaExenta || []).filter(it => it.tipoGananciaOcasional === tipoInfo.tipo)) {
         filaTexto(it.concepto, `-${fmt(it.valor)}`, { indent: 16, color: "#b91c1c" });
+        filaComentario(it.comentario, 16);
       }
       filaTexto("Neto gravable", fmt(v.netoGravable), { indent: 8 });
       filaTexto(`Impuesto (${(v.tarifa * 100).toFixed(0)}%)`, fmt(v.impuesto), { indent: 8, negrita: true });
@@ -1494,6 +1517,7 @@ export async function generarAnexosRenta(
   if (datos.descuentosTributarios.length > 0) {
     for (const it of datos.descuentosTributarios) {
       filaTexto(it.concepto, `-${fmt(it.valor)}`, { indent: 8, color: "#b91c1c" });
+      filaComentario(it.comentario);
     }
     filaTexto("Impuesto neto de renta", fmt(resultado.impuestoNetoDespuesDescuentos), { negrita: true });
   }
@@ -1535,7 +1559,7 @@ export async function generarAnexosRenta(
     doc.font("Helvetica").fontSize(9.5).fillColor("#777777").text("Sin activos cargados.");
     doc.fillColor("#000000");
   } else {
-    for (const it of datos.activos) filaTexto(it.concepto, fmt(it.valor), { indent: 8 });
+    for (const it of datos.activos) { filaTexto(it.concepto, fmt(it.valor), { indent: 8 }); filaComentario(it.comentario); }
   }
   doc.moveDown(0.2);
   lineaDivisoria();
@@ -1548,7 +1572,7 @@ export async function generarAnexosRenta(
     doc.font("Helvetica").fontSize(9.5).fillColor("#777777").text("Sin pasivos cargados.");
     doc.fillColor("#000000");
   } else {
-    for (const it of datos.pasivos) filaTexto(it.concepto, fmt(it.valor), { indent: 8 });
+    for (const it of datos.pasivos) { filaTexto(it.concepto, fmt(it.valor), { indent: 8 }); filaComentario(it.comentario); }
   }
   doc.moveDown(0.2);
   lineaDivisoria();
@@ -1589,6 +1613,18 @@ export async function generarAnexosRenta(
       doc.text(`${d.tipoDocumento} ${d.numeroDocumento}`, xLabel, y, { width: anchoUtil, align: "right" });
       doc.y = Math.max(doc.y, y + 12);
     }
+  }
+
+  if (comentariosGenerales && comentariosGenerales.trim()) {
+    doc.moveDown(1.5);
+    const alturaNecesaria = 20 + doc.heightOfString(comentariosGenerales, { width: anchoUtil });
+    if (doc.y + alturaNecesaria > doc.page.height - doc.page.margins.bottom) {
+      dibujarPiePaginaAreda(doc);
+      doc.addPage();
+    }
+    doc.font("Helvetica-Bold").fontSize(11).fillColor("#000000").text("Comentarios Generales");
+    doc.moveDown(0.3);
+    doc.font("Helvetica").fontSize(9.5).fillColor("#000000").text(comentariosGenerales, xLabel, doc.y, { width: anchoUtil });
   }
 
   dibujarPiePaginaAreda(doc);

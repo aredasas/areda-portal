@@ -2065,6 +2065,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
         .input(z.object({
           id: z.number(), nombre: z.string().optional(), cedula: z.string().optional(),
           noObligado: z.boolean().optional(), terminado: z.boolean().optional(), activo: z.boolean().optional(),
+          comentariosGenerales: z.string().optional(),
         }))
         .mutation(async ({ input, ctx }) => {
           assertRentaPNAccess(ctx.user.role);
@@ -2399,7 +2400,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           cedula: z.enum(["trabajo", "trabajo_honorarios", "capital", "no_laboral", "pensiones", "dividendos", "ganancia_ocasional"]).optional(),
           tipoValor: z.enum(["ingreso_bruto", "ingreso_no_constitutivo", "costo_deduccion_procedente", "renta_exenta", "deduccion", "retencion"]).optional(),
           tipoDeduccion: z.string().optional(), tipoGananciaOcasional: z.string().optional(), limiteGeneral: z.boolean().optional(),
-          calculoAutomatico: z.boolean().optional(),
+          calculoAutomatico: z.boolean().optional(), comentario: z.string().optional(),
           concepto: z.string().min(1), valor: z.number(),
         }))
         .mutation(async ({ input, ctx }) => {
@@ -2428,6 +2429,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
             limiteGeneral: input.limiteGeneral || false,
             limiteGeneralOrden: input.limiteGeneral ? Date.now() : null,
             calculoAutomatico: input.calculoAutomatico || false,
+            comentario: input.comentario || null,
           });
           return { id, alerta };
         }),
@@ -2435,6 +2437,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
         .input(z.object({
           id: z.number(), concepto: z.string().optional(), valor: z.number().optional(),
           limiteGeneral: z.boolean().optional(), calculoAutomatico: z.boolean().optional(),
+          comentario: z.string().optional(),
         }))
         .mutation(async ({ input, ctx }) => {
           assertRentaPNAccess(ctx.user.role);
@@ -2561,7 +2564,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
 
           // PDF — los 2 anexos (detalle de renta + detalle de patrimonio).
           const dependientes = await db.getDependientes(input.rentaClienteId);
-          const bufferPdf = await rentaDb.generarAnexosRenta(datos, resultado, cliente.nombre, cliente.cedula, input.anioGravable, dependientes);
+          const bufferPdf = await rentaDb.generarAnexosRenta(datos, resultado, cliente.nombre, cliente.cedula, input.anioGravable, dependientes, cliente.comentariosGenerales);
           const keyPdf = `renta/anexos/${input.rentaClienteId}_${Date.now()}.pdf`;
           const { key: fileKeyPdf } = await storagePut(keyPdf, bufferPdf, "application/pdf");
           await db.guardarRentaReporte(input.rentaClienteId, fileKeyPdf, ctx.user.id, "ANEXOS_PDF");

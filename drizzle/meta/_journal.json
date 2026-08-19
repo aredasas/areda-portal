@@ -288,6 +288,13 @@
       "when": 1786997674262,
       "tag": "0040_categoria_retencion",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "5",
+      "when": 1787153929540,
+      "tag": "0041_comentarios",
+      "breakpoints": true
     }
   ]
 }

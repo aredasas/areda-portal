@@ -2390,7 +2390,7 @@ export async function getDatosLiquidacion(rentaClienteId: number) {
   for (const it of itemsCedula) {
     const cedula = it.cedula || "trabajo";
     if (!cedulas[cedula]) cedulas[cedula] = cedulaVacia();
-    const item = { concepto: it.concepto, valor: it.valor, tipoDeduccion: it.tipoDeduccion, tipoGananciaOcasional: it.tipoGananciaOcasional, limiteGeneral: it.limiteGeneral, limiteGeneralOrden: it.limiteGeneralOrden, calculoAutomatico: it.calculoAutomatico };
+    const item = { concepto: it.concepto, valor: it.valor, tipoDeduccion: it.tipoDeduccion, tipoGananciaOcasional: it.tipoGananciaOcasional, limiteGeneral: it.limiteGeneral, limiteGeneralOrden: it.limiteGeneralOrden, calculoAutomatico: it.calculoAutomatico, comentario: it.comentario };
     if (it.tipoValor === "ingreso_bruto") cedulas[cedula].ingresoBruto.push(item);
     else if (it.tipoValor === "ingreso_no_constitutivo") cedulas[cedula].ingresoNoConstitutivo.push(item);
     else if (it.tipoValor === "costo_deduccion_procedente") cedulas[cedula].costoDeduccionProcedente.push(item);
@@ -2400,10 +2400,10 @@ export async function getDatosLiquidacion(rentaClienteId: number) {
   }
 
   return {
-    activos: activos.map(a => ({ concepto: a.concepto, valor: a.valor })),
-    pasivos: pasivos.map(p => ({ concepto: p.concepto, valor: p.valor })),
+    activos: activos.map(a => ({ concepto: a.concepto, valor: a.valor, comentario: a.comentario })),
+    pasivos: pasivos.map(p => ({ concepto: p.concepto, valor: p.valor, comentario: p.comentario })),
     cedulas,
-    descuentosTributarios: descuentosTributarios.map(d => ({ concepto: d.concepto, valor: d.valor })),
+    descuentosTributarios: descuentosTributarios.map(d => ({ concepto: d.concepto, valor: d.valor, comentario: d.comentario })),
     patrimonioLiquidoAnioAnterior: declaracionAnterior?.patrimonioLiquidoAnioAnterior ?? null,
     impuestoNetoAnioAnterior: declaracionAnterior?.impuestoNetoAnioAnterior ?? null,
     saldoAFavorAnterior: declaracionAnterior?.saldoAFavorAnterior ?? null,
