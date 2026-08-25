@@ -692,6 +692,7 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
       .mutation(async ({ input }) => {
         const client = await db.getClientById(input.clientId);
         if (!client) throw new Error("Cliente no encontrado");
+        if (!client.isActive) throw new Error(`El cliente "${client.razonSocial}" está inactivo — reactívalo primero para generar su calendario.`);
         const allObligations = await db.getClientObligations(input.clientId);
         // Skip obligations that were deactivated in the catalog since being
         // assigned to this client — otherwise regenerating the calendar
@@ -771,6 +772,8 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
     updateStatus: protectedProcedure
       .input(z.object({ id: z.number(), status: z.enum(["pendiente", "en_progreso", "vencido"]) }))
       .mutation(async ({ input, ctx }) => {
+        const deadlineExistente = await db.getDeadlineById(input.id);
+        await db.assertClienteActivo(deadlineExistente?.clientId);
         await db.updateDeadlineStatus(input.id, input.status, ctx.user.id);
         return { success: true };
       }),
@@ -791,6 +794,7 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
         driveSubfolderId: z.string().optional(),
       }))
       .mutation(async ({ input, ctx }) => {
+        await db.assertClienteActivo(input.clientId);
         if (ctx.user.role !== "admin") {
           const client = await db.getClientById(input.clientId);
           if (!client || client.managerId !== ctx.user.id) {
@@ -823,6 +827,8 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
     reopen: adminProcedure
       .input(z.object({ id: z.number() }))
       .mutation(async ({ input, ctx }) => {
+        const deadlineExistente = await db.getDeadlineById(input.id);
+        await db.assertClienteActivo(deadlineExistente?.clientId);
         await db.reopenDeadline(input.id, ctx.user.id);
         return { success: true };
       }),
@@ -836,6 +842,8 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
     approve: adminProcedure
       .input(z.object({ id: z.number(), reviewNotes: z.string().optional() }))
       .mutation(async ({ input, ctx }) => {
+        const deadlinePrevio = await db.getDeadlineById(input.id);
+        await db.assertClienteActivo(deadlinePrevio?.clientId);
         await db.approveDeadline(input.id, ctx.user.id, input.reviewNotes);
         const deadline = await db.getDeadlineById(input.id);
         const client = deadline ? await db.getClientById(deadline.clientId) : null;
@@ -849,6 +857,8 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
     requestCorrection: adminProcedure
       .input(z.object({ id: z.number(), reviewNotes: z.string().min(1, "Debe indicar qué corregir") }))
       .mutation(async ({ input, ctx }) => {
+        const deadlinePrevio = await db.getDeadlineById(input.id);
+        await db.assertClienteActivo(deadlinePrevio?.clientId);
         await db.requestDeadlineCorrection(input.id, ctx.user.id, input.reviewNotes);
         const deadline = await db.getDeadlineById(input.id);
         const client = deadline ? await db.getClientById(deadline.clientId) : null;
@@ -867,6 +877,8 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
     updateDueDate: adminProcedure
       .input(z.object({ id: z.number(), dueDate: z.string() }))
       .mutation(async ({ input }) => {
+        const deadlinePrevio = await db.getDeadlineById(input.id);
+        await db.assertClienteActivo(deadlinePrevio?.clientId);
         await db.updateDeadlineDueDate(input.id, new Date(input.dueDate));
         return { success: true };
       }),
@@ -913,6 +925,7 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
         priority: z.enum(["baja", "media", "alta", "urgente"]).optional(),
       }))
       .mutation(async ({ input, ctx }) => {
+        await db.assertClienteActivo(input.clientId);
         const id = await db.createTask({
           title: input.title,
           description: input.description || null,
@@ -940,8 +953,9 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
         status: z.enum(["pendiente", "en_progreso", "completada", "vencida"]).optional(),
       }))
       .mutation(async ({ input, ctx }) => {
+        const existente = await db.getTaskById(input.id);
+        await db.assertClienteActivo(existente?.clientId);
         if (ctx.user.role !== "admin") {
-          const existente = await db.getTaskById(input.id);
           if (!existente || existente.createdById !== ctx.user.id) {
             throw new Error("Solo puedes editar tareas que tú mismo hayas creado.");
           }
@@ -969,6 +983,7 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
       .mutation(async ({ input, ctx }) => {
         const task = await db.getTaskById(input.id);
         if (!task) throw new Error("Tarea no encontrada");
+        await db.assertClienteActivo(task.clientId);
         if (ctx.user.role !== "admin") {
           if (task.assignedToId !== ctx.user.id) {
             throw new TRPCError({
@@ -1019,6 +1034,8 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
     reopen: adminProcedure
       .input(z.object({ id: z.number() }))
       .mutation(async ({ input, ctx }) => {
+        const existente = await db.getTaskById(input.id);
+        await db.assertClienteActivo(existente?.clientId);
         await db.clearTaskAttachments(input.id);
         await db.updateTask(input.id, {
           status: "pendiente",
@@ -1038,6 +1055,8 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
     cancel: adminProcedure
       .input(z.object({ id: z.number() }))
       .mutation(async ({ input, ctx }) => {
+        const existente = await db.getTaskById(input.id);
+        await db.assertClienteActivo(existente?.clientId);
         const result = await db.cancelTask(input.id, ctx.user.id);
         return { result };
       }),
@@ -1051,6 +1070,8 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
         fileSize: z.number().optional(),
       }))
       .mutation(async ({ input, ctx }) => {
+        const tareaExistente = await db.getTaskById(input.taskId);
+        await db.assertClienteActivo(tareaExistente?.clientId);
         const buffer = Buffer.from(input.fileBase64, "base64");
         const rawKey = `tasks/${input.taskId}/${Date.now()}_${input.fileName}`;
         const { url, key } = await storagePut(rawKey, buffer, input.contentType);
@@ -1088,6 +1109,8 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
     approve: adminProcedure
       .input(z.object({ id: z.number(), reviewNotes: z.string().optional() }))
       .mutation(async ({ input, ctx }) => {
+        const tareaExistente = await db.getTaskById(input.id);
+        await db.assertClienteActivo(tareaExistente?.clientId);
         await db.approveTask(input.id, ctx.user.id, input.reviewNotes);
         const task = await db.getTaskById(input.id);
         if (task?.assignedToId && task.assignedToId !== ctx.user.id) {
@@ -1108,6 +1131,8 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
         adjuntos: z.array(z.object({ fileName: z.string(), fileBase64: z.string(), contentType: z.string() })).optional(),
       }))
       .mutation(async ({ input, ctx }) => {
+        const tareaExistente = await db.getTaskById(input.id);
+        await db.assertClienteActivo(tareaExistente?.clientId);
         await db.requestTaskCorrection(input.id, ctx.user.id, input.reviewNotes);
         for (const adjunto of input.adjuntos || []) {
           const buffer = Buffer.from(adjunto.fileBase64, "base64");

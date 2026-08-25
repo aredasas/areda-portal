@@ -5,6 +5,7 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import DashboardLayout from "@/components/DashboardLayout";
 import CommentsSection from "@/components/CommentsSection";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -27,6 +28,7 @@ import {
   RotateCcw,
   Download,
   RefreshCw,
+  ChevronDown,
   AlertTriangle,
   History,
   Search,
@@ -70,6 +72,7 @@ export default function Revision() {
   const rentaTerminadosQuery = trpc.renta.clientes.terminados.useQuery(undefined, { retry: false });
   const utilsRenta = trpc.useUtils();
   const [rentaClienteRevisando, setRentaClienteRevisando] = useState<any | null>(null);
+  const [mostrarRentaTerminada, setMostrarRentaTerminada] = useState(false);
   const aprobarRentaMutation = trpc.renta.clientes.aprobarRevision.useMutation({
     onSuccess: () => { toast.success("Revisión de renta aprobada"); rentaPendienteQuery.refetch(); setRentaClienteRevisando(null); },
   });
@@ -225,16 +228,25 @@ export default function Revision() {
 
         {!!rentaTerminadosQuery.data?.length && (
           <Card>
-            <CardHeader>
-              <CardTitle className="text-base flex items-center gap-2">
-                <FileText className="h-4 w-4" /> Renta terminada
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-2">
-              {rentaTerminadosQuery.data.map((c: any) => (
-                <RentaTerminadaRow key={c.id} cliente={c} onReabrir={() => reabrirRentaMutation.mutate({ rentaClienteId: c.id })} reabriendo={reabrirRentaMutation.isPending} />
-              ))}
-            </CardContent>
+            <Collapsible open={mostrarRentaTerminada} onOpenChange={setMostrarRentaTerminada}>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0">
+                <CollapsibleTrigger asChild>
+                  <button type="button" className="flex items-center gap-2 text-left flex-1 min-w-0">
+                    <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${mostrarRentaTerminada ? "" : "-rotate-90"}`} />
+                    <CardTitle className="text-base flex items-center gap-2">
+                      <FileText className="h-4 w-4" /> Renta terminada ({rentaTerminadosQuery.data.length})
+                    </CardTitle>
+                  </button>
+                </CollapsibleTrigger>
+              </CardHeader>
+              <CollapsibleContent>
+                <CardContent className="space-y-2">
+                  {rentaTerminadosQuery.data.map((c: any) => (
+                    <RentaTerminadaRow key={c.id} cliente={c} onReabrir={() => reabrirRentaMutation.mutate({ rentaClienteId: c.id })} reabriendo={reabrirRentaMutation.isPending} />
+                  ))}
+                </CardContent>
+              </CollapsibleContent>
+            </Collapsible>
           </Card>
         )}
 

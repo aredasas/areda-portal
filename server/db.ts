@@ -267,6 +267,18 @@ export async function getClientById(id: number) {
   return result.length > 0 ? result[0] : undefined;
 }
 
+/** Bloquea cualquier gestión (crear/editar/completar/aprobar/etc.) sobre
+ * una tarea o plazo de un cliente inactivo — al inactivar un cliente,
+ * todo lo suyo queda congelado tal como estaba, sin poder tocarlo hasta
+ * reactivarlo. No bloquea lectura/consulta, solo mutaciones. */
+export async function assertClienteActivo(clientId: number | null | undefined) {
+  if (clientId == null) return; // tareas sin cliente asociado (generales) no aplican
+  const cliente = await getClientById(clientId);
+  if (cliente && !cliente.isActive) {
+    throw new Error(`El cliente "${cliente.razonSocial}" está inactivo — reactívalo primero para poder gestionar sus tareas o plazos.`);
+  }
+}
+
 export async function updateClient(id: number, data: Partial<InsertClient>) {
   const db = await getDb();
   if (!db) return;
@@ -442,6 +454,7 @@ export async function getUpcomingDeadlines(daysAhead: number = 30, managerId?: n
     inArray(taxDeadlines.status, ["pendiente", "en_progreso"]),
     gte(taxDeadlines.dueDate, now),
     lte(taxDeadlines.dueDate, future),
+    eq(clients.isActive, true),
   );
   return db.select({
     id: taxDeadlines.id,
@@ -469,6 +482,7 @@ export async function getDeadlinesForMonth(year: number, month: number, managerI
   const conditions = [
     gte(taxDeadlines.dueDate, startDate),
     lte(taxDeadlines.dueDate, endDate),
+    eq(clients.isActive, true),
   ];
   if (managerId) conditions.push(eq(clients.managerId, managerId));
   return db.select({
@@ -1478,7 +1492,12 @@ export async function getDashboardData(filters: DashboardFilters) {
   const monthEnd = new Date(Date.UTC(year, monthIdx + 1, 0, 23, 59, 59));
 
   // ---- Tasks due within the selected month ----
-  const taskConditions = [gte(tasks.dueDate, monthStart), lte(tasks.dueDate, monthEnd), ne(tasks.status, "cancelada")];
+  const taskConditions = [
+    gte(tasks.dueDate, monthStart), lte(tasks.dueDate, monthEnd), ne(tasks.status, "cancelada"),
+    // Tareas sin cliente (generales) siempre pasan; las que sí tienen
+    // cliente quedan fuera si ese cliente está inactivo.
+    or(isNull(clients.id), eq(clients.isActive, true)),
+  ];
   if (filters.clientId) taskConditions.push(eq(tasks.clientId, filters.clientId));
   if (filters.assignedToId) taskConditions.push(eq(tasks.assignedToId, filters.assignedToId));
   // Non-admin role-scoping for tasks uses their own assignedToId (their
@@ -1505,7 +1524,7 @@ export async function getDashboardData(filters: DashboardFilters) {
     .orderBy(asc(tasks.dueDate));
 
   // ---- Tax deadlines due within the selected month ----
-  const deadlineConditions = [gte(taxDeadlines.dueDate, monthStart), lte(taxDeadlines.dueDate, monthEnd)];
+  const deadlineConditions = [gte(taxDeadlines.dueDate, monthStart), lte(taxDeadlines.dueDate, monthEnd), eq(clients.isActive, true)];
   if (filters.clientId) deadlineConditions.push(eq(taxDeadlines.clientId, filters.clientId));
   if (filters.obligationId) deadlineConditions.push(eq(taxDeadlines.obligationId, filters.obligationId));
   if (filters.managerId) deadlineConditions.push(eq(clients.managerId, filters.managerId));
