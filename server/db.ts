@@ -560,10 +560,31 @@ export async function ensureClientDriveSubfolder(clientId: number, name: string)
 const TIME_ENTRY_TYPES = ["inicio", "salida_almuerzo", "regreso_almuerzo", "fin"] as const;
 export type TimeEntryType = typeof TIME_ENTRY_TYPES[number];
 
-export async function createTimeEntry(userId: number, type: TimeEntryType) {
+/** Distingue PC/celular/Tablet a partir del encabezado User-Agent que el
+ * navegador ya envía en cada solicitud — no requiere ningún permiso del
+ * usuario. Es una inferencia razonable (el UA lo controla el navegador,
+ * no es 100% infalible) pero confiable en la enorme mayoría de los casos. */
+export function inferirTipoDispositivo(userAgent: string | undefined | null): "pc" | "movil" | "tablet" | "desconocido" {
+  if (!userAgent) return "desconocido";
+  const ua = userAgent.toLowerCase();
+  if (ua.includes("ipad") || (ua.includes("tablet") && !ua.includes("mobile")) || (ua.includes("android") && !ua.includes("mobile"))) return "tablet";
+  if (ua.includes("mobi") || ua.includes("iphone") || ua.includes("android")) return "movil";
+  return "pc";
+}
+
+export async function createTimeEntry(
+  userId: number, type: TimeEntryType,
+  ubicacion?: { deviceType?: "pc" | "movil" | "tablet" | "desconocido"; latitude?: number; longitude?: number; locationAccuracy?: number },
+) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.insert(timeEntries).values({ userId, type });
+  await db.insert(timeEntries).values({
+    userId, type,
+    deviceType: ubicacion?.deviceType || null,
+    latitude: ubicacion?.latitude != null ? String(ubicacion.latitude) : null,
+    longitude: ubicacion?.longitude != null ? String(ubicacion.longitude) : null,
+    locationAccuracy: ubicacion?.locationAccuracy != null ? Math.round(ubicacion.locationAccuracy) : null,
+  });
 }
 
 /** Entries for one user within a date range — the caller (frontend) computes
@@ -593,6 +614,10 @@ export async function getTimeTrackingLog(start: Date, end: Date, userId?: number
     userName: users.name,
     type: timeEntries.type,
     timestamp: timeEntries.timestamp,
+    deviceType: timeEntries.deviceType,
+    latitude: timeEntries.latitude,
+    longitude: timeEntries.longitude,
+    locationAccuracy: timeEntries.locationAccuracy,
   })
     .from(timeEntries)
     .leftJoin(users, eq(timeEntries.userId, users.id))

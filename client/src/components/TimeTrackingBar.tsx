@@ -3,7 +3,7 @@ import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
-import { Clock, Coffee, LogIn, LogOut, Loader2 } from "lucide-react";
+import { Clock, Coffee, LogIn, LogOut, Loader2, MapPin } from "lucide-react";
 import WorkLocationDialog from "./WorkLocationDialog";
 
 type EntryType = "inicio" | "salida_almuerzo" | "regreso_almuerzo" | "fin";
@@ -14,6 +14,25 @@ const typeLabels: Record<EntryType, string> = {
   regreso_almuerzo: "Regreso de almuerzo",
   fin: "Fin de jornada",
 };
+
+/** Pide la ubicación del navegador con un margen de espera corto — si el
+ * colaborador tarda en responder el permiso o lo rechaza, la marcación
+ * sigue de todas formas sin ubicación (nunca debe bloquear el registro
+ * de la hora). */
+function obtenerUbicacion(): Promise<{ latitude?: number; longitude?: number; locationAccuracy?: number }> {
+  return new Promise((resolve) => {
+    if (!navigator.geolocation) { resolve({}); return; }
+    const timeoutId = setTimeout(() => resolve({}), 8000);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        clearTimeout(timeoutId);
+        resolve({ latitude: pos.coords.latitude, longitude: pos.coords.longitude, locationAccuracy: Math.round(pos.coords.accuracy) });
+      },
+      () => { clearTimeout(timeoutId); resolve({}); },
+      { timeout: 8000, maximumAge: 60000 },
+    );
+  });
+}
 
 /** Self-reported clock in/out bar — replaces the in-person biometric
  * register. The collaborator marks their own start of day, lunch out/in,
@@ -64,7 +83,8 @@ export default function TimeTrackingBar() {
 
   const doMark = async (type: EntryType) => {
     try {
-      await mark.mutateAsync({ type });
+      const ubicacion = await obtenerUbicacion();
+      await mark.mutateAsync({ type, ...ubicacion });
       toast.success(`${typeLabels[type]} registrado a las ${new Date().toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit" })}`);
       refetch();
     } catch (error: any) {
@@ -105,33 +125,41 @@ export default function TimeTrackingBar() {
   }
 
   return (
-    <div className="flex items-center gap-2 flex-wrap px-3 py-1.5 bg-muted/40 rounded-lg border">
-      <Clock className="h-4 w-4 text-[#EDA011] shrink-0" />
-      {(["inicio", "salida_almuerzo", "regreso_almuerzo", "fin"] as EntryType[]).map((type) => {
-        const marked = marksByType[type];
-        const Icon = icons[type];
-        if (marked) {
+    <div className="flex flex-col gap-1">
+      <div className="flex items-center gap-2 flex-wrap px-3 py-1.5 bg-muted/40 rounded-lg border">
+        <Clock className="h-4 w-4 text-[#EDA011] shrink-0" />
+        {(["inicio", "salida_almuerzo", "regreso_almuerzo", "fin"] as EntryType[]).map((type) => {
+          const marked = marksByType[type];
+          const Icon = icons[type];
+          if (marked) {
+            return (
+              <Badge key={type} variant="outline" className="bg-green-50 text-green-700 border-green-200 text-[11px]">
+                {typeLabels[type]}: {marked.toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit" })}
+              </Badge>
+            );
+          }
+          const isNext = nextExpected === type;
           return (
-            <Badge key={type} variant="outline" className="bg-green-50 text-green-700 border-green-200 text-[11px]">
-              {typeLabels[type]}: {marked.toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit" })}
-            </Badge>
+            <Button
+              key={type}
+              size="sm"
+              variant={isNext ? "default" : "outline"}
+              disabled={!isNext || mark.isPending}
+              onClick={() => handleMark(type)}
+              className={isNext ? "h-7 text-xs gap-1 bg-[#EDA011] hover:bg-[#d48f0f] text-white" : "h-7 text-xs gap-1 opacity-50"}
+            >
+              {mark.isPending && isNext ? <Loader2 className="h-3 w-3 animate-spin" /> : <Icon className="h-3 w-3" />}
+              {typeLabels[type]}
+            </Button>
           );
-        }
-        const isNext = nextExpected === type;
-        return (
-          <Button
-            key={type}
-            size="sm"
-            variant={isNext ? "default" : "outline"}
-            disabled={!isNext || mark.isPending}
-            onClick={() => handleMark(type)}
-            className={isNext ? "h-7 text-xs gap-1 bg-[#EDA011] hover:bg-[#d48f0f] text-white" : "h-7 text-xs gap-1 opacity-50"}
-          >
-            {mark.isPending && isNext ? <Loader2 className="h-3 w-3 animate-spin" /> : <Icon className="h-3 w-3" />}
-            {typeLabels[type]}
-          </Button>
-        );
-      })}
+        })}
+      </div>
+      {nextExpected && (
+        <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground px-1">
+          <MapPin className="h-3 w-3 shrink-0" />
+          Recuerda aceptar el permiso de ubicación que te pida el navegador al marcar — así queda completo tu registro. ¡Gracias!
+        </p>
+      )}
 
       {pendingMarkType && (
         <WorkLocationDialog

@@ -1,4 +1,4 @@
-import { int, mysqlEnum, mysqlTable, text, timestamp, varchar, boolean, json, double, index, uniqueIndex } from "drizzle-orm/mysql-core";
+import { int, mysqlEnum, mysqlTable, text, timestamp, varchar, boolean, json, double, decimal, index, uniqueIndex } from "drizzle-orm/mysql-core";
 
 /**
  * Users table - Colaboradores de la firma
@@ -206,6 +206,16 @@ export const timeEntries = mysqlTable("timeEntries", {
   userId: int("userId").notNull(),
   type: mysqlEnum("type", ["inicio", "salida_almuerzo", "regreso_almuerzo", "fin"]).notNull(),
   timestamp: timestamp("timestamp").defaultNow().notNull(),
+  /** Inferido en el servidor a partir del encabezado User-Agent del
+   * navegador — no requiere permiso del usuario, siempre está disponible. */
+  deviceType: mysqlEnum("deviceType", ["pc", "movil", "tablet", "desconocido"]),
+  /** Ubicación GPS del navegador al momento de marcar — requiere que el
+   * colaborador acepte el permiso de ubicación; quedan null si lo rechaza
+   * o su dispositivo no lo soporta. Precisión en metros, cuando el
+   * navegador la reporta. */
+  latitude: decimal("latitude", { precision: 10, scale: 7 }),
+  longitude: decimal("longitude", { precision: 10, scale: 7 }),
+  locationAccuracy: int("locationAccuracy"),
 });
 
 export type TimeEntry = typeof timeEntries.$inferSelect;

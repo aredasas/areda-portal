@@ -17,6 +17,10 @@ import {
   Coffee,
   ClipboardList,
   Calendar as CalendarIcon,
+  Monitor,
+  Smartphone,
+  Tablet,
+  MapPin,
 } from "lucide-react";
 
 const typeLabels: Record<string, string> = {
@@ -31,6 +35,18 @@ const typeIcons: Record<string, any> = {
   salida_almuerzo: Coffee,
   regreso_almuerzo: Coffee,
   fin: LogOut,
+};
+
+const deviceIcons: Record<string, any> = {
+  pc: Monitor,
+  movil: Smartphone,
+  tablet: Tablet,
+};
+const deviceLabels: Record<string, string> = {
+  pc: "PC",
+  movil: "Celular",
+  tablet: "Tablet",
+  desconocido: "Dispositivo desconocido",
 };
 
 function formatHours(ms: number) {
@@ -163,7 +179,8 @@ export default function Asistencia() {
           <div className="space-y-4">
             {Object.entries(byUser).map(([userId, data]) => {
               const marksByType: Record<string, Date> = {};
-              data.entries.forEach((e: any) => { marksByType[e.type] = new Date(e.timestamp); });
+              const entryByType: Record<string, any> = {};
+              data.entries.forEach((e: any) => { marksByType[e.type] = new Date(e.timestamp); entryByType[e.type] = e; });
 
               let workedMs = 0;
               if (marksByType.inicio && marksByType.salida_almuerzo) {
@@ -192,15 +209,29 @@ export default function Asistencia() {
                     <div className="flex flex-wrap gap-2">
                       {(["inicio", "salida_almuerzo", "regreso_almuerzo", "fin"] as const).map((type) => {
                         const mark = marksByType[type];
+                        const entry = entryByType[type];
                         const Icon = typeIcons[type];
+                        const DeviceIcon = mark && entry?.deviceType ? deviceIcons[entry.deviceType] : null;
+                        const tieneUbicacion = mark && entry?.latitude != null && entry?.longitude != null;
                         return (
                           <Badge
                             key={type}
                             variant="outline"
-                            className={mark ? "bg-green-50 text-green-700 border-green-200" : "bg-gray-100 text-gray-400 border-gray-200"}
+                            className={mark ? "bg-green-50 text-green-700 border-green-200 gap-1" : "bg-gray-100 text-gray-400 border-gray-200"}
                           >
                             <Icon className="h-3 w-3 mr-1" />
                             {typeLabels[type]}: {mark ? mark.toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit" }) : "—"}
+                            {DeviceIcon && <DeviceIcon className="h-3 w-3 ml-1" title={deviceLabels[entry.deviceType] || "Dispositivo"} />}
+                            {tieneUbicacion && (
+                              <a
+                                href={`https://www.google.com/maps?q=${entry.latitude},${entry.longitude}`}
+                                target="_blank" rel="noopener noreferrer"
+                                title={`Ver ubicación en el mapa${entry.locationAccuracy ? ` (precisión ~${entry.locationAccuracy}m)` : ""}`}
+                                className="hover:text-blue-600"
+                              >
+                                <MapPin className="h-3 w-3" />
+                              </a>
+                            )}
                           </Badge>
                         );
                       })}

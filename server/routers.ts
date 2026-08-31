@@ -1510,9 +1510,17 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
    * day; nothing is inferred or tracked automatically. */
   timeTracking: router({
     mark: protectedProcedure
-      .input(z.object({ type: z.enum(["inicio", "salida_almuerzo", "regreso_almuerzo", "fin"]) }))
+      .input(z.object({
+        type: z.enum(["inicio", "salida_almuerzo", "regreso_almuerzo", "fin"]),
+        latitude: z.number().optional(),
+        longitude: z.number().optional(),
+        locationAccuracy: z.number().optional(),
+      }))
       .mutation(async ({ input, ctx }) => {
-        await db.createTimeEntry(ctx.user.id, input.type);
+        const deviceType = db.inferirTipoDispositivo(ctx.req.headers["user-agent"]);
+        await db.createTimeEntry(ctx.user.id, input.type, {
+          deviceType, latitude: input.latitude, longitude: input.longitude, locationAccuracy: input.locationAccuracy,
+        });
         return { success: true };
       }),
     /** The client computes "today" using its own local clock and sends the
