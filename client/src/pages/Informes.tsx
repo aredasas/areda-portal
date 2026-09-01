@@ -714,8 +714,11 @@ function fechaAInputValue(d: Date): string {
 
 function GestionClienteTab({ clienteId, anio, mes }: { clienteId: number; anio: number; mes: number }) {
   const [tipoPeriodo, setTipoPeriodo] = useState<"semana" | "quincena" | "mes">("mes");
+  const [anioMes, setAnioMes] = useState(anio);
+  const [mesMes, setMesMes] = useState(mes);
   const [quincena, setQuincena] = useState<"1" | "2">("1");
   const [semanaInicio, setSemanaInicio] = useState(() => fechaAInputValue(lunesDeLaSemana(new Date())));
+  const anioActual = new Date().getFullYear();
 
   const generarMutation = trpc.informes.gestionCliente.generar.useMutation({
     onSuccess: (data) => {
@@ -730,9 +733,9 @@ function GestionClienteTab({ clienteId, anio, mes }: { clienteId: number; anio: 
   });
 
   // Al cambiar a "semana", se posiciona por defecto en la semana del mes/año
-  // ya seleccionados arriba, para no arrancar en una fecha desconectada.
+  // elegidos aquí mismo, para no arrancar en una fecha desconectada.
   const handleTipoPeriodo = (nuevo: "semana" | "quincena" | "mes") => {
-    if (nuevo === "semana") setSemanaInicio(fechaAInputValue(lunesDeLaSemana(new Date(anio, mes - 1, 1))));
+    if (nuevo === "semana") setSemanaInicio(fechaAInputValue(lunesDeLaSemana(new Date(anioMes, mesMes - 1, 1))));
     setTipoPeriodo(nuevo);
   };
 
@@ -746,13 +749,13 @@ function GestionClienteTab({ clienteId, anio, mes }: { clienteId: number; anio: 
       return { fechaInicio: inicio, fechaFin: fin, etiquetaPeriodo: `${fmt(inicio)} al ${fmt(fin)}` };
     }
     if (tipoPeriodo === "quincena") {
-      const inicio = quincena === "1" ? new Date(anio, mes - 1, 1) : new Date(anio, mes - 1, 16);
-      const fin = quincena === "1" ? new Date(anio, mes - 1, 15, 23, 59, 59) : new Date(anio, mes, 0, 23, 59, 59);
-      return { fechaInicio: inicio, fechaFin: fin, etiquetaPeriodo: `${quincena === "1" ? "1ra" : "2da"} quincena de ${MESES[mes - 1]} ${anio}` };
+      const inicio = quincena === "1" ? new Date(anioMes, mesMes - 1, 1) : new Date(anioMes, mesMes - 1, 16);
+      const fin = quincena === "1" ? new Date(anioMes, mesMes - 1, 15, 23, 59, 59) : new Date(anioMes, mesMes, 0, 23, 59, 59);
+      return { fechaInicio: inicio, fechaFin: fin, etiquetaPeriodo: `${quincena === "1" ? "1ra" : "2da"} quincena de ${MESES[mesMes - 1]} ${anioMes}` };
     }
-    const inicio = new Date(anio, mes - 1, 1);
-    const fin = new Date(anio, mes, 0, 23, 59, 59);
-    return { fechaInicio: inicio, fechaFin: fin, etiquetaPeriodo: `${MESES[mes - 1]} ${anio}` };
+    const inicio = new Date(anioMes, mesMes - 1, 1);
+    const fin = new Date(anioMes, mesMes, 0, 23, 59, 59);
+    return { fechaInicio: inicio, fechaFin: fin, etiquetaPeriodo: `${MESES[mesMes - 1]} ${anioMes}` };
   })();
 
   const handleGenerar = () => {
@@ -793,9 +796,36 @@ function GestionClienteTab({ clienteId, anio, mes }: { clienteId: number; anio: 
             </div>
           )}
 
+          {(tipoPeriodo === "quincena" || tipoPeriodo === "mes") && (
+            <>
+              <div className="space-y-1">
+                <Label className="text-xs">Mes</Label>
+                <Select value={String(mesMes)} onValueChange={(v) => setMesMes(Number(v))}>
+                  <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {MESES.map((nombre, i) => (
+                      <SelectItem key={i} value={String(i + 1)}>{nombre}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Año</Label>
+                <Select value={String(anioMes)} onValueChange={(v) => setAnioMes(Number(v))}>
+                  <SelectTrigger className="w-28"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {[anioActual, anioActual - 1, anioActual - 2].map((a) => (
+                      <SelectItem key={a} value={String(a)}>{a}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </>
+          )}
+
           {tipoPeriodo === "quincena" && (
             <div className="space-y-1">
-              <Label className="text-xs">Quincena de {MESES[mes - 1]} {anio}</Label>
+              <Label className="text-xs">Quincena</Label>
               <Select value={quincena} onValueChange={(v) => setQuincena(v as any)}>
                 <SelectTrigger className="w-48"><SelectValue /></SelectTrigger>
                 <SelectContent>
@@ -804,10 +834,6 @@ function GestionClienteTab({ clienteId, anio, mes }: { clienteId: number; anio: 
                 </SelectContent>
               </Select>
             </div>
-          )}
-
-          {tipoPeriodo === "mes" && (
-            <p className="text-xs text-muted-foreground pb-2">Usa el mes y año seleccionados arriba.</p>
           )}
         </div>
 
