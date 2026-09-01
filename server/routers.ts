@@ -1902,14 +1902,14 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           if (!cliente) throw new Error("Cliente no encontrado");
           const fechaInicio = new Date(input.fechaInicio);
           const fechaFin = new Date(input.fechaFin);
-          const actividades = await informesGestionCliente.getActividadesGestionCliente(input.clienteId, fechaInicio, fechaFin);
+          const resultado = await informesGestionCliente.getActividadesGestionCliente(input.clienteId, fechaInicio, fechaFin);
           const buffer = await informesGestionCliente.generarInformeGestionCliente(
-            cliente.razonSocial, cliente.nit, fechaInicio, fechaFin, actividades,
+            cliente.razonSocial, cliente.nit, fechaInicio, fechaFin, resultado,
           );
           const key = `informes/GestionCliente_${input.clienteId}_${Date.now()}.pdf`;
           const { url, key: fileKey } = await storagePut(key, buffer, "application/pdf");
           const signedUrl = await storageGetSignedUrl(fileKey);
-          return { url, signedUrl, fileKey, totalActividades: actividades.length };
+          return { url, signedUrl, fileKey, totalActividades: resultado.actividades.length + resultado.otras.length };
         }),
     }),
     dian: router({
