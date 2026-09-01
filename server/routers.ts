@@ -1957,8 +1957,9 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           }
 
           const resultado = informesDian.compararDianVsAuxiliar(filasDian, documentosAux);
+          const comparacionTerceros = informesDian.compararPorTercero(filasDian, documentosAux);
           const buffer = await informesDian.generarReporteComparacionDian(
-            resultado, cliente?.razonSocial || "Cliente", input.anio, input.mes,
+            resultado, cliente?.razonSocial || "Cliente", input.anio, input.mes, comparacionTerceros,
           );
 
           const key = `informes/DIAN_${input.clienteId}_${input.anio}_${String(input.mes).padStart(2, "0")}_${Date.now()}.xlsx`;

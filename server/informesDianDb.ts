@@ -311,6 +311,16 @@ export type ResultadoComparacionDian = {
   emparejadosPorNitValor: number;
 };
 
+export type ComparacionTercero = {
+  nit: string;
+  nombre: string;
+  totalDian: number;
+  totalContabilidad: number;
+  diferencia: number;
+  cantidadDocumentosDian: number;
+  cantidadRegistrosContabilidad: number;
+};
+
 /** Compara documentos de la DIAN contra el libro auxiliar en dos pasadas:
  * 1) por número de documento (cuando quien genera el número es el mismo
  *    cliente — sus propias facturas de venta o documentos soporte, donde
@@ -328,6 +338,56 @@ export type ResultadoComparacionDian = {
 function valoresCoinciden(a: number, b: number): boolean {
   const tolerancia = Math.max(5, Math.abs(a) * 0.001);
   return Math.abs(a - b) <= tolerancia;
+}
+
+/** Compara TOTALES agregados por tercero (NIT) entre la DIAN y la
+ * contabilidad — a diferencia del cruce documento a documento, que puede
+ * marcar como "diferencia" cosas que en realidad SÍ están digitadas pero
+ * consolidadas distinto (una sola factura contable por varios documentos
+ * de la DIAN, fechas de registro diferentes, numeración interna que no
+ * coincide, etc.). Si el TOTAL de un tercero cuadra en ambos lados,
+ * prácticamente seguro que todo se digitó aunque el cruce por documento
+ * no lo haya detectado — si el total NO cuadra, ahí sí hay indicio real
+ * de un faltante de digitación, y por cuánto. Usa TODAS las filas/
+ * documentos, no solo los que quedaron sin cruzar. */
+export function compararPorTercero(filasDian: FilaDian[], documentosAux: Map<string, DocumentoAuxiliar>): ComparacionTercero[] {
+  const porNit = new Map<string, { nombre: string; totalDian: number; totalContab: number; cantDian: number; cantContab: number }>();
+  const asegurar = (nit: string, nombre: string) => {
+    if (!porNit.has(nit)) porNit.set(nit, { nombre, totalDian: 0, totalContab: 0, cantDian: 0, cantContab: 0 });
+    const entrada = porNit.get(nit)!;
+    if (!entrada.nombre && nombre) entrada.nombre = nombre;
+    return entrada;
+  };
+
+  for (const fila of filasDian) {
+    const esRecibido = fila.grupo === "Recibido";
+    const nit = soloDigitos(esRecibido ? fila.nitEmisor : fila.nitReceptor);
+    if (!nit) continue;
+    const nombre = esRecibido ? fila.nombreEmisor : fila.nombreReceptor;
+    const entrada = asegurar(nit, nombre);
+    entrada.totalDian += fila.total;
+    entrada.cantDian++;
+  }
+
+  for (const doc of Array.from(documentosAux.values())) {
+    const nit = soloDigitos(doc.tercero);
+    if (!nit) continue;
+    const entrada = asegurar(nit, doc.nombreTercero);
+    entrada.totalContab += doc.valor;
+    entrada.cantContab++;
+  }
+
+  const resultado: ComparacionTercero[] = [];
+  for (const [nit, datos] of Array.from(porNit.entries())) {
+    resultado.push({
+      nit, nombre: datos.nombre || "(sin nombre)",
+      totalDian: datos.totalDian, totalContabilidad: datos.totalContab,
+      diferencia: datos.totalDian - datos.totalContab,
+      cantidadDocumentosDian: datos.cantDian, cantidadRegistrosContabilidad: datos.cantContab,
+    });
+  }
+  resultado.sort((a, b) => Math.abs(b.diferencia) - Math.abs(a.diferencia));
+  return resultado;
 }
 
 export function compararDianVsAuxiliar(
@@ -419,6 +479,7 @@ function estilarEncabezado(row: ExcelJS.Row) {
 
 export async function generarReporteComparacionDian(
   resultado: ResultadoComparacionDian, clienteNombre: string, anio: number, mes: number,
+  comparacionTerceros: ComparacionTercero[] = [],
 ): Promise<Buffer> {
   const wb = new ExcelJS.Workbook();
   wb.creator = "Areda Work · Módulo Informes";
@@ -518,6 +579,37 @@ export async function generarReporteComparacionDian(
     wsCruce.getColumn(4).width = 12; wsCruce.getColumn(5).width = 16; wsCruce.getColumn(6).width = 12;
     wsCruce.getColumn(7).width = 12; wsCruce.getColumn(8).width = 12; wsCruce.getColumn(9).width = 16;
     wsCruce.getColumn(10).width = 14;
+  }
+
+  if (comparacionTerceros.length > 0) {
+    const conDiferenciaReal = comparacionTerceros.filter(t => !valoresCoinciden(t.totalDian, t.totalContabilidad));
+    const wsTercero = wb.addWorksheet("Comparación por Tercero");
+    wsTercero.addRow([
+      "Compara el TOTAL de cada tercero (NIT) entre la DIAN y la contabilidad — si el total cuadra, muy "
+      + "probablemente todo está digitado aunque el cruce por documento no lo haya detectado (facturas "
+      + "consolidadas, fechas distintas, etc.). Si el total NO cuadra, ahí sí hay indicio real de un "
+      + "faltante de digitación, y por cuánto.",
+    ]).font = { name: "Arial", size: 9, italic: true, bold: true } as any;
+    wsTercero.addRow([`Terceros con diferencia real: ${conDiferenciaReal.length} de ${comparacionTerceros.length}`]).font = FONT_BOLD as any;
+    wsTercero.addRow([]);
+    const hTercero = wsTercero.addRow([
+      "NIT", "Tercero", "Total DIAN", "Total Contabilidad", "Diferencia",
+      "Docs. DIAN", "Registros contabilidad", "Estado",
+    ]);
+    estilarEncabezado(hTercero);
+    for (const t of comparacionTerceros) {
+      const cuadra = valoresCoinciden(t.totalDian, t.totalContabilidad);
+      const r = wsTercero.addRow([
+        t.nit, t.nombre, t.totalDian, t.totalContabilidad, t.diferencia,
+        t.cantidadDocumentosDian, t.cantidadRegistrosContabilidad,
+        cuadra ? "Cuadra" : "⚠ Revisar",
+      ]);
+      if (!cuadra) r.eachCell(c => { c.fill = ALERTA_FILL; });
+    }
+    wsTercero.getColumn(3).numFmt = MONEY; wsTercero.getColumn(4).numFmt = MONEY; wsTercero.getColumn(5).numFmt = MONEY;
+    wsTercero.getColumn(1).width = 16; wsTercero.getColumn(2).width = 34; wsTercero.getColumn(3).width = 16;
+    wsTercero.getColumn(4).width = 18; wsTercero.getColumn(5).width = 14; wsTercero.getColumn(6).width = 12;
+    wsTercero.getColumn(7).width = 20; wsTercero.getColumn(8).width = 12;
   }
 
   const buffer = await wb.xlsx.writeBuffer();
