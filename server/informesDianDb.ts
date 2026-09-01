@@ -157,14 +157,41 @@ export type DocumentoAuxiliar = {
   fecha: string; // texto tal cual, para mostrar en el reporte (no se reinterpreta)
   valor: number;
   filas: number;
+  /** Familia contable de este documento, determinada por la cuenta de su
+   * línea más relevante (mayor valor absoluto entre las que caen en una
+   * cuenta 4/5/14/15/16/17) — null si el archivo no trae columna de
+   * cuenta, o si ninguna de sus líneas cae en esas cuentas (en cuyo caso
+   * el documento no se compara: es un traslado, préstamo, u otro
+   * movimiento de balance que no es ingreso ni gasto/deducción). */
+  categoria: "ingreso" | "nomina" | "honorarios_servicios" | "otro_gasto" | null;
 };
 
 type ColsAuxiliarDian = {
   numero: number; tercero: number; nombreTercero: number | null;
-  debito: number; credito: number; tipo: number | null;
+  debito: number; credito: number; tipo: number | null; cuenta: number | null;
   modoFecha: "combinada" | "separada" | "ninguna";
   fecha: number | null; anioCol: number | null; mesCol: number | null;
 };
+
+/** Clasifica una cuenta contable en la familia que interesa para comparar
+ * contra la DIAN — confirmado con Arlex (contador): la nómina casi
+ * siempre queda en 5105/5205 (gastos de personal, administración/ventas),
+ * honorarios y servicios en 5110/5115/5210/5215, y el resto de compras y
+ * gastos deducibles en cualquier otra cuenta 5 o 14 (a veces 15/16/17 —
+ * compra de activos que también generan documento electrónico). Los
+ * ingresos son la cuenta 4. Cualquier otra cuenta (1 disponible, 2
+ * pasivos, 3 patrimonio, etc.) no es ni ingreso ni gasto deducible —
+ * ahí es donde caen traslados, préstamos, y otros movimientos que antes
+ * se comparaban por error, generando diferencias falsas. */
+function categorizarCuenta(cuentaRaw: string): DocumentoAuxiliar["categoria"] {
+  const cuenta = cuentaRaw.trim();
+  if (!cuenta) return null;
+  if (cuenta.startsWith("4")) return "ingreso";
+  if (cuenta.startsWith("5105") || cuenta.startsWith("5205")) return "nomina";
+  if (cuenta.startsWith("5110") || cuenta.startsWith("5115") || cuenta.startsWith("5210") || cuenta.startsWith("5215")) return "honorarios_servicios";
+  if (cuenta.startsWith("5") || cuenta.startsWith("14") || cuenta.startsWith("15") || cuenta.startsWith("16") || cuenta.startsWith("17")) return "otro_gasto";
+  return null; // 1 (excepto 14-17), 2, 3, 6, 7, 8, 9 — no es ingreso ni gasto/deducción
+}
 
 function resolverColumnasAuxiliarDian(headerRaw: any[]): ColsAuxiliarDian {
   const headers = Array.from(headerRaw, h => (h ? normalizar(String(h)) : ""));
@@ -174,6 +201,7 @@ function resolverColumnasAuxiliarDian(headerRaw: any[]): ColsAuxiliarDian {
   const debito = buscarColumna(headers, ["DEBITO", "DEBE"]);
   const credito = buscarColumna(headers, ["CREDITO", "HABER"]);
   const tipo = buscarColumna(headers, ["TIPO DE COMPROBANTE", "TIPO COMPROBANTE", "TIPO DOCUMENTO", "TIPO"]);
+  const cuenta = buscarColumna(headers, ["CODIGO CUENTA", "COD CUENTA", "CUENTA CONTABLE", "NUMERO CUENTA", "CUENTA"]);
   const fecha = buscarColumna(headers, ["FECHA"]);
   const anioCol = buscarColumna(headers, ["ANO", "AGNO", "YEAR", "VIGENCIA"]);
   const mesCol = buscarColumna(headers, ["MES", "MONTH"]);
@@ -190,7 +218,7 @@ function resolverColumnasAuxiliarDian(headerRaw: any[]): ColsAuxiliarDian {
     );
   }
   const modoFecha = fecha !== null ? "combinada" : (anioCol !== null && mesCol !== null) ? "separada" : "ninguna";
-  return { numero: numero!, tercero: tercero!, nombreTercero, debito: debito!, credito: credito!, tipo, modoFecha, fecha, anioCol, mesCol };
+  return { numero: numero!, tercero: tercero!, nombreTercero, debito: debito!, credito: credito!, tipo, cuenta, modoFecha, fecha, anioCol, mesCol };
 }
 
 /** Extrae {anio, mes} de una fila del auxiliar, en cualquiera de las dos
@@ -245,7 +273,7 @@ export async function parseAuxiliarParaDian(
   const header = todasLasFilas[0];
   const cols = resolverColumnasAuxiliarDian(header);
   const valorPorClaveDoc = new Map<string, number>();
-  const filasCrudas: { claveDoc: string; numero: string; tercero: string; nombreTercero: string; tipo: string; fecha: string; valorFila: number }[] = [];
+  const filasCrudas: { claveDoc: string; numero: string; tercero: string; nombreTercero: string; tipo: string; fecha: string; valorFila: number; cuenta: string }[] = [];
 
   for (let i = 1; i < todasLasFilas.length; i++) {
     const values = todasLasFilas[i];
@@ -279,11 +307,34 @@ export async function parseAuxiliarParaDian(
     const debito = Number(values[c.debito]) || 0;
     const credito = Number(values[c.credito]) || 0;
     const valorFila = Math.max(Math.abs(debito), Math.abs(credito));
-    filasCrudas.push({ claveDoc, numero: numeroNorm, tercero, nombreTercero, tipo: tipoRaw, fecha: fechaTexto, valorFila });
+    const cuentaFila = c.cuenta !== null ? String(values[c.cuenta] ?? "").trim() : "";
+    filasCrudas.push({ claveDoc, numero: numeroNorm, tercero, nombreTercero, tipo: tipoRaw, fecha: fechaTexto, valorFila, cuenta: cuentaFila });
     valorPorClaveDoc.set(claveDoc, Math.max(valorPorClaveDoc.get(claveDoc) || 0, valorFila));
   }
 
+  // Categoría del documento = la de su línea de MAYOR valor entre las que
+  // caen en una cuenta relevante (4/5/14/15/16/17) — un documento suele
+  // tener varias líneas (la de gasto/ingreso, más IVA, retenciones,
+  // cuenta por pagar...); nos interesa la que representa el concepto
+  // real, no la contrapartida. Si el archivo SÍ trae columna de cuenta
+  // pero NINGUNA línea del documento cae en esas cuentas, es un traslado,
+  // préstamo, u otro movimiento de balance — se excluye de la
+  // comparación por completo (antes se comparaba igual, generando
+  // diferencias que no eran reales).
+  const hayColumnaCuenta = cols.cuenta !== null;
+  const categoriaPorClaveDoc = new Map<string, { categoria: DocumentoAuxiliar["categoria"]; mejorValor: number }>();
   for (const fila of filasCrudas) {
+    const categoriaFila = categorizarCuenta(fila.cuenta);
+    if (categoriaFila === null) continue;
+    const actual = categoriaPorClaveDoc.get(fila.claveDoc);
+    if (!actual || fila.valorFila > actual.mejorValor) {
+      categoriaPorClaveDoc.set(fila.claveDoc, { categoria: categoriaFila, mejorValor: fila.valorFila });
+    }
+  }
+
+  for (const fila of filasCrudas) {
+    const categoria = categoriaPorClaveDoc.get(fila.claveDoc)?.categoria ?? null;
+    if (hayColumnaCuenta && categoria === null) continue; // sin cuenta relevante — no es ingreso ni gasto/deducción
     const valorDoc = valorPorClaveDoc.get(fila.claveDoc) || fila.valorFila;
     // La clave final que se expone incluye el número real y el valor del
     // documento (no el tipo, que es solo una ayuda interna de agrupación) —
@@ -292,7 +343,7 @@ export async function parseAuxiliarParaDian(
     if (!documentos.has(claveExpuesta)) {
       documentos.set(claveExpuesta, {
         numero: fila.numero, tercero: fila.tercero, nombreTercero: fila.nombreTercero,
-        tipo: fila.tipo, fecha: fila.fecha, valor: valorDoc, filas: 0,
+        tipo: fila.tipo, fecha: fila.fecha, valor: valorDoc, filas: 0, categoria,
       });
     }
     documentos.get(claveExpuesta)!.filas++;
@@ -335,6 +386,25 @@ export type ComparacionTercero = {
  * discrepancia mínima de redondeo entre la DIAN y la contabilidad (ej. por
  * cómo cada sistema redondea el IVA), que antes hacía que documentos
  * idénticos quedaran como "sin encontrar" solo por unos pocos pesos. */
+/** Clasifica una fila de la DIAN en la misma familia que `categorizarCuenta`
+ * — para poder comparar nómina contra nómina, documento soporte contra
+ * honorarios/servicios, y las demás facturas recibidas contra el resto de
+ * cuentas 5/14 (y ocasionalmente 15/16/17), en vez de mezclarlo todo. Todo
+ * lo "Emitido" es ingreso, sin importar el tipo de documento. */
+function categorizarFilaDian(fila: FilaDian): DocumentoAuxiliar["categoria"] {
+  // La nómina electrónica y el documento soporte SIEMPRE los genera quien
+  // PAGA (la empresa) — en el reporte de la DIAN aparecen como "Emitidos"
+  // por ella (es quien los genera), pero representan un GASTO suyo, no un
+  // ingreso. Por eso se revisan por tipo de documento ANTES que por el
+  // grupo Emitido/Recibido — si se mirara solo el grupo, una nómina
+  // quedaría mal clasificada como ingreso.
+  const tipoNorm = normalizar(fila.tipo);
+  if (tipoNorm.includes("NOMINA")) return "nomina";
+  if (tipoNorm.includes("DOCUMENTO SOPORTE")) return "honorarios_servicios";
+  if (fila.grupo === "Emitido") return "ingreso";
+  return "otro_gasto"; // facturas electrónicas y demás documentos recibidos
+}
+
 function valoresCoinciden(a: number, b: number): boolean {
   const tolerancia = Math.max(5, Math.abs(a) * 0.001);
   return Math.abs(a - b) <= tolerancia;
@@ -350,7 +420,14 @@ function valoresCoinciden(a: number, b: number): boolean {
  * no lo haya detectado — si el total NO cuadra, ahí sí hay indicio real
  * de un faltante de digitación, y por cuánto. Usa TODAS las filas/
  * documentos, no solo los que quedaron sin cruzar. */
-export function compararPorTercero(filasDian: FilaDian[], documentosAux: Map<string, DocumentoAuxiliar>): ComparacionTercero[] {
+export function compararPorTercero(
+  filasDian: FilaDian[], documentosAux: Map<string, DocumentoAuxiliar>,
+  filtroCategoria?: DocumentoAuxiliar["categoria"],
+): ComparacionTercero[] {
+  const filasFiltradas = filtroCategoria ? filasDian.filter(f => categorizarFilaDian(f) === filtroCategoria) : filasDian;
+  const documentosFiltrados = filtroCategoria
+    ? new Map(Array.from(documentosAux.entries()).filter(([, doc]) => doc.categoria === filtroCategoria))
+    : documentosAux;
   const porNit = new Map<string, { nombre: string; totalDian: number; totalContab: number; cantDian: number; cantContab: number }>();
   const asegurar = (nit: string, nombre: string) => {
     if (!porNit.has(nit)) porNit.set(nit, { nombre, totalDian: 0, totalContab: 0, cantDian: 0, cantContab: 0 });
@@ -359,7 +436,7 @@ export function compararPorTercero(filasDian: FilaDian[], documentosAux: Map<str
     return entrada;
   };
 
-  for (const fila of filasDian) {
+  for (const fila of filasFiltradas) {
     const esRecibido = fila.grupo === "Recibido";
     const nit = soloDigitos(esRecibido ? fila.nitEmisor : fila.nitReceptor);
     if (!nit) continue;
@@ -369,7 +446,7 @@ export function compararPorTercero(filasDian: FilaDian[], documentosAux: Map<str
     entrada.cantDian++;
   }
 
-  for (const doc of Array.from(documentosAux.values())) {
+  for (const doc of Array.from(documentosFiltrados.values())) {
     const nit = soloDigitos(doc.tercero);
     if (!nit) continue;
     const entrada = asegurar(nit, doc.nombreTercero);
@@ -479,7 +556,7 @@ function estilarEncabezado(row: ExcelJS.Row) {
 
 export async function generarReporteComparacionDian(
   resultado: ResultadoComparacionDian, clienteNombre: string, anio: number, mes: number,
-  comparacionTerceros: ComparacionTercero[] = [],
+  seccionesTerceros: { titulo: string; items: ComparacionTercero[] }[] = [],
 ): Promise<Buffer> {
   const wb = new ExcelJS.Workbook();
   wb.creator = "Areda Work · Módulo Informes";
@@ -581,30 +658,45 @@ export async function generarReporteComparacionDian(
     wsCruce.getColumn(10).width = 14;
   }
 
-  if (comparacionTerceros.length > 0) {
-    const conDiferenciaReal = comparacionTerceros.filter(t => !valoresCoinciden(t.totalDian, t.totalContabilidad));
+  const totalItemsTerceros = seccionesTerceros.reduce((a, s) => a + s.items.length, 0);
+  if (totalItemsTerceros > 0) {
     const wsTercero = wb.addWorksheet("Comparación por Tercero");
     wsTercero.addRow([
-      "Compara el TOTAL de cada tercero (NIT) entre la DIAN y la contabilidad — si el total cuadra, muy "
-      + "probablemente todo está digitado aunque el cruce por documento no lo haya detectado (facturas "
-      + "consolidadas, fechas distintas, etc.). Si el total NO cuadra, ahí sí hay indicio real de un "
-      + "faltante de digitación, y por cuánto.",
+      "Compara el TOTAL de cada tercero (NIT) entre la DIAN y la contabilidad, separado por tipo de "
+      + "documento — nómina contra las cuentas de nómina (5105/5205), documento soporte contra "
+      + "honorarios y servicios, y las demás facturas recibidas contra el resto de cuentas 5 y 14 "
+      + "(a veces 15/16/17). Los movimientos que no son ingreso ni gasto/deducción (traslados, "
+      + "préstamos, y otros de cuentas de balance) ya se excluyeron de esta comparación. Si el total "
+      + "de un tercero cuadra, muy probablemente todo está digitado aunque el cruce por documento no lo "
+      + "haya detectado (facturas consolidadas, fechas distintas, etc.). Si el total NO cuadra, ahí sí "
+      + "hay indicio real de un faltante de digitación, y por cuánto.",
     ]).font = { name: "Arial", size: 9, italic: true, bold: true } as any;
-    wsTercero.addRow([`Terceros con diferencia real: ${conDiferenciaReal.length} de ${comparacionTerceros.length}`]).font = FONT_BOLD as any;
+    wsTercero.getRow(1).alignment = { wrapText: true } as any;
+    wsTercero.mergeCells(1, 1, 1, 8);
+    wsTercero.getRow(1).height = 60;
     wsTercero.addRow([]);
-    const hTercero = wsTercero.addRow([
-      "NIT", "Tercero", "Total DIAN", "Total Contabilidad", "Diferencia",
-      "Docs. DIAN", "Registros contabilidad", "Estado",
-    ]);
-    estilarEncabezado(hTercero);
-    for (const t of comparacionTerceros) {
-      const cuadra = valoresCoinciden(t.totalDian, t.totalContabilidad);
-      const r = wsTercero.addRow([
-        t.nit, t.nombre, t.totalDian, t.totalContabilidad, t.diferencia,
-        t.cantidadDocumentosDian, t.cantidadRegistrosContabilidad,
-        cuadra ? "Cuadra" : "⚠ Revisar",
+
+    for (const seccion of seccionesTerceros) {
+      if (seccion.items.length === 0) continue;
+      const conDiferenciaReal = seccion.items.filter(t => !valoresCoinciden(t.totalDian, t.totalContabilidad));
+      const rTitulo = wsTercero.addRow([seccion.titulo]);
+      rTitulo.font = { name: "Arial", size: 11, bold: true } as any;
+      wsTercero.addRow([`Con diferencia real: ${conDiferenciaReal.length} de ${seccion.items.length}`]).font = { name: "Arial", size: 9, italic: true } as any;
+      const hTercero = wsTercero.addRow([
+        "NIT", "Tercero", "Total DIAN", "Total Contabilidad", "Diferencia",
+        "Docs. DIAN", "Registros contabilidad", "Estado",
       ]);
-      if (!cuadra) r.eachCell(c => { c.fill = ALERTA_FILL; });
+      estilarEncabezado(hTercero);
+      for (const t of seccion.items) {
+        const cuadra = valoresCoinciden(t.totalDian, t.totalContabilidad);
+        const r = wsTercero.addRow([
+          t.nit, t.nombre, t.totalDian, t.totalContabilidad, t.diferencia,
+          t.cantidadDocumentosDian, t.cantidadRegistrosContabilidad,
+          cuadra ? "Cuadra" : "⚠ Revisar",
+        ]);
+        if (!cuadra) r.eachCell(c => { c.fill = ALERTA_FILL; });
+      }
+      wsTercero.addRow([]);
     }
     wsTercero.getColumn(3).numFmt = MONEY; wsTercero.getColumn(4).numFmt = MONEY; wsTercero.getColumn(5).numFmt = MONEY;
     wsTercero.getColumn(1).width = 16; wsTercero.getColumn(2).width = 34; wsTercero.getColumn(3).width = 16;
