@@ -4,6 +4,7 @@ import DashboardLayout from "@/components/DashboardLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -697,7 +698,25 @@ function CatalogoClienteCard({ clienteId }: { clienteId: number }) {
  * hecho por su cuenta durante el mes seleccionado (tareas, vencimientos,
  * revisión, cargues de libro auxiliar, generación de reportes contables).
  * Solo visible para administradores (ver TabsTrigger condicional arriba). */
+/** Calcula el lunes de la semana en la que cae una fecha dada (semana
+ * de lunes a domingo, convención colombiana habitual). */
+function lunesDeLaSemana(fecha: Date): Date {
+  const d = new Date(fecha);
+  const diaSemana = d.getDay(); // 0=domingo, 1=lunes, ... 6=sábado
+  const diasHaciaLunes = diaSemana === 0 ? 6 : diaSemana - 1;
+  d.setDate(d.getDate() - diasHaciaLunes);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+function fechaAInputValue(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 function GestionClienteTab({ clienteId, anio, mes }: { clienteId: number; anio: number; mes: number }) {
+  const [tipoPeriodo, setTipoPeriodo] = useState<"semana" | "quincena" | "mes">("mes");
+  const [quincena, setQuincena] = useState<"1" | "2">("1");
+  const [semanaInicio, setSemanaInicio] = useState(() => fechaAInputValue(lunesDeLaSemana(new Date())));
+
   const generarMutation = trpc.informes.gestionCliente.generar.useMutation({
     onSuccess: (data) => {
       toast.success(
@@ -710,9 +729,33 @@ function GestionClienteTab({ clienteId, anio, mes }: { clienteId: number; anio: 
     onError: (err) => toast.error(err.message || "No se pudo generar el informe"),
   });
 
+  // Al cambiar a "semana", se posiciona por defecto en la semana del mes/año
+  // ya seleccionados arriba, para no arrancar en una fecha desconectada.
+  const handleTipoPeriodo = (nuevo: "semana" | "quincena" | "mes") => {
+    if (nuevo === "semana") setSemanaInicio(fechaAInputValue(lunesDeLaSemana(new Date(anio, mes - 1, 1))));
+    setTipoPeriodo(nuevo);
+  };
+
+  const { fechaInicio, fechaFin, etiquetaPeriodo } = (() => {
+    if (tipoPeriodo === "semana") {
+      const inicio = new Date(semanaInicio + "T00:00:00");
+      const fin = new Date(inicio);
+      fin.setDate(fin.getDate() + 6);
+      fin.setHours(23, 59, 59, 999);
+      const fmt = (d: Date) => d.toLocaleDateString("es-CO", { day: "2-digit", month: "short" });
+      return { fechaInicio: inicio, fechaFin: fin, etiquetaPeriodo: `${fmt(inicio)} al ${fmt(fin)}` };
+    }
+    if (tipoPeriodo === "quincena") {
+      const inicio = quincena === "1" ? new Date(anio, mes - 1, 1) : new Date(anio, mes - 1, 16);
+      const fin = quincena === "1" ? new Date(anio, mes - 1, 15, 23, 59, 59) : new Date(anio, mes, 0, 23, 59, 59);
+      return { fechaInicio: inicio, fechaFin: fin, etiquetaPeriodo: `${quincena === "1" ? "1ra" : "2da"} quincena de ${MESES[mes - 1]} ${anio}` };
+    }
+    const inicio = new Date(anio, mes - 1, 1);
+    const fin = new Date(anio, mes, 0, 23, 59, 59);
+    return { fechaInicio: inicio, fechaFin: fin, etiquetaPeriodo: `${MESES[mes - 1]} ${anio}` };
+  })();
+
   const handleGenerar = () => {
-    const fechaInicio = new Date(anio, mes - 1, 1);
-    const fechaFin = new Date(anio, mes, 0, 23, 59, 59);
     generarMutation.mutate({ clienteId, fechaInicio: fechaInicio.toISOString(), fechaFin: fechaFin.toISOString() });
   };
 
@@ -727,12 +770,50 @@ function GestionClienteTab({ clienteId, anio, mes }: { clienteId: number; anio: 
         <p className="text-sm text-muted-foreground">
           Genera un informe en PDF, con destino al cliente, que resume todas las tareas, vencimientos
           tributarios, revisiones, cargues de libro auxiliar, y generación de reportes contables realizados
-          para <strong>{MESES[mes - 1]} {anio}</strong> — el mes seleccionado arriba. Incluye la fecha, el
-          detalle, y el responsable de cada actividad.
+          durante el periodo elegido. Incluye la fecha, el detalle, y el responsable de cada actividad.
         </p>
+
+        <div className="flex flex-wrap items-end gap-3">
+          <div className="space-y-1">
+            <Label className="text-xs">Periodo</Label>
+            <Select value={tipoPeriodo} onValueChange={(v) => handleTipoPeriodo(v as any)}>
+              <SelectTrigger className="w-36"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="semana">Semana</SelectItem>
+                <SelectItem value="quincena">Quincena</SelectItem>
+                <SelectItem value="mes">Mes</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          {tipoPeriodo === "semana" && (
+            <div className="space-y-1">
+              <Label className="text-xs">Semana que inicia el (lunes)</Label>
+              <Input type="date" value={semanaInicio} onChange={(e) => setSemanaInicio(e.target.value)} className="w-40" />
+            </div>
+          )}
+
+          {tipoPeriodo === "quincena" && (
+            <div className="space-y-1">
+              <Label className="text-xs">Quincena de {MESES[mes - 1]} {anio}</Label>
+              <Select value={quincena} onValueChange={(v) => setQuincena(v as any)}>
+                <SelectTrigger className="w-48"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="1">1ra quincena (1 al 15)</SelectItem>
+                  <SelectItem value="2">2da quincena (16 al fin de mes)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+
+          {tipoPeriodo === "mes" && (
+            <p className="text-xs text-muted-foreground pb-2">Usa el mes y año seleccionados arriba.</p>
+          )}
+        </div>
+
         <Button onClick={handleGenerar} disabled={generarMutation.isPending} className="gap-2">
           {generarMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-          Generar informe de {MESES[mes - 1]} {anio}
+          Generar informe — {etiquetaPeriodo}
         </Button>
       </CardContent>
     </Card>
