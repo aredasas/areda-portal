@@ -86,6 +86,7 @@ import * as informesDb from "./informesDb";
 import { generarReporteERI } from "./informesReportERI";
 import { generarReporteERM } from "./informesReportERM";
 import * as informesDian from "./informesDianDb";
+import * as informesGestionCliente from "./informesGestionClienteDb";
 import * as rentaDb from "./rentaDb";
 import { storagePut, storageGetSignedUrl, storageGetBuffer } from "./storage";
 import { invokeLLM } from "./_core/llm";
@@ -1887,6 +1888,28 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
         .input(z.object({ fileKey: z.string() }))
         .query(async ({ input, ctx }) => {
           return { signedUrl: await storageGetSignedUrl(input.fileKey) };
+        }),
+    }),
+    // Informe con destino al cliente — resume, en orden cronológico, todo
+    // lo hecho por su cuenta en un periodo (tareas, vencimientos, revisión,
+    // cargues de libro auxiliar, generación de reportes). Restringido a
+    // administradores porque expone quién revisó/aprobó cada cosa.
+    gestionCliente: router({
+      generar: adminProcedure
+        .input(z.object({ clienteId: z.number(), fechaInicio: z.string(), fechaFin: z.string() }))
+        .mutation(async ({ input }) => {
+          const cliente = await db.getClientById(input.clienteId);
+          if (!cliente) throw new Error("Cliente no encontrado");
+          const fechaInicio = new Date(input.fechaInicio);
+          const fechaFin = new Date(input.fechaFin);
+          const actividades = await informesGestionCliente.getActividadesGestionCliente(input.clienteId, fechaInicio, fechaFin);
+          const buffer = await informesGestionCliente.generarInformeGestionCliente(
+            cliente.razonSocial, cliente.nit, fechaInicio, fechaFin, actividades,
+          );
+          const key = `informes/GestionCliente_${input.clienteId}_${Date.now()}.pdf`;
+          const { url, key: fileKey } = await storagePut(key, buffer, "application/pdf");
+          const signedUrl = await storageGetSignedUrl(fileKey);
+          return { url, signedUrl, fileKey, totalActividades: actividades.length };
         }),
     }),
     dian: router({

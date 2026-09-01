@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { useAuth } from "@/_core/hooks/useAuth";
 import DashboardLayout from "@/components/DashboardLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -10,7 +11,7 @@ import { trpc } from "@/lib/trpc";
 import {
   Upload, FileSpreadsheet, Loader2, Download, CheckCircle2, XCircle, Clock, Plus,
   Sparkles, LineChart, Landmark, Banknote, Receipt, Construction,
-  BookOpen, Pencil, Check, X, Search, Wrench,
+  BookOpen, Pencil, Check, X, Search, Wrench, FileBarChart,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -26,6 +27,7 @@ const estadoBadge: Record<string, { label: string; className: string; icon: any 
 };
 
 export default function Informes() {
+  const { user } = useAuth();
   const now = new Date();
   const [clienteId, setClienteId] = useState<number | null>(null);
   const [anio, setAnio] = useState(now.getFullYear());
@@ -234,6 +236,9 @@ export default function Informes() {
               <TabsTrigger value="dian" className="gap-1.5"><Landmark className="w-3.5 h-3.5" /> Comparación DIAN</TabsTrigger>
               <TabsTrigger value="bancaria" className="gap-1.5"><Banknote className="w-3.5 h-3.5" /> Conciliación Bancaria</TabsTrigger>
               <TabsTrigger value="impuestos" className="gap-1.5"><Receipt className="w-3.5 h-3.5" /> Apoyo Impuestos</TabsTrigger>
+              {user?.role === "admin" && (
+                <TabsTrigger value="gestionCliente" className="gap-1.5"><FileBarChart className="w-3.5 h-3.5" /> Gestión Cliente</TabsTrigger>
+              )}
             </TabsList>
 
             <TabsContent value="resultados" className="space-y-6 mt-4">
@@ -488,6 +493,11 @@ export default function Informes() {
                 descripcion="Consumo, IVA y retención — herramientas de apoyo para la liquidación y revisión de estos impuestos."
               />
             </TabsContent>
+            {user?.role === "admin" && (
+              <TabsContent value="gestionCliente" className="mt-4">
+                <GestionClienteTab clienteId={clienteId as number} anio={anio} mes={mes} />
+              </TabsContent>
+            )}
           </Tabs>
         )}
       </div>
@@ -682,6 +692,52 @@ function CatalogoClienteCard({ clienteId }: { clienteId: number }) {
   );
 }
 
+
+/** Informe con destino al cliente — resume, en orden cronológico, todo lo
+ * hecho por su cuenta durante el mes seleccionado (tareas, vencimientos,
+ * revisión, cargues de libro auxiliar, generación de reportes contables).
+ * Solo visible para administradores (ver TabsTrigger condicional arriba). */
+function GestionClienteTab({ clienteId, anio, mes }: { clienteId: number; anio: number; mes: number }) {
+  const generarMutation = trpc.informes.gestionCliente.generar.useMutation({
+    onSuccess: (data) => {
+      toast.success(
+        data.totalActividades > 0
+          ? `Informe generado — ${data.totalActividades} actividad(es) encontradas`
+          : "Informe generado — no se encontraron actividades en el periodo",
+      );
+      window.open(data.signedUrl, "_blank");
+    },
+    onError: (err) => toast.error(err.message || "No se pudo generar el informe"),
+  });
+
+  const handleGenerar = () => {
+    const fechaInicio = new Date(anio, mes - 1, 1);
+    const fechaFin = new Date(anio, mes, 0, 23, 59, 59);
+    generarMutation.mutate({ clienteId, fechaInicio: fechaInicio.toISOString(), fechaFin: fechaFin.toISOString() });
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base flex items-center gap-2">
+          <FileBarChart className="w-4 h-4" /> Informe de Gestión al Cliente
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <p className="text-sm text-muted-foreground">
+          Genera un informe en PDF, con destino al cliente, que resume todas las tareas, vencimientos
+          tributarios, revisiones, cargues de libro auxiliar, y generación de reportes contables realizados
+          para <strong>{MESES[mes - 1]} {anio}</strong> — el mes seleccionado arriba. Incluye la fecha, el
+          detalle, y el responsable de cada actividad.
+        </p>
+        <Button onClick={handleGenerar} disabled={generarMutation.isPending} className="gap-2">
+          {generarMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+          Generar informe de {MESES[mes - 1]} {anio}
+        </Button>
+      </CardContent>
+    </Card>
+  );
+}
 
 /** Compara el archivo de reporte de documentos de la DIAN contra el libro
  * auxiliar del mismo mes. Cruza primero por número de documento (facturas
