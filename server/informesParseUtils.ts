@@ -137,19 +137,25 @@ async function resolverColumnasConIA(headerRaw: any[], muestras: any[][]): Promi
     .map((fila, i) => `Fila ${i}: ${Array.from(fila, v => (v === null || v === undefined ? "" : String(v))).join(" | ")}`)
     .join("\n");
 
-  try {
-    const response = await invokeLLM({
-      messages: [
-        {
-          role: "system",
-          content: `Eres un experto en libros auxiliares contables colombianos. Dado el encabezado de un Excel (con el índice de cada columna) y unas filas de muestra, identifica el ÍNDICE de columna (número) para cada campo. Responde ÚNICAMENTE un JSON con esta forma exacta, sin texto adicional ni markdown:
+  // La llamada al servicio de IA queda FUERA del try — si falla (créditos
+  // agotados, servicio saturado, etc.), ese error debe llegar tal cual al
+  // usuario, no confundirse con "el archivo no se pudo leer". Solo el
+  // procesamiento de la RESPUESTA (JSON mal formado, campos inesperados)
+  // cae en el respaldo silencioso del heurístico — eso sí es un problema
+  // del archivo, no del servicio.
+  const response = await invokeLLM({
+    messages: [
+      {
+        role: "system",
+        content: `Eres un experto en libros auxiliares contables colombianos. Dado el encabezado de un Excel (con el índice de cada columna) y unas filas de muestra, identifica el ÍNDICE de columna (número) para cada campo. Responde ÚNICAMENTE un JSON con esta forma exacta, sin texto adicional ni markdown:
 {"fecha": <indice o null>, "anioCol": <indice o null>, "mesCol": <indice o null>, "cuenta": <indice>, "debito": <indice>, "credito": <indice>, "centroCosto": <indice o null>, "anulado": <indice o null>, "nombreCuenta": <indice o null>}
 "cuenta" es la columna con el CÓDIGO contable/PUC (numérico, ej. "11050501"). "nombreCuenta" es una columna SEPARADA con el nombre/descripción de esa cuenta (ej. "Caja general"), si el archivo la trae — si no existe, déjala en null; NUNCA la confundas con "cuenta". "fecha" es una columna de fecha combinada (día+mes+año en una celda); si en cambio el año y el mes vienen en columnas separadas, deja "fecha" en null y usa "anioCol"/"mesCol". "cuenta", "debito" y "credito" son obligatorios; si no logras identificar alguno de esos tres, responde {"error": "razón breve"}.`,
-        },
-        { role: "user", content: `Encabezados (índice: nombre):\n${headers}\n\nMuestra de filas:\n${filasTexto}` },
-      ],
-    });
+      },
+      { role: "user", content: `Encabezados (índice: nombre):\n${headers}\n\nMuestra de filas:\n${filasTexto}` },
+    ],
+  });
 
+  try {
     const raw = response.choices?.[0]?.message?.content || "{}";
     const jsonStr = raw.includes("```") ? (raw.match(/```(?:json)?\s*([\s\S]*?)```/)?.[1] ?? raw) : raw;
     const parsed = JSON.parse(jsonStr);
@@ -190,11 +196,22 @@ export async function resolverColumnasRobusto(headerRaw: any[], muestras: any[][
   const confiable = heuristico && pareceColumnaDeCodigos(muestras, heuristico.cuenta);
   if (heuristico && confiable) return heuristico;
 
-  const porIA = await resolverColumnasConIA(headerRaw, muestras);
+  // Si la IA falla por un problema de SERVICIO (créditos agotados,
+  // saturado, etc.), no se pierde la posibilidad de usar el heurístico
+  // como respaldo — pero si tampoco hay heurístico disponible, ese
+  // motivo real es mucho más útil que el mensaje genérico de "no se
+  // pudieron identificar las columnas".
+  let errorServicioIA: Error | null = null;
+  let porIA: ColumnasResueltas | null = null;
+  try {
+    porIA = await resolverColumnasConIA(headerRaw, muestras);
+  } catch (e: any) {
+    errorServicioIA = e;
+  }
   if (porIA) return porIA;
 
   if (heuristico) return heuristico; // sin confirmación de IA, pero es lo mejor que hay
-  throw errorHeuristico || new Error("No se pudieron identificar las columnas del archivo.");
+  throw errorServicioIA || errorHeuristico || new Error("No se pudieron identificar las columnas del archivo.");
 }
 
 /** Resuelve las columnas de un archivo de CATÁLOGO de cuentas (plan de

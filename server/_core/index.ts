@@ -103,7 +103,7 @@ async function startServer() {
           await informesDb.actualizarCatalogoDesdeArchivo(clienteId, nombresDeCuenta);
         }
 
-        let clasificacionIA: { exito: boolean; clasificadas: number } = { exito: true, clasificadas: 0 };
+        let clasificacionIA: { exito: boolean; clasificadas: number; motivo?: string } = { exito: true, clasificadas: 0 };
         if (cuentasNuevas.size > 0) {
           clasificacionIA = await informesDb.clasificarCuentasNuevas(Array.from(cuentasNuevas));
         }
@@ -152,6 +152,7 @@ async function startServer() {
           cuentasNuevas: Array.from(cuentasNuevas),
           cuentasNuevasClasificadas: clasificacionIA.clasificadas,
           clasificacionExitosa: clasificacionIA.exito,
+          clasificacionMotivo: clasificacionIA.motivo || null,
         });
       } catch (error: any) {
         console.error("[Informes] Error al procesar carga:", String(error?.message || error).slice(0, 500));

@@ -133,6 +133,8 @@ export default function Informes() {
         if (data.cuentasNuevas?.length) {
           if (data.clasificacionExitosa) {
             toast.info(`${data.cuentasNuevas.length} cuenta(s) nueva(s) clasificada(s) por IA`);
+          } else if (data.clasificacionMotivo) {
+            toast.warning(`${data.cuentasNuevas.length} cuenta(s) nueva(s) encontradas, pero no se pudieron clasificar: ${data.clasificacionMotivo} Puedes reintentarlo abajo en "Cuentas sin nombre".`);
           } else {
             toast.warning(`${data.cuentasNuevas.length} cuenta(s) nueva(s) encontradas, pero la clasificación por IA falló — puedes reintentarla abajo en "Cuentas sin nombre".`);
           }

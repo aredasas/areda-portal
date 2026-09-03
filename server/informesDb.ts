@@ -346,21 +346,26 @@ function tipoDeCuenta(cuenta: string): "ingreso" | "costo" | "gasto" | "descuent
  * Anthropic ya usado para el RUT) una descripción PUC colombiana estándar, y
  * guarda el resultado para no volver a preguntar. Compartido entre clientes:
  * el PUC es un estándar nacional, no depende de quién lo cargó. */
-export async function clasificarCuentasNuevas(cuentasNuevas: string[]): Promise<{ exito: boolean; clasificadas: number }> {
+export async function clasificarCuentasNuevas(cuentasNuevas: string[]): Promise<{ exito: boolean; clasificadas: number; motivo?: string }> {
   const db = await getDb();
   if (!db || cuentasNuevas.length === 0) return { exito: true, clasificadas: 0 };
 
-  const response = await invokeLLM({
-    messages: [
-      {
-        role: "system",
-        content: `Eres un experto en el Plan Único de Cuentas (PUC) colombiano. Dado un listado de códigos de cuenta contable (pueden venir a distintos niveles de detalle, 4 a 10+ dígitos), responde ÚNICAMENTE un JSON con un array de objetos {"cuenta": "xxxxxx", "descripcion": "nombre estándar de la cuenta PUC"}. Si no reconoces el código exacto, da la mejor descripción genérica según el grupo/cuenta PUC (primeros dígitos). Responde solo JSON, sin texto adicional ni markdown.`,
-      },
-      { role: "user", content: `Cuentas: ${cuentasNuevas.join(", ")}` },
-    ],
-  });
-
+  // La llamada a la IA queda DENTRO del try — si el servicio falla
+  // (créditos agotados, saturado, etc.), esto es solo un detalle
+  // cosmético (el nombre de una cuenta nueva) que no debe cancelar la
+  // subida completa del libro auxiliar; se guarda sin descripción y
+  // queda disponible para reintentar después desde "Cuentas sin nombre".
   try {
+    const response = await invokeLLM({
+      messages: [
+        {
+          role: "system",
+          content: `Eres un experto en el Plan Único de Cuentas (PUC) colombiano. Dado un listado de códigos de cuenta contable (pueden venir a distintos niveles de detalle, 4 a 10+ dígitos), responde ÚNICAMENTE un JSON con un array de objetos {"cuenta": "xxxxxx", "descripcion": "nombre estándar de la cuenta PUC"}. Si no reconoces el código exacto, da la mejor descripción genérica según el grupo/cuenta PUC (primeros dígitos). Responde solo JSON, sin texto adicional ni markdown.`,
+        },
+        { role: "user", content: `Cuentas: ${cuentasNuevas.join(", ")}` },
+      ],
+    });
+
     const raw = response.choices?.[0]?.message?.content || "[]";
     const jsonStr = raw.includes("```") ? (raw.match(/```(?:json)?\s*([\s\S]*?)```/)?.[1] ?? raw) : raw;
     const parsed: { cuenta: string; descripcion: string }[] = JSON.parse(jsonStr);
@@ -374,15 +379,16 @@ export async function clasificarCuentasNuevas(cuentasNuevas: string[]): Promise<
         .onDuplicateKeyUpdate({ set: { descripcion: found?.descripcion || null } });
     }
     return { exito: true, clasificadas };
-  } catch (error) {
-    console.error("[Informes] Clasificación IA de cuentas falló:", String((error as any)?.message || error).slice(0, 500));
+  } catch (error: any) {
+    const mensaje = String(error?.message || error).slice(0, 500);
+    console.error("[Informes] Clasificación IA de cuentas falló:", mensaje);
     // Aun sin descripción, se guarda el tipo (derivado del código) para no reintentar en cada carga.
     for (const cuenta of cuentasNuevas) {
       await db.insert(informesCuentasPuc)
         .values({ cuenta, descripcion: null, tipo: tipoDeCuenta(cuenta), clasificadoPorIA: false })
         .onDuplicateKeyUpdate({ set: {} });
     }
-    return { exito: false, clasificadas: 0 };
+    return { exito: false, clasificadas: 0, motivo: mensaje };
   }
 }
 

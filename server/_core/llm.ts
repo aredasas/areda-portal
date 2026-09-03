@@ -170,7 +170,21 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
 
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error(`LLM invoke failed: ${response.status} ${response.statusText} – ${errorText}`);
+    // El texto crudo de la API (JSON técnico en inglés) queda en el log del
+    // servidor para diagnóstico, pero el usuario del portal necesita un
+    // mensaje que entienda y sepa qué hacer — sobre todo el de créditos
+    // agotados, que sin esto se veía como un JSON críptico tanto en el
+    // asistente IA como al subir un libro auxiliar (ambos usan invokeLLM).
+    console.error(`LLM invoke failed: ${response.status} ${response.statusText} – ${errorText}`);
+    let mensaje = "No se pudo completar la solicitud de IA. Intenta de nuevo en unos minutos.";
+    if (errorText.includes("credit balance is too low")) {
+      mensaje = "Los créditos de la cuenta de IA se agotaron — por favor consulta con tu administrador para recargarlos.";
+    } else if (response.status === 429) {
+      mensaje = "El servicio de IA está temporalmente saturado — intenta de nuevo en unos minutos.";
+    } else if (response.status >= 500) {
+      mensaje = "El servicio de IA no está disponible en este momento — intenta de nuevo en unos minutos.";
+    }
+    throw new Error(mensaje);
   }
 
   const data = (await response.json()) as {
