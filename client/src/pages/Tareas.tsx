@@ -14,7 +14,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { trpc } from "@/lib/trpc";
 import { getEffectivePriority, priorityLabels, priorityColors } from "@/lib/priority";
-import { ClipboardList, Plus, Loader2, Calendar, Upload, CheckCircle2, RotateCcw, Paperclip, FileText, Eye, FolderOpen, XCircle, X, Repeat } from "lucide-react";
+import { ClipboardList, Plus, Loader2, Calendar, Upload, CheckCircle2, RotateCcw, Paperclip, FileText, Eye, FolderOpen, XCircle, X, Repeat, Search } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
 import { toast } from "sonner";
 
@@ -52,6 +52,9 @@ export default function Tareas() {
   const [showRecurringDialog, setShowRecurringDialog] = useState(false);
   const [editingTask, setEditingTask] = useState<any>(null);
   const [activeTab, setActiveTab] = useState("todas");
+  const [filtroClienteId, setFiltroClienteId] = useState<string>("todos");
+  const [filtroColaboradorId, setFiltroColaboradorId] = useState<string>("todos");
+  const [filtroTexto, setFiltroTexto] = useState("");
   const [showCompleteDialog, setShowCompleteDialog] = useState(false);
   const [completingTaskId, setCompletingTaskId] = useState<number | null>(null);
   const [completionNotes, setCompletionNotes] = useState("");
@@ -279,14 +282,28 @@ export default function Tareas() {
     }
   };
 
-  const filteredTasks = tasks
-    ?.filter((t: any) => {
-      if (activeTab === "todas") return true;
-      return t.status === activeTab;
-    })
+  const quitarTildes = (s: string) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  const filtroTextoNormalizado = quitarTildes(filtroTexto.trim().toLowerCase());
+  const pasaFiltrosBase = (t: any) => {
+    if (filtroClienteId !== "todos" && String(t.clientId) !== filtroClienteId) return false;
+    if (filtroColaboradorId !== "todos" && String(t.assignedToId) !== filtroColaboradorId) return false;
+    if (filtroTextoNormalizado) {
+      const enTexto = [t.title, t.description, t.completionNotes, t.clientName, t.assignedToName]
+        .filter(Boolean)
+        .some((campo: string) => quitarTildes(campo.toLowerCase()).includes(filtroTextoNormalizado));
+      if (!enTexto) return false;
+    }
+    return true;
+  };
+  const tasksFiltradosBase = tasks?.filter(pasaFiltrosBase);
+  const filteredTasks = tasksFiltradosBase
+    ?.filter((t: any) => activeTab === "todas" || t.status === activeTab)
     // Approved tasks sink to the bottom — once reviewed, they're done business,
     // so unreviewed/active work stays easier to spot at a glance.
     .sort((a: any, b: any) => (a.reviewedAt ? 1 : 0) - (b.reviewedAt ? 1 : 0));
+
+  const hayFiltrosActivos = filtroClienteId !== "todos" || filtroColaboradorId !== "todos" || filtroTextoNormalizado !== "";
+  const limpiarFiltros = () => { setFiltroClienteId("todos"); setFiltroColaboradorId("todos"); setFiltroTexto(""); };
 
   return (
     <DashboardLayout>
@@ -308,14 +325,58 @@ export default function Tareas() {
         </div>
       </div>
 
+      <div className="flex flex-wrap items-end gap-3">
+        <div className="space-y-1">
+          <Label className="text-xs">Cliente</Label>
+          <Select value={filtroClienteId} onValueChange={setFiltroClienteId}>
+            <SelectTrigger className="w-48"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="todos">Todos los clientes</SelectItem>
+              {clients?.map((c: any) => (
+                <SelectItem key={c.id} value={String(c.id)}>{c.razonSocial}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-1">
+          <Label className="text-xs">Colaborador</Label>
+          <Select value={filtroColaboradorId} onValueChange={setFiltroColaboradorId}>
+            <SelectTrigger className="w-48"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="todos">Todos los colaboradores</SelectItem>
+              {users?.map((u: any) => (
+                <SelectItem key={u.id} value={String(u.id)}>{u.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-1 flex-1 min-w-[220px]">
+          <Label className="text-xs">Buscar</Label>
+          <div className="relative">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder="Buscar por palabra en título, descripción, notas..."
+              value={filtroTexto}
+              onChange={(e) => setFiltroTexto(e.target.value)}
+              className="pl-8"
+            />
+          </div>
+        </div>
+        {hayFiltrosActivos && (
+          <Button variant="ghost" size="sm" onClick={limpiarFiltros} className="gap-1.5 text-muted-foreground">
+            <X className="h-3.5 w-3.5" /> Limpiar filtros
+          </Button>
+        )}
+      </div>
+
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList>
-          <TabsTrigger value="todas">Todas ({tasks?.length || 0})</TabsTrigger>
-          <TabsTrigger value="pendiente">Pendientes ({tasks?.filter((t: any) => t.status === "pendiente").length || 0})</TabsTrigger>
-          <TabsTrigger value="en_progreso">En Progreso ({tasks?.filter((t: any) => t.status === "en_progreso").length || 0})</TabsTrigger>
-          <TabsTrigger value="completada">Completadas ({tasks?.filter((t: any) => t.status === "completada").length || 0})</TabsTrigger>
-          <TabsTrigger value="vencida">Vencidas ({tasks?.filter((t: any) => t.status === "vencida").length || 0})</TabsTrigger>
-          <TabsTrigger value="cancelada">Canceladas ({tasks?.filter((t: any) => t.status === "cancelada").length || 0})</TabsTrigger>
+          <TabsTrigger value="todas">Todas ({tasksFiltradosBase?.length || 0})</TabsTrigger>
+          <TabsTrigger value="pendiente">Pendientes ({tasksFiltradosBase?.filter((t: any) => t.status === "pendiente").length || 0})</TabsTrigger>
+          <TabsTrigger value="en_progreso">En Progreso ({tasksFiltradosBase?.filter((t: any) => t.status === "en_progreso").length || 0})</TabsTrigger>
+          <TabsTrigger value="completada">Completadas ({tasksFiltradosBase?.filter((t: any) => t.status === "completada").length || 0})</TabsTrigger>
+          <TabsTrigger value="vencida">Vencidas ({tasksFiltradosBase?.filter((t: any) => t.status === "vencida").length || 0})</TabsTrigger>
+          <TabsTrigger value="cancelada">Canceladas ({tasksFiltradosBase?.filter((t: any) => t.status === "cancelada").length || 0})</TabsTrigger>
         </TabsList>
 
         <TabsContent value={activeTab} className="mt-4">
