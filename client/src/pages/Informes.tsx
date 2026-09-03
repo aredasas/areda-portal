@@ -10,7 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { trpc } from "@/lib/trpc";
 import {
-  Upload, FileSpreadsheet, Loader2, Download, CheckCircle2, XCircle, Clock, Plus,
+  Upload, FileSpreadsheet, Loader2, Download, CheckCircle2, XCircle, AlertCircle, Clock, Plus,
   Sparkles, LineChart, Landmark, Banknote, Receipt, Construction,
   BookOpen, Pencil, Check, X, Search, Wrench, FileBarChart,
 } from "lucide-react";
@@ -487,11 +487,12 @@ export default function Informes() {
                 descripcion="Se sube el extracto bancario y los movimientos de la pasarela de pagos, y se comparan contra el mes de contabilidad."
               />
             </TabsContent>
-            <TabsContent value="impuestos" className="mt-4">
+            <TabsContent value="impuestos" className="mt-4 space-y-4">
+              <IvaTab clienteId={clienteId as number} anio={anio} />
               <ProximamenteCard
                 icono={Receipt}
-                titulo="Apoyo de impuestos"
-                descripcion="Consumo, IVA y retención — herramientas de apoyo para la liquidación y revisión de estos impuestos."
+                titulo="Consumo y Retención"
+                descripcion="Herramientas de apoyo para la liquidación y revisión de estos impuestos."
               />
             </TabsContent>
             {user?.role === "admin" && (
@@ -503,6 +504,137 @@ export default function Informes() {
         )}
       </div>
     </DashboardLayout>
+  );
+}
+
+const PERIODOS_IVA_FRONTEND: Record<string, { codigo: number; nombre: string }[]> = {
+  bimestral: [
+    { codigo: 1, nombre: "01 · Enero - Febrero" }, { codigo: 2, nombre: "02 · Marzo - Abril" },
+    { codigo: 3, nombre: "03 · Mayo - Junio" }, { codigo: 4, nombre: "04 · Julio - Agosto" },
+    { codigo: 5, nombre: "05 · Septiembre - Octubre" }, { codigo: 6, nombre: "06 · Noviembre - Diciembre" },
+  ],
+  cuatrimestral: [
+    { codigo: 1, nombre: "01 · Enero - Abril" }, { codigo: 2, nombre: "02 · Mayo - Agosto" },
+    { codigo: 3, nombre: "03 · Septiembre - Diciembre" },
+  ],
+  anual: [{ codigo: 1, nombre: "01 · Enero - Diciembre (Régimen Simple)" }],
+};
+
+/** Conciliación de IVA (Formulario 300 DIAN) — primer paso: elegir el
+ * periodo (bimestral/cuatrimestral/anual) y verificar que cada mes que lo
+ * compone ya tenga libro auxiliar cargado y comparación DIAN generada,
+ * antes de poder avanzar a clasificar ingresos, IVA generado, compras,
+ * etc. (próximas entregas). */
+function IvaTab({ clienteId, anio }: { clienteId: number; anio: number }) {
+  const [periodicidad, setPeriodicidad] = useState<"bimestral" | "cuatrimestral" | "anual">("bimestral");
+  const [periodo, setPeriodo] = useState(1);
+  const [verificando, setVerificando] = useState(false);
+
+  const verificarQuery = trpc.informes.iva.verificarPeriodo.useQuery(
+    { clienteId, anio, periodicidad, periodo },
+    { enabled: verificando },
+  );
+  const conciliacionQuery = trpc.informes.iva.obtener.useQuery(
+    { clienteId, anio, periodicidad, periodo },
+    { enabled: verificando && !!verificarQuery.data?.todoListo },
+  );
+  const iniciarMutation = trpc.informes.iva.iniciar.useMutation({
+    onSuccess: () => { toast.success("Conciliación de IVA iniciada"); conciliacionQuery.refetch(); },
+    onError: (err) => toast.error(err.message || "No se pudo iniciar"),
+  });
+
+  const handlePeriodicidad = (nueva: "bimestral" | "cuatrimestral" | "anual") => {
+    setPeriodicidad(nueva);
+    setPeriodo(1);
+    setVerificando(false);
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base flex items-center gap-2"><Receipt className="w-4 h-4" /> IVA — Conciliación (Formulario 300)</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <p className="text-sm text-muted-foreground">
+          Basado en el Estatuto Tributario y el Decreto 1625 de 2016. Antes de conciliar, hace falta
+          tener el libro auxiliar cargado y la comparación DIAN generada de cada mes del periodo —
+          ahí está la información base para clasificar ingresos, IVA generado, compras, y descontable.
+        </p>
+
+        <div className="flex flex-wrap items-end gap-3">
+          <div className="space-y-1">
+            <Label className="text-xs">Periodicidad</Label>
+            <Select value={periodicidad} onValueChange={(v) => handlePeriodicidad(v as any)}>
+              <SelectTrigger className="w-44"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="bimestral">Bimestral</SelectItem>
+                <SelectItem value="cuatrimestral">Cuatrimestral</SelectItem>
+                <SelectItem value="anual">Anual (Régimen Simple)</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">Periodo — {anio}</Label>
+            <Select value={String(periodo)} onValueChange={(v) => { setPeriodo(Number(v)); setVerificando(false); }}>
+              <SelectTrigger className="w-64"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {PERIODOS_IVA_FRONTEND[periodicidad].map((p) => (
+                  <SelectItem key={p.codigo} value={String(p.codigo)}>{p.nombre}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <Button size="sm" variant="outline" onClick={() => setVerificando(true)} disabled={verificarQuery.isFetching}>
+            {verificarQuery.isFetching ? <Loader2 className="w-4 h-4 animate-spin" /> : "Verificar periodo"}
+          </Button>
+        </div>
+
+        {verificando && verificarQuery.data && (
+          <div className="border rounded-md p-3 space-y-2">
+            <p className="text-xs font-medium text-muted-foreground">
+              Meses del periodo — libro auxiliar y comparación DIAN
+            </p>
+            {verificarQuery.data.meses.map((m: any) => (
+              <div key={m.mes} className="flex items-center justify-between text-sm border-b py-1.5 last:border-b-0">
+                <span>{m.nombreMes} {anio}</span>
+                <div className="flex items-center gap-3">
+                  <span className={`flex items-center gap-1 text-xs ${m.tieneLibroAuxiliar ? "text-green-700" : "text-red-600"}`}>
+                    {m.tieneLibroAuxiliar ? <CheckCircle2 className="w-3.5 h-3.5" /> : <XCircle className="w-3.5 h-3.5" />}
+                    Libro auxiliar
+                  </span>
+                  <span className={`flex items-center gap-1 text-xs ${m.tieneComparacionDian ? "text-green-700" : "text-red-600"}`}>
+                    {m.tieneComparacionDian ? <CheckCircle2 className="w-3.5 h-3.5" /> : <XCircle className="w-3.5 h-3.5" />}
+                    Comparación DIAN
+                  </span>
+                </div>
+              </div>
+            ))}
+            {!verificarQuery.data.todoListo ? (
+              <p className="text-xs text-amber-700 flex items-center gap-1.5 pt-1">
+                <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                Faltan meses por completar — ve a la pestaña "Estado de Resultados" para cargar el libro
+                auxiliar, y a "Comparación DIAN" para generar la comparación de esos meses, antes de
+                continuar.
+              </p>
+            ) : conciliacionQuery.data ? (
+              <p className="text-xs text-green-700 flex items-center gap-1.5 pt-1">
+                <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                Conciliación iniciada (expediente #{conciliacionQuery.data.id}) — los siguientes pasos
+                (clasificación de ingresos, IVA generado, compras, IVA descontable, IVA transitorio y
+                proporcionalidad) se habilitan en próximas entregas.
+              </p>
+            ) : (
+              <div className="pt-1">
+                <Button size="sm" onClick={() => iniciarMutation.mutate({ clienteId, anio, periodicidad, periodo })} disabled={iniciarMutation.isPending}>
+                  {iniciarMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+                  Iniciar conciliación de este periodo
+                </Button>
+              </div>
+            )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

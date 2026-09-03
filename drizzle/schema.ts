@@ -553,6 +553,28 @@ export const informesReportes = mysqlTable("informesReportes", {
 export type InformeReporte = typeof informesReportes.$inferSelect;
 export type InsertInformeReporte = typeof informesReportes.$inferInsert;
 
+/** Expediente de trabajo de la conciliación de IVA de un cliente para un
+ * periodo (bimestral/cuatrimestral/anual) — se va llenando paso a paso:
+ * clasificación de ingresos por tarifa, IVA generado, compras, IVA
+ * descontable, IVA transitorio, y la proporcionalidad del Art. 490 E.T.
+ * Cada paso se guarda como JSON libre en `estadoJson` a medida que el
+ * usuario confirma esa parte — así puede salir y retomar donde quedó. */
+export const informesIvaConciliacion = mysqlTable("informesIvaConciliacion", {
+  id: int("id").autoincrement().primaryKey(),
+  clienteId: int("clienteId").notNull(),
+  anio: int("anio").notNull(),
+  periodicidad: mysqlEnum("periodicidad", ["bimestral", "cuatrimestral", "anual"]).notNull(),
+  periodo: int("periodo").notNull(), // código del periodo: 1-6 bimestral, 1-3 cuatrimestral, 1 anual
+  estadoJson: text("estadoJson"),
+  actualizadoPorId: int("actualizadoPorId").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (table) => ({
+  clientePeriodoIdx: uniqueIndex("informesIvaConciliacion_cliente_periodo_idx").on(table.clienteId, table.anio, table.periodicidad, table.periodo),
+}));
+export type InformeIvaConciliacion = typeof informesIvaConciliacion.$inferSelect;
+export type InsertInformeIvaConciliacion = typeof informesIvaConciliacion.$inferInsert;
+
 /**
  * ============================================================
  * TABLERO — mensajes generales para todo el equipo (no atados a una

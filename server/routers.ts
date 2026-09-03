@@ -87,6 +87,7 @@ import { generarReporteERI } from "./informesReportERI";
 import { generarReporteERM } from "./informesReportERM";
 import * as informesDian from "./informesDianDb";
 import * as informesGestionCliente from "./informesGestionClienteDb";
+import * as informesIva from "./informesIvaDb";
 import * as rentaDb from "./rentaDb";
 import { storagePut, storageGetSignedUrl, storageGetBuffer } from "./storage";
 import { invokeLLM } from "./_core/llm";
@@ -1910,6 +1911,45 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           const { url, key: fileKey } = await storagePut(key, buffer, "application/pdf");
           const signedUrl = await storageGetSignedUrl(fileKey);
           return { url, signedUrl, fileKey, totalActividades: resultado.actividades.length + resultado.otras.length };
+        }),
+    }),
+    // Conciliación de IVA (Formulario 300 de la DIAN) — se construye por
+    // pasos: primero se verifica que el periodo tenga libro auxiliar y
+    // comparación DIAN de cada mes, luego se va clasificando ingresos,
+    // IVA generado, compras, IVA descontable, IVA transitorio, y la
+    // proporcionalidad del Art. 490 E.T. (los siguientes pasos se agregan
+    // en próximas entregas).
+    iva: router({
+      verificarPeriodo: protectedProcedure
+        .input(z.object({
+          clienteId: z.number(), anio: z.number(),
+          periodicidad: z.enum(["bimestral", "cuatrimestral", "anual"]), periodo: z.number(),
+        }))
+        .query(async ({ input, ctx }) => {
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
+          return informesIva.verificarPrerequisitosIva(input.clienteId, input.anio, input.periodicidad, input.periodo);
+        }),
+      iniciar: protectedProcedure
+        .input(z.object({
+          clienteId: z.number(), anio: z.number(),
+          periodicidad: z.enum(["bimestral", "cuatrimestral", "anual"]), periodo: z.number(),
+        }))
+        .mutation(async ({ input, ctx }) => {
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
+          const { todoListo } = await informesIva.verificarPrerequisitosIva(input.clienteId, input.anio, input.periodicidad, input.periodo);
+          if (!todoListo) {
+            throw new Error("Todavía faltan meses de este periodo sin libro auxiliar o sin comparación DIAN — complétalos antes de iniciar la conciliación.");
+          }
+          return informesIva.iniciarOConseguirConciliacion(input.clienteId, input.anio, input.periodicidad, input.periodo, ctx.user.id);
+        }),
+      obtener: protectedProcedure
+        .input(z.object({
+          clienteId: z.number(), anio: z.number(),
+          periodicidad: z.enum(["bimestral", "cuatrimestral", "anual"]), periodo: z.number(),
+        }))
+        .query(async ({ input, ctx }) => {
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
+          return informesIva.getConciliacionIva(input.clienteId, input.anio, input.periodicidad, input.periodo) ?? null;
         }),
     }),
     dian: router({
