@@ -272,6 +272,24 @@ export async function parseAuxiliarParaDian(
 
   const header = todasLasFilas[0];
   const cols = resolverColumnasAuxiliarDian(header);
+
+  // La columna de "cuenta" se reconoce por sinónimo (incluye "CUENTA" a
+  // secas, genérico) — si el archivo trae una columna de NOMBRE de cuenta
+  // (texto descriptivo, ej. "Caja general") en vez del CÓDIGO, ese
+  // sinónimo genérico podría coincidir con la columna equivocada. Antes
+  // de confiar en ella para filtrar por cuenta 4/5/14, se valida con una
+  // muestra real: si la mayoría de los valores no lucen como códigos
+  // (puros dígitos), se descarta — mejor no filtrar por cuenta que
+  // excluir TODOS los documentos por error (bug real: causaba "no se
+  // encontró ningún documento válido" con un archivo real de un cliente).
+  if (cols.cuenta !== null) {
+    const muestra = todasLasFilas.slice(1, 51).map(f => f?.[cols.cuenta!]).filter(v => v !== null && v !== undefined && v !== "");
+    const numericos = muestra.filter(v => /^\d+$/.test(String(v).trim())).length;
+    if (muestra.length === 0 || numericos / muestra.length < 0.7) {
+      cols.cuenta = null;
+    }
+  }
+
   const valorPorClaveDoc = new Map<string, number>();
   const filasCrudas: { claveDoc: string; numero: string; tercero: string; nombreTercero: string; tipo: string; fecha: string; valorFila: number; cuenta: string }[] = [];
 
@@ -334,7 +352,6 @@ export async function parseAuxiliarParaDian(
 
   for (const fila of filasCrudas) {
     const categoria = categoriaPorClaveDoc.get(fila.claveDoc)?.categoria ?? null;
-    if (hayColumnaCuenta && categoria === null) continue; // sin cuenta relevante — no es ingreso ni gasto/deducción
     const valorDoc = valorPorClaveDoc.get(fila.claveDoc) || fila.valorFila;
     // La clave final que se expone incluye el número real y el valor del
     // documento (no el tipo, que es solo una ayuda interna de agrupación) —
@@ -347,6 +364,21 @@ export async function parseAuxiliarParaDian(
       });
     }
     documentos.get(claveExpuesta)!.filas++;
+  }
+
+  // El filtro por cuenta relevante (4/5/14/15/16/17) solo se aplica si de
+  // verdad reconoció AL MENOS UN documento en alguna de esas categorías —
+  // si ninguno cayó ahí a pesar de tener columna de cuenta, es más
+  // probable que la columna detectada no sea confiable para este archivo
+  // (aunque pasó la validación de "parecen dígitos") que que TODOS los
+  // movimientos del mes sean ajenos a ingresos y gastos — en ese caso se
+  // usan todos los documentos sin filtrar, para no dejar la comparación
+  // vacía por error.
+  const hayAlgunaCategoriaReconocida = Array.from(documentos.values()).some(d => d.categoria !== null);
+  if (hayColumnaCuenta && hayAlgunaCategoriaReconocida) {
+    for (const [clave, doc] of Array.from(documentos.entries())) {
+      if (doc.categoria === null) documentos.delete(clave);
+    }
   }
   return documentos;
 }
