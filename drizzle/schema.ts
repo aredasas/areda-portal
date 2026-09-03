@@ -406,6 +406,15 @@ export const taskRecurrences = mysqlTable("taskRecurrences", {
   dayOfWeek: int("dayOfWeek"),
   dayOfMonth: int("dayOfMonth"),
   isActive: boolean("isActive").default(true).notNull(),
+  /** Vigencia opcional de la regla — si el mes actual no se solapa con
+   * este rango, la regla no genera ninguna tarea ese mes (pero sigue
+   * existiendo y puede volver a aplicar en un mes posterior dentro del
+   * rango). Null en cualquiera de los dos = sin límite en ese extremo.
+   * Formato "YYYY-MM-DD". Complementa a `isActive` (apagar/prender del
+   * todo) con un control más fino por fechas — ej. una regla que solo
+   * aplica de marzo a agosto de este año. */
+  startDate: varchar("startDate", { length: 10 }),
+  endDate: varchar("endDate", { length: 10 }),
   /** Marks the most recent period a task was generated for, so re-running
    * generation doesn't create duplicates within the same cycle. Format
    * depends on recurrenceType: "2026-W28" (semanal, ISO week), a plain

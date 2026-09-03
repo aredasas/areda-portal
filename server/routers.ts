@@ -1177,6 +1177,8 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
         recurrenceType: z.enum(["semanal", "quincenal", "mensual"]),
         dayOfWeek: z.number().min(0).max(6).optional(),
         dayOfMonth: z.number().min(1).max(31).optional(),
+        startDate: z.string().optional(),
+        endDate: z.string().optional(),
       }))
       .mutation(async ({ input, ctx }) => {
         const id = await db.createTaskRecurrence({
@@ -1189,6 +1191,8 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
           recurrenceType: input.recurrenceType,
           dayOfWeek: input.dayOfWeek ?? null,
           dayOfMonth: input.dayOfMonth ?? null,
+          startDate: input.startDate || null,
+          endDate: input.endDate || null,
         });
         return { id };
       }),
@@ -1196,6 +1200,12 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
       .input(z.object({ id: z.number(), isActive: z.boolean() }))
       .mutation(async ({ input }) => {
         await db.setTaskRecurrenceActive(input.id, input.isActive);
+        return { success: true };
+      }),
+    updateDates: adminProcedure
+      .input(z.object({ id: z.number(), startDate: z.string().optional(), endDate: z.string().optional() }))
+      .mutation(async ({ input }) => {
+        await db.setTaskRecurrenceDates(input.id, input.startDate || null, input.endDate || null);
         return { success: true };
       }),
     delete: adminProcedure

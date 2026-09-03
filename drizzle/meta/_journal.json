@@ -316,6 +316,13 @@
       "when": 1788457481241,
       "tag": "0044_clasificacion_cuentas_iva",
       "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "5",
+      "when": 1788472347687,
+      "tag": "0045_vigencia_recurrentes",
+      "breakpoints": true
     }
   ]
 }

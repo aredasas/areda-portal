@@ -1070,6 +1070,8 @@ export async function getTaskRecurrences() {
     recurrenceType: taskRecurrences.recurrenceType,
     dayOfWeek: taskRecurrences.dayOfWeek,
     dayOfMonth: taskRecurrences.dayOfMonth,
+    startDate: taskRecurrences.startDate,
+    endDate: taskRecurrences.endDate,
     isActive: taskRecurrences.isActive,
     createdAt: taskRecurrences.createdAt,
   })
@@ -1083,6 +1085,12 @@ export async function setTaskRecurrenceActive(id: number, isActive: boolean) {
   const db = await getDb();
   if (!db) return;
   await db.update(taskRecurrences).set({ isActive }).where(eq(taskRecurrences.id, id));
+}
+
+export async function setTaskRecurrenceDates(id: number, startDate: string | null, endDate: string | null) {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(taskRecurrences).set({ startDate, endDate }).where(eq(taskRecurrences.id, id));
 }
 
 export async function deleteTaskRecurrence(id: number) {
@@ -1131,10 +1139,20 @@ export async function generateDueRecurringTasks(): Promise<number> {
   const rules = await db.select().from(taskRecurrences).where(eq(taskRecurrences.isActive, true));
 
   const today = bogotaTodayUTCMidnight();
+  const hoyISO = today.toISOString().slice(0, 10);
 
   let created = 0;
   for (const rule of rules) {
-    const candidates = computeCandidateDueDates(rule, today).filter(d => d.getTime() <= today.getTime());
+    // Vigencia opcional (startDate/endDate) — la regla se salta por
+    // completo si hoy queda fuera de ese rango, aunque esté "activa".
+    if (rule.startDate && hoyISO < rule.startDate) continue;
+    if (rule.endDate && hoyISO > rule.endDate) continue;
+
+    // Las fechas candidatas del ciclo actual se generan de una vez, sin
+    // esperar a que la fecha límite llegue — así el equipo ve la tarea
+    // desde el inicio del mes/quincena/semana y puede ir cargando
+    // anexos y comentarios durante todo el ciclo, no solo el último día.
+    const candidates = computeCandidateDueDates(rule, today);
     for (const dueDate of candidates) {
       const existing = await db.select({ id: tasks.id }).from(tasks)
         .where(and(eq(tasks.recurrenceId, rule.id), eq(tasks.dueDate, dueDate)))

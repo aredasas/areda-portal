@@ -9,7 +9,7 @@ import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Repeat, Plus, Trash2, Loader2, Sparkles } from "lucide-react";
+import { Repeat, Plus, Trash2, Loader2, Sparkles, Calendar } from "lucide-react";
 
 const weekDays = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
 
@@ -26,6 +26,7 @@ export default function RecurringTasksDialog({ open, onOpenChange }: { open: boo
 
   const createRecurrence = trpc.taskRecurrences.create.useMutation();
   const setActive = trpc.taskRecurrences.setActive.useMutation();
+  const updateDates = trpc.taskRecurrences.updateDates.useMutation();
   const deleteRecurrence = trpc.taskRecurrences.delete.useMutation();
   const generate = trpc.taskRecurrences.generate.useMutation();
 
@@ -38,10 +39,16 @@ export default function RecurringTasksDialog({ open, onOpenChange }: { open: boo
   const [recurrenceType, setRecurrenceType] = useState<"semanal" | "quincenal" | "mensual">("mensual");
   const [dayOfWeek, setDayOfWeek] = useState("5");
   const [dayOfMonth, setDayOfMonth] = useState("15");
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+  const [editingDatesId, setEditingDatesId] = useState<number | null>(null);
+  const [editStartDate, setEditStartDate] = useState("");
+  const [editEndDate, setEditEndDate] = useState("");
 
   const resetForm = () => {
     setTitle(""); setDescription(""); setClientId(""); setAssignedToId("");
     setPriority("media"); setRecurrenceType("mensual"); setDayOfWeek("5"); setDayOfMonth("15");
+    setStartDate(""); setEndDate("");
     setShowForm(false);
   };
 
@@ -60,12 +67,31 @@ export default function RecurringTasksDialog({ open, onOpenChange }: { open: boo
         recurrenceType,
         dayOfWeek: recurrenceType === "semanal" ? parseInt(dayOfWeek) : undefined,
         dayOfMonth: recurrenceType === "mensual" ? parseInt(dayOfMonth) : undefined,
+        startDate: startDate || undefined,
+        endDate: endDate || undefined,
       });
       toast.success("Tarea recurrente creada");
       resetForm();
       refetch();
     } catch (error: any) {
       toast.error(error.message || "Error al crear la tarea recurrente");
+    }
+  };
+
+  const handleOpenEditDates = (r: any) => {
+    setEditingDatesId(r.id);
+    setEditStartDate(r.startDate || "");
+    setEditEndDate(r.endDate || "");
+  };
+
+  const handleSaveDates = async (id: number) => {
+    try {
+      await updateDates.mutateAsync({ id, startDate: editStartDate || undefined, endDate: editEndDate || undefined });
+      toast.success("Vigencia actualizada");
+      setEditingDatesId(null);
+      refetch();
+    } catch (error: any) {
+      toast.error(error.message || "Error al actualizar la vigencia");
     }
   };
 
@@ -200,6 +226,21 @@ export default function RecurringTasksDialog({ open, onOpenChange }: { open: boo
               </div>
             )}
 
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label>Empieza el (opcional)</Label>
+                <Input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+              </div>
+              <div>
+                <Label>Se suspende el (opcional)</Label>
+                <Input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Deja ambas vacías para que la regla no tenga fecha límite. Si el mes actual no cae dentro de
+              este rango, no se genera ninguna tarea ese mes.
+            </p>
+
             <div className="flex gap-2 justify-end">
               <Button variant="outline" onClick={resetForm}>Cancelar</Button>
               <Button onClick={handleCreate} disabled={createRecurrence.isPending} className="bg-[#EDA011] hover:bg-[#d48f0f] text-white">
@@ -212,20 +253,48 @@ export default function RecurringTasksDialog({ open, onOpenChange }: { open: boo
         <div className="space-y-2">
           {recurrences && recurrences.length > 0 ? (
             recurrences.map((r: any) => (
-              <div key={r.id} className="flex items-center justify-between p-3 border rounded-lg">
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium truncate">{r.title}</p>
-                  <p className="text-xs text-muted-foreground truncate">{r.clientName} {r.assignedToName ? `— ${r.assignedToName}` : ""}</p>
-                  <Badge variant="outline" className="mt-1 text-[10px] bg-purple-50 text-purple-700 border-purple-200">
-                    {scheduleLabel(r)}
-                  </Badge>
+              <div key={r.id} className="p-3 border rounded-lg space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium truncate">{r.title}</p>
+                    <p className="text-xs text-muted-foreground truncate">{r.clientName} {r.assignedToName ? `— ${r.assignedToName}` : ""}</p>
+                    <div className="flex flex-wrap gap-1.5 mt-1">
+                      <Badge variant="outline" className="text-[10px] bg-purple-50 text-purple-700 border-purple-200">
+                        {scheduleLabel(r)}
+                      </Badge>
+                      {(r.startDate || r.endDate) && (
+                        <Badge variant="outline" className="text-[10px] bg-blue-50 text-blue-700 border-blue-200">
+                          Vigente {r.startDate ? `desde ${r.startDate}` : ""}{r.startDate && r.endDate ? " " : ""}{r.endDate ? `hasta ${r.endDate}` : ""}
+                        </Badge>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0 ml-2">
+                    <Switch checked={r.isActive} onCheckedChange={() => handleToggleActive(r)} />
+                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleOpenEditDates(r)} title="Editar vigencia">
+                      <Calendar className="h-4 w-4" />
+                    </Button>
+                    <Button variant="ghost" size="icon" className="h-8 w-8 text-red-600" onClick={() => handleDelete(r.id)}>
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
                 </div>
-                <div className="flex items-center gap-2 shrink-0 ml-2">
-                  <Switch checked={r.isActive} onCheckedChange={() => handleToggleActive(r)} />
-                  <Button variant="ghost" size="icon" className="h-8 w-8 text-red-600" onClick={() => handleDelete(r.id)}>
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                </div>
+                {editingDatesId === r.id && (
+                  <div className="border-t pt-2 flex flex-wrap items-end gap-2">
+                    <div>
+                      <Label className="text-xs">Empieza el</Label>
+                      <Input type="date" value={editStartDate} onChange={(e) => setEditStartDate(e.target.value)} className="h-8 text-xs" />
+                    </div>
+                    <div>
+                      <Label className="text-xs">Se suspende el</Label>
+                      <Input type="date" value={editEndDate} onChange={(e) => setEditEndDate(e.target.value)} className="h-8 text-xs" />
+                    </div>
+                    <Button size="sm" className="h-8" onClick={() => handleSaveDates(r.id)} disabled={updateDates.isPending}>
+                      {updateDates.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Guardar"}
+                    </Button>
+                    <Button size="sm" variant="outline" className="h-8" onClick={() => setEditingDatesId(null)}>Cancelar</Button>
+                  </div>
+                )}
               </div>
             ))
           ) : (
