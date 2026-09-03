@@ -290,6 +290,15 @@ async function startServer() {
         tasksCreated++;
       }
 
+      // 3.5. Generate any due recurring tasks (safe to run repeatedly —
+      // never duplicates, checked against tasks already linked to each
+      // rule) — antes esto solo pasaba si alguien abría el diálogo
+      // "Recurrentes" y presionaba "Generar tareas pendientes" a mano, así
+      // que un ciclo se podía quedar sin generar por semanas si nadie lo
+      // recordaba. El botón manual sigue disponible para forzarlo al
+      // instante, pero ya no es indispensable.
+      const recurringTasksCreated = await db.generateDueRecurringTasks();
+
       // 4. Send notification to owner about upcoming deadlines
       if (pendingDeadlines.length > 0) {
         const deadlineList = pendingDeadlines.slice(0, 10).map((d: any) => {
@@ -304,7 +313,7 @@ async function startServer() {
         await notifyOwner({ title, content });
       }
 
-      res.json({ ok: true, notified: pendingDeadlines.length, tasksCreated });
+      res.json({ ok: true, notified: pendingDeadlines.length, tasksCreated, recurringTasksCreated });
     } catch (error: any) {
       console.error("[Scheduled] deadline-alerts error:", error);
       res.status(500).json({
