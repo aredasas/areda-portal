@@ -545,6 +545,12 @@ export const informesReportes = mysqlTable("informesReportes", {
   tipo: varchar("tipo", { length: 40 }).default("ERM").notNull(),
   nivel: mysqlEnum("nivel", ["resumen", "detalle"]).default("resumen").notNull(),
   fileKey: varchar("fileKey", { length: 500 }).notNull(),
+  /** Solo se llenan cuando tipo="DIAN" — el total de los documentos
+   * "Emitidos" y "Recibidos" según el archivo de la DIAN de ese mes, para
+   * poder comparar ingresos/compras de otros módulos (ej. conciliación de
+   * IVA) sin tener que volver a subir el archivo de la DIAN cada vez. */
+  totalEmitidoDian: double("totalEmitidoDian"),
+  totalRecibidoDian: double("totalRecibidoDian"),
   generadoPorId: int("generadoPorId").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 }, (table) => ({
@@ -552,6 +558,25 @@ export const informesReportes = mysqlTable("informesReportes", {
 }));
 export type InformeReporte = typeof informesReportes.$inferSelect;
 export type InsertInformeReporte = typeof informesReportes.$inferInsert;
+
+/** Clasificación tributaria (para efectos de IVA) de una cuenta contable
+ * de un cliente — gravado 19%, gravado 5%, excluido, o no gravado (para
+ * ingresos); mismo enum sirve para compras. Se guarda POR CLIENTE, no por
+ * periodo, porque una cuenta casi siempre mantiene la misma clasificación
+ * de un periodo a otro — el usuario la confirma una vez y queda lista
+ * para los siguientes periodos, sin tener que reclasificar cada vez
+ * (aunque puede corregirla cuando quiera). */
+export const informesClasificacionCuentas = mysqlTable("informesClasificacionCuentas", {
+  id: int("id").autoincrement().primaryKey(),
+  clienteId: int("clienteId").notNull(),
+  cuenta: varchar("cuenta", { length: 12 }).notNull(),
+  clasificacion: mysqlEnum("clasificacion", ["gravado_19", "gravado_5", "excluido", "no_gravado"]).notNull(),
+  actualizadoPorId: int("actualizadoPorId").notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (table) => ({
+  clienteCuentaIdx: uniqueIndex("informesClasificacionCuentas_cliente_cuenta_idx").on(table.clienteId, table.cuenta),
+}));
+export type InformeClasificacionCuenta = typeof informesClasificacionCuentas.$inferSelect;
 
 /** Expediente de trabajo de la conciliación de IVA de un cliente para un
  * periodo (bimestral/cuatrimestral/anual) — se va llenando paso a paso:

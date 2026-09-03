@@ -617,12 +617,7 @@ function IvaTab({ clienteId, anio }: { clienteId: number; anio: number }) {
                 continuar.
               </p>
             ) : conciliacionQuery.data ? (
-              <p className="text-xs text-green-700 flex items-center gap-1.5 pt-1">
-                <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
-                Conciliación iniciada (expediente #{conciliacionQuery.data.id}) — los siguientes pasos
-                (clasificación de ingresos, IVA generado, compras, IVA descontable, IVA transitorio y
-                proporcionalidad) se habilitan en próximas entregas.
-              </p>
+              <IngresosIvaCard clienteId={clienteId} anio={anio} periodicidad={periodicidad} periodo={periodo} />
             ) : (
               <div className="pt-1">
                 <Button size="sm" onClick={() => iniciarMutation.mutate({ clienteId, anio, periodicidad, periodo })} disabled={iniciarMutation.isPending}>
@@ -635,6 +630,148 @@ function IvaTab({ clienteId, anio }: { clienteId: number; anio: number }) {
         )}
       </CardContent>
     </Card>
+  );
+}
+
+const NOMBRES_CLASIFICACION: Record<string, string> = {
+  gravado_19: "Gravado 19%", gravado_5: "Gravado 5%", excluido: "Excluido", no_gravado: "No gravado",
+};
+
+/** Paso 2 de la conciliación de IVA — lista las cuentas de ingreso (cuenta
+ * 4) que tuvieron movimiento en el periodo, para que el usuario confirme
+ * la tarifa de cada una (19%, 5%, excluido, o no gravado). Una vez
+ * clasificadas, muestra los subtotales y los compara contra el total que
+ * la DIAN ya tiene reportado como "Emitido" en cada mes del periodo. */
+function IngresosIvaCard({ clienteId, anio, periodicidad, periodo }: {
+  clienteId: number; anio: number; periodicidad: "bimestral" | "cuatrimestral" | "anual"; periodo: number;
+}) {
+  const listarQuery = trpc.informes.iva.ingresos.listar.useQuery({ clienteId, anio, periodicidad, periodo });
+  const [clasificacionLocal, setClasificacionLocal] = useState<Record<string, string>>({});
+  const [inicializado, setInicializado] = useState(false);
+
+  if (!inicializado && listarQuery.data) {
+    const inicial: Record<string, string> = {};
+    for (const c of listarQuery.data.cuentas) if (c.clasificacion) inicial[c.cuenta] = c.clasificacion;
+    setClasificacionLocal(inicial);
+    setInicializado(true);
+  }
+
+  const guardarMutation = trpc.informes.iva.ingresos.guardarClasificacion.useMutation({
+    onSuccess: () => { toast.success("Clasificación de ingresos guardada"); listarQuery.refetch(); },
+    onError: (err) => toast.error(err.message || "No se pudo guardar"),
+  });
+
+  const fmt = (n: number) => `$${Math.round(n).toLocaleString("es-CO")}`;
+
+  if (listarQuery.isLoading) return <div className="flex justify-center py-6"><Loader2 className="w-5 h-5 animate-spin" /></div>;
+  if (!listarQuery.data || listarQuery.data.cuentas.length === 0) {
+    return (
+      <p className="text-xs text-muted-foreground border rounded-md p-3">
+        No se encontraron cuentas de ingreso (cuenta 4) con movimiento en los meses de este periodo —
+        confirma que el libro auxiliar de esos meses esté cargado correctamente.
+      </p>
+    );
+  }
+
+  const { cuentas, totalDianPorMes } = listarQuery.data;
+  const todasClasificadas = cuentas.every(c => !!clasificacionLocal[c.cuenta]);
+  const totalContabilidad = cuentas.reduce((a, c) => a + c.valor, 0);
+  const totalDian = totalDianPorMes.reduce((a, m) => a + (m.totalEmitidoDian ?? 0), 0);
+  const hayMesesSinDian = totalDianPorMes.some(m => m.totalEmitidoDian === null);
+  const diferenciaTotal = totalContabilidad - totalDian;
+
+  return (
+    <div className="border rounded-md p-3 space-y-3">
+      <p className="text-xs font-medium text-muted-foreground">Paso 2 · Clasificación de ingresos</p>
+      <div className="space-y-1.5">
+        {cuentas.map((c) => (
+          <div key={c.cuenta} className="flex items-center justify-between gap-2 text-sm border-b py-1.5 last:border-b-0">
+            <div className="flex-1 min-w-0">
+              <span className="font-medium">{c.cuenta}</span> <span className="text-muted-foreground truncate">{c.nombre}</span>
+            </div>
+            <span className="shrink-0 w-32 text-right">{fmt(c.valor)}</span>
+            <Select value={clasificacionLocal[c.cuenta] || ""} onValueChange={(v) => setClasificacionLocal(prev => ({ ...prev, [c.cuenta]: v }))}>
+              <SelectTrigger className="w-40 shrink-0 h-8 text-xs"><SelectValue placeholder="Clasificar..." /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="gravado_19">Gravado 19%</SelectItem>
+                <SelectItem value="gravado_5">Gravado 5%</SelectItem>
+                <SelectItem value="excluido">Excluido</SelectItem>
+                <SelectItem value="no_gravado">No gravado</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        ))}
+      </div>
+
+      <Button
+        size="sm" disabled={!todasClasificadas || guardarMutation.isPending}
+        onClick={() => guardarMutation.mutate({
+          clienteId, anio, periodicidad, periodo,
+          clasificaciones: cuentas.map(c => ({ cuenta: c.cuenta, clasificacion: clasificacionLocal[c.cuenta] as any })),
+        })}
+      >
+        {guardarMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+        Guardar clasificación
+      </Button>
+      {!todasClasificadas && <p className="text-xs text-muted-foreground">Clasifica todas las cuentas para poder guardar.</p>}
+
+      {todasClasificadas && (
+        <div className="border-t pt-3 space-y-2">
+          <p className="text-xs font-medium text-muted-foreground">Resumen del periodo</p>
+          {(["gravado_19", "gravado_5", "excluido", "no_gravado"] as const).map((clas) => {
+            const total = cuentas.filter(c => clasificacionLocal[c.cuenta] === clas).reduce((a, c) => a + c.valor, 0);
+            if (total === 0) return null;
+            return (
+              <div key={clas} className="flex items-center justify-between text-sm">
+                <span className="text-muted-foreground">{NOMBRES_CLASIFICACION[clas]}</span>
+                <span>{fmt(total)}</span>
+              </div>
+            );
+          })}
+          <div className="flex items-center justify-between text-sm font-medium border-t pt-1.5">
+            <span>Total ingresos (contabilidad)</span>
+            <span>{fmt(totalContabilidad)}</span>
+          </div>
+
+          <div className="border-t pt-2 space-y-1">
+            <p className="text-xs font-medium text-muted-foreground">Comparación contra la DIAN (documentos Emitidos)</p>
+            {totalDianPorMes.map((m: any) => {
+              const nombreMes = ["", "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"][m.mes];
+              return (
+                <div key={m.mes} className="flex items-center justify-between text-xs">
+                  <span className="text-muted-foreground">{nombreMes} {anio}</span>
+                  <span>{m.totalEmitidoDian === null ? "sin dato guardado" : fmt(m.totalEmitidoDian)}</span>
+                </div>
+              );
+            })}
+            <div className="flex items-center justify-between text-sm font-medium border-t pt-1.5">
+              <span>Total DIAN (Emitido)</span>
+              <span>{fmt(totalDian)}</span>
+            </div>
+            {hayMesesSinDian && (
+              <p className="text-xs text-amber-700 flex items-center gap-1.5">
+                <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                Algún mes no tiene el total de la DIAN guardado — genera de nuevo su comparación DIAN
+                para que quede disponible aquí.
+              </p>
+            )}
+            {!hayMesesSinDian && Math.abs(diferenciaTotal) > Math.max(5, totalDian * 0.001) && (
+              <p className="text-xs text-red-600 flex items-center gap-1.5">
+                <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                Diferencia de {fmt(diferenciaTotal)} entre la contabilidad y la DIAN — revisa mes por mes
+                para ubicar en cuál se presenta.
+              </p>
+            )}
+            {!hayMesesSinDian && Math.abs(diferenciaTotal) <= Math.max(5, totalDian * 0.001) && (
+              <p className="text-xs text-green-700 flex items-center gap-1.5">
+                <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                Los ingresos cuadran con lo que la DIAN tiene reportado.
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 

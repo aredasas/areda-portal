@@ -1,6 +1,9 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { getDb } from "./db";
-import { informesCargas, informesReportes, informesIvaConciliacion } from "../drizzle/schema";
+import {
+  informesCargas, informesReportes, informesIvaConciliacion,
+  informesSaldosMensuales, informesClasificacionCuentas, informesCuentasCliente, informesCuentasPuc,
+} from "../drizzle/schema";
 
 export type Periodicidad = "bimestral" | "cuatrimestral" | "anual";
 
@@ -107,4 +110,109 @@ export async function getConciliacionIva(
     eq(informesIvaConciliacion.periodicidad, periodicidad), eq(informesIvaConciliacion.periodo, codigoPeriodo),
   )).limit(1);
   return filas[0];
+}
+
+// ==================== PASO 2: CLASIFICACIÓN DE INGRESOS ====================
+
+export type ClasificacionIva = "gravado_19" | "gravado_5" | "excluido" | "no_gravado";
+
+export type CuentaResumenPeriodo = {
+  cuenta: string;
+  nombre: string;
+  valor: number;
+  clasificacion: ClasificacionIva | null;
+};
+
+/** Cuentas de ingreso (cuenta 4, ya identificadas como tipo "ingreso" al
+ * cargar el libro auxiliar) que tuvieron movimiento en los meses del
+ * periodo, sumadas entre todos los centros de costo — con la
+ * clasificación tributaria ya guardada para este cliente, si existe. */
+export async function getCuentasIngresoDelPeriodo(clienteId: number, anio: number, meses: number[]): Promise<CuentaResumenPeriodo[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const saldos = await db.select().from(informesSaldosMensuales).where(and(
+    eq(informesSaldosMensuales.clienteId, clienteId), eq(informesSaldosMensuales.anio, anio),
+    inArray(informesSaldosMensuales.mes, meses), eq(informesSaldosMensuales.tipo, "ingreso"),
+  ));
+  if (saldos.length === 0) return [];
+
+  const totalPorCuenta = new Map<string, number>();
+  for (const s of saldos) totalPorCuenta.set(s.cuenta, (totalPorCuenta.get(s.cuenta) || 0) + s.valor);
+  const cuentas = Array.from(totalPorCuenta.keys());
+
+  const [nombresCliente, nombresPuc, clasificaciones] = await Promise.all([
+    db.select().from(informesCuentasCliente).where(and(eq(informesCuentasCliente.clienteId, clienteId), inArray(informesCuentasCliente.cuenta, cuentas))),
+    db.select().from(informesCuentasPuc).where(inArray(informesCuentasPuc.cuenta, cuentas)),
+    db.select().from(informesClasificacionCuentas).where(and(eq(informesClasificacionCuentas.clienteId, clienteId), inArray(informesClasificacionCuentas.cuenta, cuentas))),
+  ]);
+  const nombrePorCuentaCliente = new Map(nombresCliente.map(n => [n.cuenta, n.nombre]));
+  const nombrePorCuentaPuc = new Map(nombresPuc.map(n => [n.cuenta, n.descripcion]));
+  const clasifPorCuenta = new Map(clasificaciones.map(c => [c.cuenta, c.clasificacion as ClasificacionIva]));
+
+  return cuentas
+    .map(cuenta => ({
+      cuenta, valor: totalPorCuenta.get(cuenta) || 0,
+      nombre: nombrePorCuentaCliente.get(cuenta) || nombrePorCuentaPuc.get(cuenta) || "(sin nombre)",
+      clasificacion: clasifPorCuenta.get(cuenta) ?? null,
+    }))
+    .sort((a, b) => a.cuenta.localeCompare(b.cuenta));
+}
+
+/** Guarda (o corrige) la clasificación tributaria de una o varias cuentas
+ * para este cliente — queda disponible también para los siguientes
+ * periodos, sin tener que reclasificar cada vez. */
+export async function guardarClasificacionCuentas(
+  clienteId: number, clasificaciones: { cuenta: string; clasificacion: ClasificacionIva }[], userId: number,
+): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  for (const c of clasificaciones) {
+    const existente = await db.select().from(informesClasificacionCuentas)
+      .where(and(eq(informesClasificacionCuentas.clienteId, clienteId), eq(informesClasificacionCuentas.cuenta, c.cuenta))).limit(1);
+    if (existente.length > 0) {
+      await db.update(informesClasificacionCuentas)
+        .set({ clasificacion: c.clasificacion, actualizadoPorId: userId })
+        .where(eq(informesClasificacionCuentas.id, existente[0].id));
+    } else {
+      await db.insert(informesClasificacionCuentas).values({ clienteId, cuenta: c.cuenta, clasificacion: c.clasificacion, actualizadoPorId: userId });
+    }
+  }
+}
+
+/** Total de ingresos que la DIAN reporta como "Emitidos" para cada mes
+ * del periodo — se toma de la comparación DIAN que ya se generó en cada
+ * mes (guardada ahí desde que se genera, sin volver a pedir el archivo).
+ * Si algún mes tiene más de una comparación generada, se usa la más
+ * reciente. Devuelve null en los meses donde nunca se guardó ese total
+ * (comparaciones generadas antes de que se empezara a guardar). */
+export async function getTotalDianEmitidoPorMes(clienteId: number, anio: number, meses: number[]): Promise<{ mes: number; totalEmitidoDian: number | null }[]> {
+  const db = await getDb();
+  if (!db) return meses.map(mes => ({ mes, totalEmitidoDian: null }));
+  const reportes = await db.select().from(informesReportes).where(and(
+    eq(informesReportes.clienteId, clienteId), eq(informesReportes.anio, anio),
+    inArray(informesReportes.mes, meses), eq(informesReportes.tipo, "DIAN"),
+  ));
+  const porMes = new Map<number, { totalEmitidoDian: number | null; createdAt: Date }>();
+  for (const r of reportes) {
+    const actual = porMes.get(r.mes!);
+    if (!actual || r.createdAt > actual.createdAt) porMes.set(r.mes!, { totalEmitidoDian: r.totalEmitidoDian, createdAt: r.createdAt });
+  }
+  return meses.map(mes => ({ mes, totalEmitidoDian: porMes.get(mes)?.totalEmitidoDian ?? null }));
+}
+
+/** Guarda el resumen del paso "ingresos" dentro del expediente de la
+ * conciliación (subtotales por tarifa + comparación contra la DIAN) —
+ * se fusiona con lo que ya hubiera en `estadoJson` de otros pasos, para
+ * no perder el avance de las fases siguientes cuando estén listas. */
+export async function guardarPasoIngresos(
+  clienteId: number, anio: number, periodicidad: Periodicidad, codigoPeriodo: number, resumenIngresos: unknown,
+): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  const existente = await getConciliacionIva(clienteId, anio, periodicidad, codigoPeriodo);
+  if (!existente) throw new Error("No existe el expediente de esta conciliación — inicia el periodo primero.");
+  let estado: Record<string, unknown> = {};
+  try { estado = existente.estadoJson ? JSON.parse(existente.estadoJson) : {}; } catch { estado = {}; }
+  estado.ingresos = resumenIngresos;
+  await db.update(informesIvaConciliacion).set({ estadoJson: JSON.stringify(estado) }).where(eq(informesIvaConciliacion.id, existente.id));
 }

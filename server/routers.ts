@@ -1951,6 +1951,50 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           await assertClienteAccesibleInformes(ctx, input.clienteId);
           return informesIva.getConciliacionIva(input.clienteId, input.anio, input.periodicidad, input.periodo) ?? null;
         }),
+      // Paso 2 — clasificación de ingresos por tarifa (gravado 19%/5%,
+      // excluido, no gravado) y comparación contra el total "Emitido"
+      // que ya reportó la DIAN en cada mes del periodo.
+      ingresos: router({
+        listar: protectedProcedure
+          .input(z.object({
+            clienteId: z.number(), anio: z.number(),
+            periodicidad: z.enum(["bimestral", "cuatrimestral", "anual"]), periodo: z.number(),
+          }))
+          .query(async ({ input, ctx }) => {
+            await assertClienteAccesibleInformes(ctx, input.clienteId);
+            const meses = informesIva.mesesDelPeriodo(input.periodicidad, input.periodo);
+            const [cuentas, totalDianPorMes] = await Promise.all([
+              informesIva.getCuentasIngresoDelPeriodo(input.clienteId, input.anio, meses),
+              informesIva.getTotalDianEmitidoPorMes(input.clienteId, input.anio, meses),
+            ]);
+            return { cuentas, totalDianPorMes };
+          }),
+        guardarClasificacion: protectedProcedure
+          .input(z.object({
+            clienteId: z.number(), anio: z.number(),
+            periodicidad: z.enum(["bimestral", "cuatrimestral", "anual"]), periodo: z.number(),
+            clasificaciones: z.array(z.object({
+              cuenta: z.string(), clasificacion: z.enum(["gravado_19", "gravado_5", "excluido", "no_gravado"]),
+            })),
+          }))
+          .mutation(async ({ input, ctx }) => {
+            await assertClienteAccesibleInformes(ctx, input.clienteId);
+            await informesIva.guardarClasificacionCuentas(input.clienteId, input.clasificaciones, ctx.user.id);
+
+            const meses = informesIva.mesesDelPeriodo(input.periodicidad, input.periodo);
+            const [cuentas, totalDianPorMes] = await Promise.all([
+              informesIva.getCuentasIngresoDelPeriodo(input.clienteId, input.anio, meses),
+              informesIva.getTotalDianEmitidoPorMes(input.clienteId, input.anio, meses),
+            ]);
+            const totalPorClasificacion = { gravado_19: 0, gravado_5: 0, excluido: 0, no_gravado: 0 };
+            for (const c of cuentas) if (c.clasificacion) totalPorClasificacion[c.clasificacion] += c.valor;
+            const totalContabilidad = cuentas.reduce((a, c) => a + c.valor, 0);
+            const totalDian = totalDianPorMes.reduce((a, m) => a + (m.totalEmitidoDian ?? 0), 0);
+            const resumen = { cuentas, totalPorClasificacion, totalContabilidad, totalDianPorMes, totalDian };
+            await informesIva.guardarPasoIngresos(input.clienteId, input.anio, input.periodicidad, input.periodo, resumen);
+            return resumen;
+          }),
+      }),
     }),
     dian: router({
       // Consulta si ya existe un libro auxiliar cargado (desde Estado de
@@ -2011,9 +2055,11 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           const { url, key: fileKey } = await storagePut(
             key, buffer, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
           );
+          const totalEmitidoDian = filasDian.filter(f => f.grupo === "Emitido").reduce((a, f) => a + f.total, 0);
+          const totalRecibidoDian = filasDian.filter(f => f.grupo === "Recibido").reduce((a, f) => a + f.total, 0);
           await informesDb.guardarReporteGenerado({
             clienteId: input.clienteId, anio: input.anio, mes: input.mes, tipo: "DIAN",
-            nivel: "detalle", fileKey, generadoPorId: ctx.user.id,
+            nivel: "detalle", fileKey, generadoPorId: ctx.user.id, totalEmitidoDian, totalRecibidoDian,
           });
           const signedUrl = await storageGetSignedUrl(fileKey);
           return {

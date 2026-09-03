@@ -309,6 +309,13 @@
       "when": 1788454949606,
       "tag": "0043_iva_conciliacion",
       "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "5",
+      "when": 1788457481241,
+      "tag": "0044_clasificacion_cuentas_iva",
+      "breakpoints": true
     }
   ]
 }
