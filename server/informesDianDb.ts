@@ -491,6 +491,26 @@ export function getTiposComprobanteDelAuxiliar(documentosAux: Map<string, Docume
     .sort((a, b) => b.cantidad - a.cantidad);
 }
 
+/** Tipos de comprobante del libro auxiliar que NO están asignados a
+ * ningún tipo de documento de la DIAN en la configuración guardada de
+ * este cliente — para que el usuario detecte de un vistazo si hay
+ * comprobantes contables (ej. una nota débito "ND", o un tipo nuevo que
+ * empezó a usarse) que todavía no se ha decidido cómo comparar. */
+export function getTiposComprobanteNoClasificados(
+  tiposComprobanteDelAuxiliar: { tipo: string; cantidad: number }[],
+  configs: InformeTipoDocumentoConfig[],
+): { tipo: string; cantidad: number }[] {
+  const clasificados = new Set<string>();
+  for (const c of configs) {
+    if (!c.tiposComprobanteContable) continue;
+    try {
+      const lista: string[] = JSON.parse(c.tiposComprobanteContable);
+      for (const t of lista) clasificados.add(t.trim());
+    } catch { /* config con JSON inválido — se ignora, no debería pasar */ }
+  }
+  return tiposComprobanteDelAuxiliar.filter(t => !clasificados.has(t.tipo));
+}
+
 export async function getConfigTiposDocumento(clienteId: number): Promise<InformeTipoDocumentoConfig[]> {
   const db = await getDb();
   if (!db) return [];
@@ -566,13 +586,29 @@ export function compararPorTercero(
   filasDian: FilaDian[], documentosAux: Map<string, DocumentoAuxiliar>,
   filtroCategoria?: DocumentoAuxiliar["categoria"],
   mapaConfig?: Map<string, CategoriaConfigDocumento>,
+  filtroTipoExacto?: { tipoDocumentoDian: string; grupo: "Emitido" | "Recibido"; tiposComprobanteContable: string[] },
 ): ComparacionTercero[] {
-  const filasFiltradas = filtroCategoria
-    ? filasDian.filter(f => (mapaConfig ? categorizarFilaDianConConfig(f, mapaConfig) : categorizarFilaDian(f)) === filtroCategoria)
-    : filasDian;
-  const documentosFiltrados = filtroCategoria
-    ? new Map(Array.from(documentosAux.entries()).filter(([, doc]) => doc.categoria === filtroCategoria))
-    : documentosAux;
+  let filasFiltradas: FilaDian[];
+  let documentosFiltrados: Map<string, DocumentoAuxiliar>;
+
+  if (filtroTipoExacto) {
+    // Comparación derivada del tipo de documento EXACTO configurado (no
+    // solo la categoría amplia) — del lado DIAN se toma ese tipo+grupo tal
+    // cual; del lado contable, solo los comprobantes que el usuario haya
+    // asociado a ese tipo. Sin comprobantes asociados no hay con qué
+    // cruzar del lado contable — se deja vacío en vez de adivinar.
+    filasFiltradas = filasDian.filter(f => f.tipo === filtroTipoExacto.tipoDocumentoDian && f.grupo === filtroTipoExacto.grupo);
+    const setComprobantes = new Set(filtroTipoExacto.tiposComprobanteContable);
+    documentosFiltrados = setComprobantes.size > 0
+      ? new Map(Array.from(documentosAux.entries()).filter(([, doc]) => setComprobantes.has(doc.tipo)))
+      : new Map();
+  } else if (filtroCategoria) {
+    filasFiltradas = filasDian.filter(f => (mapaConfig ? categorizarFilaDianConConfig(f, mapaConfig) : categorizarFilaDian(f)) === filtroCategoria);
+    documentosFiltrados = new Map(Array.from(documentosAux.entries()).filter(([, doc]) => doc.categoria === filtroCategoria));
+  } else {
+    filasFiltradas = filasDian;
+    documentosFiltrados = documentosAux;
+  }
   const porNit = new Map<string, { nombre: string; totalDian: number; totalContab: number; cantDian: number; cantContab: number }>();
   const asegurar = (nit: string, nombre: string) => {
     if (!porNit.has(nit)) porNit.set(nit, { nombre, totalDian: 0, totalContab: 0, cantDian: 0, cantContab: 0 });
@@ -702,6 +738,7 @@ function estilarEncabezado(row: ExcelJS.Row) {
 export async function generarReporteComparacionDian(
   resultado: ResultadoComparacionDian, clienteNombre: string, anio: number, mes: number,
   seccionesTerceros: { titulo: string; items: ComparacionTercero[] }[] = [],
+  tiposNoClasificados: { tipo: string; cantidad: number }[] = [],
 ): Promise<Buffer> {
   const wb = new ExcelJS.Workbook();
   wb.creator = "Areda Work · Módulo Informes";
@@ -721,12 +758,31 @@ export async function generarReporteComparacionDian(
 
   const wsContab = wb.addWorksheet("En contabilidad, no en DIAN");
   wsContab.addRow([
-    "Verificar si corresponden a servicios públicos, nómina, u otros pagos que no requieren documento electrónico.",
+    "Agrupado por tipo de documento contable — verificar si corresponden a servicios públicos, nómina, u otros pagos que no requieren documento electrónico.",
   ]).font = { name: "Arial", size: 9, italic: true } as any;
-  const hContab = wsContab.addRow(["Tipo", "Número documento", "Fecha", "Tercero (NIT)", "Nombre tercero", "Valor", "Filas contables"]);
-  estilarEncabezado(hContab);
-  for (const doc of resultado.soloEnContabilidad.sort((a, b) => b.valor - a.valor)) {
-    wsContab.addRow([doc.tipo, doc.numero, doc.fecha, doc.tercero, doc.nombreTercero, doc.valor, doc.filas]);
+  wsContab.addRow([]);
+  const gruposContab = new Map<string, DocumentoAuxiliar[]>();
+  for (const doc of resultado.soloEnContabilidad) {
+    if (!gruposContab.has(doc.tipo)) gruposContab.set(doc.tipo, []);
+    gruposContab.get(doc.tipo)!.push(doc);
+  }
+  const tiposContabOrdenados = Array.from(gruposContab.entries()).sort((a, b) => {
+    const totalA = a[1].reduce((s, d) => s + d.valor, 0);
+    const totalB = b[1].reduce((s, d) => s + d.valor, 0);
+    return totalB - totalA;
+  });
+  for (const [tipo, docs] of tiposContabOrdenados) {
+    const totalTipo = docs.reduce((s, d) => s + d.valor, 0);
+    const rTitulo = wsContab.addRow([`Tipo de comprobante: ${tipo}`, "", "", "", "", "", `${docs.length} documento(s)`]);
+    rTitulo.font = FONT_BOLD as any;
+    const hContab = wsContab.addRow(["Tipo", "Número documento", "Fecha", "Tercero (NIT)", "Nombre tercero", "Valor", "Filas contables"]);
+    estilarEncabezado(hContab);
+    for (const doc of docs.sort((a, b) => b.valor - a.valor)) {
+      wsContab.addRow([doc.tipo, doc.numero, doc.fecha, doc.tercero, doc.nombreTercero, doc.valor, doc.filas]);
+    }
+    const rSubtotal = wsContab.addRow(["", "", "", "", "Subtotal", totalTipo, ""]);
+    rSubtotal.font = FONT_BOLD as any;
+    wsContab.addRow([]);
   }
   wsContab.getColumn(6).numFmt = MONEY;
   wsContab.getColumn(1).width = 10; wsContab.getColumn(2).width = 16; wsContab.getColumn(3).width = 12;
@@ -734,13 +790,34 @@ export async function generarReporteComparacionDian(
 
   const wsDian = wb.addWorksheet("En DIAN, no en contabilidad");
   wsDian.addRow([
-    "ATENCIÓN: estos documentos electrónicos no se encontraron en la contabilidad — posible ingreso o gasto sin registrar.",
+    "ATENCIÓN, agrupado por tipo de documento — estos documentos electrónicos no se encontraron en la contabilidad, posible ingreso o gasto sin registrar.",
   ]).font = { name: "Arial", size: 9, italic: true, bold: true } as any;
-  const hDian = wsDian.addRow(["Grupo", "Tipo de documento", "Prefijo", "Folio", "Fecha", "NIT Emisor", "Nombre Emisor", "NIT Receptor", "Nombre Receptor", "Total"]);
-  estilarEncabezado(hDian);
-  for (const f of resultado.soloEnDian.sort((a, b) => b.total - a.total)) {
-    const r = wsDian.addRow([f.grupo, f.tipo, f.prefijo, f.folio, f.fecha, f.nitEmisor, f.nombreEmisor, f.nitReceptor, f.nombreReceptor, f.total]);
-    r.eachCell(c => { c.fill = ALERTA_FILL; });
+  wsDian.addRow([]);
+  const gruposDian = new Map<string, FilaDian[]>();
+  for (const f of resultado.soloEnDian) {
+    const clave = `${f.tipo}|${f.grupo}`;
+    if (!gruposDian.has(clave)) gruposDian.set(clave, []);
+    gruposDian.get(clave)!.push(f);
+  }
+  const tiposDianOrdenados = Array.from(gruposDian.entries()).sort((a, b) => {
+    const totalA = a[1].reduce((s, d) => s + d.total, 0);
+    const totalB = b[1].reduce((s, d) => s + d.total, 0);
+    return totalB - totalA;
+  });
+  for (const [clave, filas] of tiposDianOrdenados) {
+    const [tipo, grupo] = clave.split("|");
+    const totalTipo = filas.reduce((s, d) => s + d.total, 0);
+    const rTitulo = wsDian.addRow([`${tipo} — ${grupo}`, "", "", "", "", "", "", "", "", `${filas.length} documento(s)`]);
+    rTitulo.font = FONT_BOLD as any;
+    const hDian = wsDian.addRow(["Grupo", "Tipo de documento", "Prefijo", "Folio", "Fecha", "NIT Emisor", "Nombre Emisor", "NIT Receptor", "Nombre Receptor", "Total"]);
+    estilarEncabezado(hDian);
+    for (const f of filas.sort((a, b) => b.total - a.total)) {
+      const r = wsDian.addRow([f.grupo, f.tipo, f.prefijo, f.folio, f.fecha, f.nitEmisor, f.nombreEmisor, f.nitReceptor, f.nombreReceptor, f.total]);
+      r.eachCell(c => { c.fill = ALERTA_FILL; });
+    }
+    const rSubtotal = wsDian.addRow(["", "", "", "", "", "", "", "", "Subtotal", totalTipo]);
+    rSubtotal.font = FONT_BOLD as any;
+    wsDian.addRow([]);
   }
   wsDian.getColumn(10).numFmt = MONEY;
   wsDian.getColumn(1).width = 12; wsDian.getColumn(2).width = 24; wsDian.getColumn(3).width = 10;
@@ -847,6 +924,24 @@ export async function generarReporteComparacionDian(
     wsTercero.getColumn(1).width = 16; wsTercero.getColumn(2).width = 34; wsTercero.getColumn(3).width = 16;
     wsTercero.getColumn(4).width = 18; wsTercero.getColumn(5).width = 14; wsTercero.getColumn(6).width = 12;
     wsTercero.getColumn(7).width = 20; wsTercero.getColumn(8).width = 12;
+  }
+
+  if (tiposNoClasificados.length > 0) {
+    const wsNoClasif = wb.addWorksheet("Tipos contables no clasificados");
+    wsNoClasif.addRow([
+      "Estos tipos de comprobante aparecen en el libro auxiliar de este mes, pero todavía no están asociados a "
+      + "ningún tipo de documento de la DIAN en la configuración de este cliente — sin esa asociación, sus "
+      + "movimientos no se comparan en ninguna de las hojas anteriores. Ve a \"Revisar y configurar tipos de "
+      + "documento\" y asígnalos al tipo de documento de la DIAN que corresponda.",
+    ]).font = { name: "Arial", size: 9, italic: true, bold: true } as any;
+    wsNoClasif.getRow(1).alignment = { wrapText: true } as any;
+    wsNoClasif.mergeCells(1, 1, 1, 2);
+    wsNoClasif.getRow(1).height = 45;
+    wsNoClasif.addRow([]);
+    const hNoClasif = wsNoClasif.addRow(["Tipo de comprobante", "Cantidad de documentos"]);
+    estilarEncabezado(hNoClasif);
+    for (const t of tiposNoClasificados) wsNoClasif.addRow([t.tipo, t.cantidad]);
+    wsNoClasif.getColumn(1).width = 24; wsNoClasif.getColumn(2).width = 22;
   }
 
   const buffer = await wb.xlsx.writeBuffer();

@@ -2119,18 +2119,36 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           // muestra una sola comparación general (sin distinguir cuenta),
           // que sigue siendo útil aunque mezcle ingresos y gastos.
           const hayAlgunaCuentaReconocida = Array.from(documentosAux.values()).some(d => d.categoria !== null);
+          // Cada sección de "Comparación por Tercero" se deriva de un
+          // tipo de documento EXACTO de la DIAN (no solo una categoría
+          // amplia) — usando, del lado contable, únicamente los tipos de
+          // comprobante que el cliente ya asoció a ese tipo de documento.
+          // Si un tipo de documento todavía no tiene comprobantes
+          // asociados, su sección queda con $0 del lado contable — eso es
+          // justo lo que la hoja "Tipos contables no clasificados" ayuda
+          // a resolver.
+          const tiposDetectadosEnArchivo = informesDian.getTiposDocumentoDelArchivo(filasDian);
+          const configPorClave = new Map(configTiposDoc.map(c => [`${c.tipoDocumentoDian}|${c.grupo}`, c]));
           const seccionesTerceros = hayAlgunaCuentaReconocida
-            ? [
-              { titulo: "Ingresos (cuenta 4)", items: informesDian.compararPorTercero(filasDian, documentosAux, "ingreso", mapaConfigTipos) },
-              { titulo: "Nómina (cuentas 5105 / 5205)", items: informesDian.compararPorTercero(filasDian, documentosAux, "nomina", mapaConfigTipos) },
-              { titulo: "Honorarios y Servicios (cuentas 5110 / 5115 / 5210 / 5215)", items: informesDian.compararPorTercero(filasDian, documentosAux, "honorarios_servicios", mapaConfigTipos) },
-              { titulo: "Otras facturas recibidas (demás cuentas 5 y 14, a veces 15/16/17)", items: informesDian.compararPorTercero(filasDian, documentosAux, "otro_gasto", mapaConfigTipos) },
-            ]
+            ? tiposDetectadosEnArchivo.map(d => {
+              const config = configPorClave.get(`${d.tipoDocumentoDian}|${d.grupo}`);
+              const comprobantes = config?.tiposComprobanteContable ? JSON.parse(config.tiposComprobanteContable) : [];
+              return {
+                titulo: `${d.tipoDocumentoDian} — ${d.grupo}${comprobantes.length > 0 ? ` (vs. comprobante ${comprobantes.join("/")})` : " (sin comprobante contable asociado todavía)"}`,
+                items: informesDian.compararPorTercero(filasDian, documentosAux, undefined, undefined, {
+                  tipoDocumentoDian: d.tipoDocumentoDian, grupo: d.grupo, tiposComprobanteContable: comprobantes,
+                }),
+              };
+            })
             : [
               { titulo: "Comparación general por tercero (no se pudo identificar la cuenta contable en el archivo — se muestra todo junto, sin separar ingresos de gastos)", items: informesDian.compararPorTercero(filasDian, documentosAux) },
             ];
+
+          const tiposComprobanteAuxiliar = informesDian.getTiposComprobanteDelAuxiliar(documentosAux);
+          const tiposNoClasificados = informesDian.getTiposComprobanteNoClasificados(tiposComprobanteAuxiliar, configTiposDoc);
+
           const buffer = await informesDian.generarReporteComparacionDian(
-            resultado, cliente?.razonSocial || "Cliente", input.anio, input.mes, seccionesTerceros,
+            resultado, cliente?.razonSocial || "Cliente", input.anio, input.mes, seccionesTerceros, tiposNoClasificados,
           );
 
           const key = `informes/DIAN_${input.clienteId}_${input.anio}_${String(input.mes).padStart(2, "0")}_${Date.now()}.xlsx`;
