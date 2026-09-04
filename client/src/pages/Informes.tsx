@@ -1130,7 +1130,25 @@ function ComparacionDianCard({ clienteId, anio, mes, setMes, reportes }: {
   const fileDianRef = useRef<HTMLInputElement>(null);
   const utils = trpc.useUtils();
 
+  const [tiposDetectados, setTiposDetectados] = useState<any[] | null>(null);
+  const [edicionesTipos, setEdicionesTipos] = useState<Record<string, { categoria: string; comprobantes: string }>>({});
+
   const auxiliarDisponibleQuery = trpc.informes.dian.auxiliarDisponible.useQuery({ clienteId, anio, mes });
+
+  const detectarTiposMutation = trpc.informes.dian.detectarTiposDocumento.useMutation({
+    onSuccess: (data) => {
+      setTiposDetectados(data);
+      const iniciales: Record<string, { categoria: string; comprobantes: string }> = {};
+      for (const d of data) iniciales[`${d.tipoDocumentoDian}|${d.grupo}`] = { categoria: d.categoria, comprobantes: (d.tiposComprobanteContable || []).join(", ") };
+      setEdicionesTipos(iniciales);
+    },
+    onError: (err) => toast.error(err.message || "No se pudo leer el archivo de la DIAN"),
+  });
+
+  const guardarTiposMutation = trpc.informes.dian.guardarTiposDocumento.useMutation({
+    onSuccess: () => toast.success("Configuración de tipos de documento guardada — se usará en esta y las próximas comparaciones"),
+    onError: (err) => toast.error(err.message || "No se pudo guardar la configuración"),
+  });
 
   const compararMutation = trpc.informes.dian.comparar.useMutation({
     onSuccess: (data) => {
@@ -1139,6 +1157,7 @@ function ComparacionDianCard({ clienteId, anio, mes, setMes, reportes }: {
       );
       window.open(data.signedUrl, "_blank");
       setArchivoDian(null);
+      setTiposDetectados(null);
       utils.informes.reportes.list.invalidate();
     },
     onError: (err) => toast.error(err.message || "No se pudo generar la comparación"),
@@ -1166,6 +1185,26 @@ function ComparacionDianCard({ clienteId, anio, mes, setMes, reportes }: {
     } finally {
       setComparando(false);
     }
+  };
+
+  const handleDetectarTipos = async () => {
+    if (!archivoDian) return;
+    try {
+      const dianBase64 = await fileToBase64(archivoDian);
+      await detectarTiposMutation.mutateAsync({ clienteId, dianBase64 });
+    } catch (error: any) {
+      toast.error(error.message || "Error al leer el archivo");
+    }
+  };
+
+  const handleGuardarTipos = () => {
+    if (!tiposDetectados) return;
+    const configs = tiposDetectados.map((d: any) => {
+      const edicion = edicionesTipos[`${d.tipoDocumentoDian}|${d.grupo}`];
+      const comprobantes = (edicion?.comprobantes || "").split(",").map((s: string) => s.trim()).filter(Boolean);
+      return { tipoDocumentoDian: d.tipoDocumentoDian, grupo: d.grupo, categoria: edicion?.categoria || d.categoria, tiposComprobanteContable: comprobantes };
+    });
+    guardarTiposMutation.mutate({ clienteId, configs });
   };
 
   return (
@@ -1225,6 +1264,65 @@ function ComparacionDianCard({ clienteId, anio, mes, setMes, reportes }: {
               <Upload className="w-3.5 h-3.5" /> {archivoDian?.name || "Seleccionar archivo"}
             </Button>
           </div>
+
+          {archivoDian && !tiposDetectados && (
+            <Button variant="outline" size="sm" className="gap-2" onClick={handleDetectarTipos} disabled={detectarTiposMutation.isPending}>
+              {detectarTiposMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
+              Revisar y configurar tipos de documento
+            </Button>
+          )}
+
+          {tiposDetectados && (
+            <div className="border rounded-md p-3 space-y-3">
+              <p className="text-xs font-medium text-muted-foreground">
+                Confirma qué representa cada tipo de documento que trae el archivo — esta configuración
+                queda guardada para este cliente y se usa en todas las conciliaciones futuras (comparación
+                DIAN, comparación por tercero, e IVA), sin tener que repetirla cada mes.
+              </p>
+              {tiposDetectados.map((d: any) => {
+                const clave = `${d.tipoDocumentoDian}|${d.grupo}`;
+                const edicion = edicionesTipos[clave] || { categoria: d.categoria, comprobantes: "" };
+                return (
+                  <div key={clave} className="flex flex-wrap items-end gap-2 border-b pb-2 last:border-b-0">
+                    <div className="flex-1 min-w-[180px]">
+                      <p className="text-sm font-medium">{d.tipoDocumentoDian}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {d.grupo} · {d.cantidad} doc(s) · ${Math.round(d.total).toLocaleString("es-CO")}
+                        {d.yaConfigurado && <span className="text-green-700"> · ya configurado</span>}
+                      </p>
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs">Representa</Label>
+                      <Select value={edicion.categoria} onValueChange={(v) => setEdicionesTipos(prev => ({ ...prev, [clave]: { ...edicion, categoria: v } }))}>
+                        <SelectTrigger className="w-44 h-8 text-xs"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="ingreso">Ingreso</SelectItem>
+                          <SelectItem value="nomina">Nómina</SelectItem>
+                          <SelectItem value="honorarios_servicios">Honorarios y Servicios</SelectItem>
+                          <SelectItem value="otro_gasto">Otro gasto</SelectItem>
+                          <SelectItem value="excluir">Excluir de la comparación</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs">Tipo(s) de comprobante contable</Label>
+                      <Input
+                        placeholder="Ej: CN, CP" value={edicion.comprobantes} className="w-40 h-8 text-xs"
+                        onChange={(e) => setEdicionesTipos(prev => ({ ...prev, [clave]: { ...edicion, comprobantes: e.target.value } }))}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+              <div className="flex justify-end gap-2 pt-1">
+                <Button variant="outline" size="sm" onClick={() => setTiposDetectados(null)}>Cerrar</Button>
+                <Button size="sm" onClick={handleGuardarTipos} disabled={guardarTiposMutation.isPending}>
+                  {guardarTiposMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-2" /> : null}
+                  Guardar configuración
+                </Button>
+              </div>
+            </div>
+          )}
 
           <Button
             onClick={handleComparar}

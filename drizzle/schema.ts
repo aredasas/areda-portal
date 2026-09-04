@@ -587,6 +587,32 @@ export const informesClasificacionCuentas = mysqlTable("informesClasificacionCue
 }));
 export type InformeClasificacionCuenta = typeof informesClasificacionCuentas.$inferSelect;
 
+/** Configuración, POR CLIENTE, de qué representa cada tipo de documento
+ * que aparece en el archivo de la DIAN — es rara la vez que un cliente
+ * empieza a usar un tipo de documento nuevo, así que se configura una
+ * vez y se recuerda para todas las conciliaciones futuras (comparación
+ * DIAN, comparación por tercero, conciliación de IVA). "categoria"
+ * decide si ese tipo de documento representa un ingreso, la nómina, un
+ * gasto de honorarios/servicios, otro gasto, o si no debe usarse en
+ * absoluto en estas comparaciones. "tiposComprobanteContable" (JSON de
+ * strings, ej. ["CN","CP"]) es opcional — el tipo de comprobante que se
+ * usa en la contabilidad para esas mismas transacciones, para poder
+ * cruzar más adelante si hay comprobantes contables sin su documento
+ * electrónico correspondiente, o viceversa. */
+export const informesTiposDocumentoConfig = mysqlTable("informesTiposDocumentoConfig", {
+  id: int("id").autoincrement().primaryKey(),
+  clienteId: int("clienteId").notNull(),
+  tipoDocumentoDian: varchar("tipoDocumentoDian", { length: 100 }).notNull(),
+  grupo: mysqlEnum("grupo", ["Emitido", "Recibido"]).notNull(),
+  categoria: mysqlEnum("categoria", ["ingreso", "nomina", "honorarios_servicios", "otro_gasto", "excluir"]).notNull(),
+  tiposComprobanteContable: text("tiposComprobanteContable"),
+  actualizadoPorId: int("actualizadoPorId").notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (table) => ({
+  clienteTipoGrupoIdx: uniqueIndex("informesTiposDocumentoConfig_cliente_tipo_grupo_idx").on(table.clienteId, table.tipoDocumentoDian, table.grupo),
+}));
+export type InformeTipoDocumentoConfig = typeof informesTiposDocumentoConfig.$inferSelect;
+
 /** Expediente de trabajo de la conciliación de IVA de un cliente para un
  * periodo (bimestral/cuatrimestral/anual) — se va llenando paso a paso:
  * clasificación de ingresos por tarifa, IVA generado, compras, IVA

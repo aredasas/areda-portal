@@ -1,5 +1,8 @@
 import ExcelJS from "exceljs";
 import * as XLSX from "xlsx";
+import { and, eq } from "drizzle-orm";
+import { getDb } from "./db";
+import { informesTiposDocumentoConfig, type InformeTipoDocumentoConfig } from "../drizzle/schema";
 
 // Utilidades de reconocimiento de columnas — mismo enfoque que el resto del
 // módulo Informes (sinónimo + coincidencia de palabra completa), pero
@@ -423,7 +426,7 @@ export type ComparacionTercero = {
  * honorarios/servicios, y las demás facturas recibidas contra el resto de
  * cuentas 5/14 (y ocasionalmente 15/16/17), en vez de mezclarlo todo. Todo
  * lo "Emitido" es ingreso, sin importar el tipo de documento. */
-function categorizarFilaDian(fila: FilaDian): DocumentoAuxiliar["categoria"] {
+export function categorizarFilaDian(fila: FilaDian): DocumentoAuxiliar["categoria"] {
   // La nómina electrónica y el documento soporte SIEMPRE los genera quien
   // PAGA (la empresa) — en el reporte de la DIAN aparecen como "Emitidos"
   // por ella (es quien los genera), pero representan un GASTO suyo, no un
@@ -435,6 +438,94 @@ function categorizarFilaDian(fila: FilaDian): DocumentoAuxiliar["categoria"] {
   if (tipoNorm.includes("DOCUMENTO SOPORTE")) return "honorarios_servicios";
   if (fila.grupo === "Emitido") return "ingreso";
   return "otro_gasto"; // facturas electrónicas y demás documentos recibidos
+}
+
+export type CategoriaConfigDocumento = "ingreso" | "nomina" | "honorarios_servicios" | "otro_gasto" | "excluir";
+
+export type TipoDocumentoDetectado = {
+  tipoDocumentoDian: string;
+  grupo: "Emitido" | "Recibido";
+  cantidad: number;
+  total: number;
+  categoriaSugerida: DocumentoAuxiliar["categoria"];
+};
+
+/** Lista, sin duplicados, cada combinación (tipo de documento, grupo) que
+ * aparece en un archivo de la DIAN ya parseado — con cuántos documentos y
+ * cuánto suman, para que el usuario decida qué representa cada uno (es
+ * ingreso, nómina, honorarios, u otro gasto) y, opcionalmente, con qué
+ * tipo de comprobante contable se relaciona (ej. nómina → "CN"/"CP"). */
+export function getTiposDocumentoDelArchivo(filasDian: FilaDian[]): TipoDocumentoDetectado[] {
+  const porClave = new Map<string, TipoDocumentoDetectado>();
+  for (const fila of filasDian) {
+    const clave = `${fila.tipo}|${fila.grupo}`;
+    if (!porClave.has(clave)) {
+      porClave.set(clave, {
+        tipoDocumentoDian: fila.tipo, grupo: fila.grupo as "Emitido" | "Recibido",
+        cantidad: 0, total: 0, categoriaSugerida: categorizarFilaDian(fila),
+      });
+    }
+    const entrada = porClave.get(clave)!;
+    entrada.cantidad++;
+    entrada.total += fila.total;
+  }
+  return Array.from(porClave.values()).sort((a, b) => b.total - a.total);
+}
+
+export async function getConfigTiposDocumento(clienteId: number): Promise<InformeTipoDocumentoConfig[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(informesTiposDocumentoConfig).where(eq(informesTiposDocumentoConfig.clienteId, clienteId));
+}
+
+/** Guarda (o corrige) qué representa cada tipo de documento de la DIAN
+ * para este cliente — se recuerda para todas las conciliaciones futuras
+ * (comparación DIAN, por tercero, conciliación de IVA), sin tener que
+ * volver a configurarlo cada mes; es raro que un cliente empiece a usar
+ * un tipo de documento distinto de un mes a otro. */
+export async function guardarConfigTiposDocumento(
+  clienteId: number,
+  configs: { tipoDocumentoDian: string; grupo: "Emitido" | "Recibido"; categoria: CategoriaConfigDocumento; tiposComprobanteContable?: string[] }[],
+  userId: number,
+): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  for (const c of configs) {
+    const existente = await db.select().from(informesTiposDocumentoConfig).where(and(
+      eq(informesTiposDocumentoConfig.clienteId, clienteId),
+      eq(informesTiposDocumentoConfig.tipoDocumentoDian, c.tipoDocumentoDian),
+      eq(informesTiposDocumentoConfig.grupo, c.grupo),
+    )).limit(1);
+    const tiposComprobanteContable = c.tiposComprobanteContable && c.tiposComprobanteContable.length > 0
+      ? JSON.stringify(c.tiposComprobanteContable) : null;
+    if (existente.length > 0) {
+      await db.update(informesTiposDocumentoConfig)
+        .set({ categoria: c.categoria, tiposComprobanteContable, actualizadoPorId: userId })
+        .where(eq(informesTiposDocumentoConfig.id, existente[0].id));
+    } else {
+      await db.insert(informesTiposDocumentoConfig).values({
+        clienteId, tipoDocumentoDian: c.tipoDocumentoDian, grupo: c.grupo,
+        categoria: c.categoria, tiposComprobanteContable, actualizadoPorId: userId,
+      });
+    }
+  }
+}
+
+/** Igual que `categorizarFilaDian`, pero usa primero la configuración que
+ * el cliente ya haya guardado para ese tipo de documento — solo cae al
+ * heurístico automático (por nombre del tipo) si todavía no se ha
+ * configurado explícitamente. `mapaConfig` se arma una sola vez por
+ * comparación con `mapaConfigTiposDocumento()`, para no consultar la
+ * base de datos fila por fila. */
+export function categorizarFilaDianConConfig(fila: FilaDian, mapaConfig: Map<string, CategoriaConfigDocumento>): DocumentoAuxiliar["categoria"] {
+  const clave = `${fila.tipo}|${fila.grupo}`;
+  const configurado = mapaConfig.get(clave);
+  if (configurado) return configurado === "excluir" ? null : configurado;
+  return categorizarFilaDian(fila);
+}
+
+export function mapaConfigTiposDocumento(configs: InformeTipoDocumentoConfig[]): Map<string, CategoriaConfigDocumento> {
+  return new Map(configs.map(c => [`${c.tipoDocumentoDian}|${c.grupo}`, c.categoria]));
 }
 
 function valoresCoinciden(a: number, b: number): boolean {
@@ -455,8 +546,11 @@ function valoresCoinciden(a: number, b: number): boolean {
 export function compararPorTercero(
   filasDian: FilaDian[], documentosAux: Map<string, DocumentoAuxiliar>,
   filtroCategoria?: DocumentoAuxiliar["categoria"],
+  mapaConfig?: Map<string, CategoriaConfigDocumento>,
 ): ComparacionTercero[] {
-  const filasFiltradas = filtroCategoria ? filasDian.filter(f => categorizarFilaDian(f) === filtroCategoria) : filasDian;
+  const filasFiltradas = filtroCategoria
+    ? filasDian.filter(f => (mapaConfig ? categorizarFilaDianConConfig(f, mapaConfig) : categorizarFilaDian(f)) === filtroCategoria)
+    : filasDian;
   const documentosFiltrados = filtroCategoria
     ? new Map(Array.from(documentosAux.entries()).filter(([, doc]) => doc.categoria === filtroCategoria))
     : documentosAux;

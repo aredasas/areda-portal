@@ -323,6 +323,13 @@
       "when": 1788472347687,
       "tag": "0045_vigencia_recurrentes",
       "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "5",
+      "when": 1788484345979,
+      "tag": "0046_tipos_documento_dian",
+      "breakpoints": true
     }
   ]
 }

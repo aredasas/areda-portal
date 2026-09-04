@@ -2018,6 +2018,47 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           if (!carga) return null;
           return { nombreArchivo: carga.nombreArchivo, totalFilas: carga.totalFilas };
         }),
+      // Sube (o reutiliza) el archivo de la DIAN y devuelve cada tipo de
+      // documento que trae (Emitido/Recibido, con cantidad y total), junto
+      // con la configuración que el cliente ya tenga guardada — para que
+      // el usuario confirme o corrija qué representa cada tipo antes de
+      // comparar (se recuerda para todas las conciliaciones futuras).
+      detectarTiposDocumento: protectedProcedure
+        .input(z.object({ clienteId: z.number(), dianBase64: z.string() }))
+        .mutation(async ({ input, ctx }) => {
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
+          const bufferDian = Buffer.from(input.dianBase64, "base64");
+          const filasDian = await informesDian.parseArchivoDian(bufferDian);
+          if (filasDian.length === 0) {
+            throw new Error("No se encontró ningún documento válido en el archivo de la DIAN.");
+          }
+          const detectados = informesDian.getTiposDocumentoDelArchivo(filasDian);
+          const configuradosPrevios = await informesDian.getConfigTiposDocumento(input.clienteId);
+          const mapaConfig = new Map(configuradosPrevios.map(c => [`${c.tipoDocumentoDian}|${c.grupo}`, c]));
+          return detectados.map(d => {
+            const previo = mapaConfig.get(`${d.tipoDocumentoDian}|${d.grupo}`);
+            return {
+              ...d,
+              categoria: previo?.categoria || d.categoriaSugerida || "otro_gasto",
+              tiposComprobanteContable: previo?.tiposComprobanteContable ? JSON.parse(previo.tiposComprobanteContable) : [],
+              yaConfigurado: !!previo,
+            };
+          });
+        }),
+      guardarTiposDocumento: protectedProcedure
+        .input(z.object({
+          clienteId: z.number(),
+          configs: z.array(z.object({
+            tipoDocumentoDian: z.string(), grupo: z.enum(["Emitido", "Recibido"]),
+            categoria: z.enum(["ingreso", "nomina", "honorarios_servicios", "otro_gasto", "excluir"]),
+            tiposComprobanteContable: z.array(z.string()).optional(),
+          })),
+        }))
+        .mutation(async ({ input, ctx }) => {
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
+          await informesDian.guardarConfigTiposDocumento(input.clienteId, input.configs, ctx.user.id);
+          return { success: true };
+        }),
       // Compara el archivo de reporte de documentos de la DIAN contra el
       // libro auxiliar del mismo mes que ya se cargó en Estado de
       // Resultados para ese cliente+mes — un solo auxiliar sirve de base
@@ -2051,6 +2092,12 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           }
 
           const resultado = informesDian.compararDianVsAuxiliar(filasDian, documentosAux);
+          // Configuración que el cliente ya haya guardado sobre qué
+          // representa cada tipo de documento de la DIAN (ej. "Nómina
+          // electrónica" → gasto de nómina) — si no ha configurado nada
+          // todavía, se usa el heurístico automático por nombre del tipo.
+          const configTiposDoc = await informesDian.getConfigTiposDocumento(input.clienteId);
+          const mapaConfigTipos = informesDian.mapaConfigTiposDocumento(configTiposDoc);
           // Si NINGÚN documento del libro auxiliar logró reconocerse en
           // una cuenta 4/5/14 (columna de cuenta no confiable, o
           // simplemente no se pudo identificar), separar por familia
@@ -2062,10 +2109,10 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           const hayAlgunaCuentaReconocida = Array.from(documentosAux.values()).some(d => d.categoria !== null);
           const seccionesTerceros = hayAlgunaCuentaReconocida
             ? [
-              { titulo: "Ingresos (cuenta 4)", items: informesDian.compararPorTercero(filasDian, documentosAux, "ingreso") },
-              { titulo: "Nómina (cuentas 5105 / 5205)", items: informesDian.compararPorTercero(filasDian, documentosAux, "nomina") },
-              { titulo: "Honorarios y Servicios (cuentas 5110 / 5115 / 5210 / 5215)", items: informesDian.compararPorTercero(filasDian, documentosAux, "honorarios_servicios") },
-              { titulo: "Otras facturas recibidas (demás cuentas 5 y 14, a veces 15/16/17)", items: informesDian.compararPorTercero(filasDian, documentosAux, "otro_gasto") },
+              { titulo: "Ingresos (cuenta 4)", items: informesDian.compararPorTercero(filasDian, documentosAux, "ingreso", mapaConfigTipos) },
+              { titulo: "Nómina (cuentas 5105 / 5205)", items: informesDian.compararPorTercero(filasDian, documentosAux, "nomina", mapaConfigTipos) },
+              { titulo: "Honorarios y Servicios (cuentas 5110 / 5115 / 5210 / 5215)", items: informesDian.compararPorTercero(filasDian, documentosAux, "honorarios_servicios", mapaConfigTipos) },
+              { titulo: "Otras facturas recibidas (demás cuentas 5 y 14, a veces 15/16/17)", items: informesDian.compararPorTercero(filasDian, documentosAux, "otro_gasto", mapaConfigTipos) },
             ]
             : [
               { titulo: "Comparación general por tercero (no se pudo identificar la cuenta contable en el archivo — se muestra todo junto, sin separar ingresos de gastos)", items: informesDian.compararPorTercero(filasDian, documentosAux) },
@@ -2078,7 +2125,14 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           const { url, key: fileKey } = await storagePut(
             key, buffer, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
           );
-          const totalEmitidoDian = filasDian.filter(f => f.grupo === "Emitido").reduce((a, f) => a + f.total, 0);
+          // "Emitido" incluye facturas de venta (ingreso real) pero TAMBIÉN
+          // nómina electrónica y documento soporte — ambos los genera la
+          // empresa, así que aparecen como "Emitido", pero son GASTO suyo,
+          // no ingreso. Sumar todo el grupo sin distinguir inflaba el total
+          // usado para comparar contra los ingresos ya clasificados en la
+          // conciliación de IVA. Se usa la misma categorización real
+          // (por tipo de documento) que ya usa el resto de la comparación.
+          const totalEmitidoDian = filasDian.filter(f => informesDian.categorizarFilaDianConConfig(f, mapaConfigTipos) === "ingreso").reduce((a, f) => a + f.total, 0);
           const totalRecibidoDian = filasDian.filter(f => f.grupo === "Recibido").reduce((a, f) => a + f.total, 0);
           await informesDb.guardarReporteGenerado({
             clienteId: input.clienteId, anio: input.anio, mes: input.mes, tipo: "DIAN",
