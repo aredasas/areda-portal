@@ -1131,15 +1131,17 @@ function ComparacionDianCard({ clienteId, anio, mes, setMes, reportes }: {
   const utils = trpc.useUtils();
 
   const [tiposDetectados, setTiposDetectados] = useState<any[] | null>(null);
-  const [edicionesTipos, setEdicionesTipos] = useState<Record<string, { categoria: string; comprobantes: string }>>({});
+  const [tiposComprobanteDisponibles, setTiposComprobanteDisponibles] = useState<{ tipo: string; cantidad: number }[]>([]);
+  const [edicionesTipos, setEdicionesTipos] = useState<Record<string, { categoria: string; comprobantes: string[] }>>({});
 
   const auxiliarDisponibleQuery = trpc.informes.dian.auxiliarDisponible.useQuery({ clienteId, anio, mes });
 
   const detectarTiposMutation = trpc.informes.dian.detectarTiposDocumento.useMutation({
     onSuccess: (data) => {
-      setTiposDetectados(data);
-      const iniciales: Record<string, { categoria: string; comprobantes: string }> = {};
-      for (const d of data) iniciales[`${d.tipoDocumentoDian}|${d.grupo}`] = { categoria: d.categoria, comprobantes: (d.tiposComprobanteContable || []).join(", ") };
+      setTiposDetectados(data.tipos);
+      setTiposComprobanteDisponibles(data.tiposComprobanteDisponibles);
+      const iniciales: Record<string, { categoria: string; comprobantes: string[] }> = {};
+      for (const d of data.tipos) iniciales[`${d.tipoDocumentoDian}|${d.grupo}`] = { categoria: d.categoria, comprobantes: d.tiposComprobanteContable || [] };
       setEdicionesTipos(iniciales);
     },
     onError: (err) => toast.error(err.message || "No se pudo leer el archivo de la DIAN"),
@@ -1191,7 +1193,7 @@ function ComparacionDianCard({ clienteId, anio, mes, setMes, reportes }: {
     if (!archivoDian) return;
     try {
       const dianBase64 = await fileToBase64(archivoDian);
-      await detectarTiposMutation.mutateAsync({ clienteId, dianBase64 });
+      await detectarTiposMutation.mutateAsync({ clienteId, anio, mes, dianBase64 });
     } catch (error: any) {
       toast.error(error.message || "Error al leer el archivo");
     }
@@ -1201,10 +1203,18 @@ function ComparacionDianCard({ clienteId, anio, mes, setMes, reportes }: {
     if (!tiposDetectados) return;
     const configs = tiposDetectados.map((d: any) => {
       const edicion = edicionesTipos[`${d.tipoDocumentoDian}|${d.grupo}`];
-      const comprobantes = (edicion?.comprobantes || "").split(",").map((s: string) => s.trim()).filter(Boolean);
-      return { tipoDocumentoDian: d.tipoDocumentoDian, grupo: d.grupo, categoria: edicion?.categoria || d.categoria, tiposComprobanteContable: comprobantes };
+      return { tipoDocumentoDian: d.tipoDocumentoDian, grupo: d.grupo, categoria: edicion?.categoria || d.categoria, tiposComprobanteContable: edicion?.comprobantes || [] };
     });
     guardarTiposMutation.mutate({ clienteId, configs });
+  };
+
+  const toggleComprobante = (clave: string, tipo: string) => {
+    setEdicionesTipos(prev => {
+      const actual = prev[clave] || { categoria: "otro_gasto", comprobantes: [] };
+      const yaSeleccionado = actual.comprobantes.includes(tipo);
+      const comprobantes = yaSeleccionado ? actual.comprobantes.filter(t => t !== tipo) : [...actual.comprobantes, tipo];
+      return { ...prev, [clave]: { ...actual, comprobantes } };
+    });
   };
 
   return (
@@ -1279,11 +1289,18 @@ function ComparacionDianCard({ clienteId, anio, mes, setMes, reportes }: {
                 queda guardada para este cliente y se usa en todas las conciliaciones futuras (comparación
                 DIAN, comparación por tercero, e IVA), sin tener que repetirla cada mes.
               </p>
+              {tiposComprobanteDisponibles.length === 0 && (
+                <p className="text-xs text-amber-700">
+                  No se pudo leer el libro auxiliar de {MESES[mes - 1]} {anio} para mostrar sus tipos de
+                  comprobante reales — confirma que esté cargado en "Estado de Resultados". Puedes seguir
+                  configurando la categoría de cada tipo de documento sin esto.
+                </p>
+              )}
               {tiposDetectados.map((d: any) => {
                 const clave = `${d.tipoDocumentoDian}|${d.grupo}`;
-                const edicion = edicionesTipos[clave] || { categoria: d.categoria, comprobantes: "" };
+                const edicion = edicionesTipos[clave] || { categoria: d.categoria, comprobantes: [] as string[] };
                 return (
-                  <div key={clave} className="flex flex-wrap items-end gap-2 border-b pb-2 last:border-b-0">
+                  <div key={clave} className="flex flex-wrap items-start gap-2 border-b pb-2 last:border-b-0">
                     <div className="flex-1 min-w-[180px]">
                       <p className="text-sm font-medium">{d.tipoDocumentoDian}</p>
                       <p className="text-xs text-muted-foreground">
@@ -1304,12 +1321,26 @@ function ComparacionDianCard({ clienteId, anio, mes, setMes, reportes }: {
                         </SelectContent>
                       </Select>
                     </div>
-                    <div className="space-y-1">
-                      <Label className="text-xs">Tipo(s) de comprobante contable</Label>
-                      <Input
-                        placeholder="Ej: CN, CP" value={edicion.comprobantes} className="w-40 h-8 text-xs"
-                        onChange={(e) => setEdicionesTipos(prev => ({ ...prev, [clave]: { ...edicion, comprobantes: e.target.value } }))}
-                      />
+                    <div className="space-y-1 max-w-xs">
+                      <Label className="text-xs">Tipo(s) de comprobante contable (del libro auxiliar)</Label>
+                      {tiposComprobanteDisponibles.length > 0 ? (
+                        <div className="flex flex-wrap gap-1">
+                          {tiposComprobanteDisponibles.map((tc) => {
+                            const seleccionado = edicion.comprobantes.includes(tc.tipo);
+                            return (
+                              <button
+                                key={tc.tipo} type="button" onClick={() => toggleComprobante(clave, tc.tipo)}
+                                className={`text-xs px-2 py-1 rounded-md border ${seleccionado ? "bg-[#EDA011] text-white border-[#EDA011]" : "bg-white text-muted-foreground border-input hover:bg-muted"}`}
+                                title={`${tc.cantidad} documento(s) de tipo "${tc.tipo}" en el libro auxiliar`}
+                              >
+                                {tc.tipo}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <p className="text-xs text-muted-foreground">Sin libro auxiliar disponible para elegir.</p>
+                      )}
                     </div>
                   </div>
                 );

@@ -2024,7 +2024,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
       // el usuario confirme o corrija qué representa cada tipo antes de
       // comparar (se recuerda para todas las conciliaciones futuras).
       detectarTiposDocumento: protectedProcedure
-        .input(z.object({ clienteId: z.number(), dianBase64: z.string() }))
+        .input(z.object({ clienteId: z.number(), anio: z.number(), mes: z.number().min(1).max(12), dianBase64: z.string() }))
         .mutation(async ({ input, ctx }) => {
           await assertClienteAccesibleInformes(ctx, input.clienteId);
           const bufferDian = Buffer.from(input.dianBase64, "base64");
@@ -2035,7 +2035,18 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           const detectados = informesDian.getTiposDocumentoDelArchivo(filasDian);
           const configuradosPrevios = await informesDian.getConfigTiposDocumento(input.clienteId);
           const mapaConfig = new Map(configuradosPrevios.map(c => [`${c.tipoDocumentoDian}|${c.grupo}`, c]));
-          return detectados.map(d => {
+
+          // Tipos de comprobante REALES del libro auxiliar de este mes,
+          // para que el usuario elija de ahí en vez de escribirlos a mano.
+          let tiposComprobanteDisponibles: { tipo: string; cantidad: number }[] = [];
+          const carga = await informesDb.getCargaConArchivo(input.clienteId, input.anio, input.mes);
+          if (carga?.fileKey) {
+            const bufferAuxiliar = await storageGetBuffer(carga.fileKey);
+            const documentosAux = await informesDian.parseAuxiliarParaDian(bufferAuxiliar, input.anio, input.mes);
+            tiposComprobanteDisponibles = informesDian.getTiposComprobanteDelAuxiliar(documentosAux);
+          }
+
+          const tipos = detectados.map(d => {
             const previo = mapaConfig.get(`${d.tipoDocumentoDian}|${d.grupo}`);
             return {
               ...d,
@@ -2044,6 +2055,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
               yaConfigurado: !!previo,
             };
           });
+          return { tipos, tiposComprobanteDisponibles };
         }),
       guardarTiposDocumento: protectedProcedure
         .input(z.object({

@@ -472,6 +472,25 @@ export function getTiposDocumentoDelArchivo(filasDian: FilaDian[]): TipoDocument
   return Array.from(porClave.values()).sort((a, b) => b.total - a.total);
 }
 
+/** Tipos de comprobante ÚNICOS que aparecen en el libro auxiliar ya
+ * parseado (ej. "FV", "CN", "CP", "ND") — para que, al configurar qué
+ * tipo(s) de comprobante contable corresponden a un tipo de documento de
+ * la DIAN, el usuario elija de los que REALMENTE existen en su
+ * contabilidad en vez de escribirlos de memoria (más preciso, sin
+ * errores de tipeo, y garantiza que el cruce futuro contra la
+ * contabilidad encuentre algo). */
+export function getTiposComprobanteDelAuxiliar(documentosAux: Map<string, DocumentoAuxiliar>): { tipo: string; cantidad: number }[] {
+  const conteo = new Map<string, number>();
+  for (const doc of Array.from(documentosAux.values())) {
+    const tipo = doc.tipo.trim();
+    if (!tipo) continue;
+    conteo.set(tipo, (conteo.get(tipo) || 0) + 1);
+  }
+  return Array.from(conteo.entries())
+    .map(([tipo, cantidad]) => ({ tipo, cantidad }))
+    .sort((a, b) => b.cantidad - a.cantidad);
+}
+
 export async function getConfigTiposDocumento(clienteId: number): Promise<InformeTipoDocumentoConfig[]> {
   const db = await getDb();
   if (!db) return [];
