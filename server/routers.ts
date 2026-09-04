@@ -1974,7 +1974,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
             await assertClienteAccesibleInformes(ctx, input.clienteId);
             const meses = informesIva.mesesDelPeriodo(input.periodicidad, input.periodo);
             const [cuentas, totalDianPorMes] = await Promise.all([
-              informesIva.getCuentasIngresoDelPeriodo(input.clienteId, input.anio, meses),
+              informesIva.getCuentasIngresoDelPeriodo(input.clienteId, input.anio, meses, input.periodicidad, input.periodo),
               informesIva.getTotalDianEmitidoPorMes(input.clienteId, input.anio, meses),
             ]);
             return { cuentas, totalDianPorMes };
@@ -1985,24 +1985,30 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
             periodicidad: z.enum(["bimestral", "cuatrimestral", "anual"]), periodo: z.number(),
             clasificaciones: z.array(z.object({
               cuenta: z.string(), clasificacion: z.enum(["gravado_19", "gravado_5", "excluido", "no_gravado"]),
+              facturado: z.boolean(),
             })),
           }))
           .mutation(async ({ input, ctx }) => {
             await assertClienteAccesibleInformes(ctx, input.clienteId);
             await informesIva.guardarClasificacionCuentas(input.clienteId, input.clasificaciones, ctx.user.id);
-
-            const meses = informesIva.mesesDelPeriodo(input.periodicidad, input.periodo);
-            const [cuentas, totalDianPorMes] = await Promise.all([
-              informesIva.getCuentasIngresoDelPeriodo(input.clienteId, input.anio, meses),
-              informesIva.getTotalDianEmitidoPorMes(input.clienteId, input.anio, meses),
-            ]);
-            const totalPorClasificacion = { gravado_19: 0, gravado_5: 0, excluido: 0, no_gravado: 0 };
-            for (const c of cuentas) if (c.clasificacion) totalPorClasificacion[c.clasificacion] += c.valor;
-            const totalContabilidad = cuentas.reduce((a, c) => a + c.valor, 0);
-            const totalDian = totalDianPorMes.reduce((a, m) => a + (m.totalEmitidoDian ?? 0), 0);
-            const resumen = { cuentas, totalPorClasificacion, totalContabilidad, totalDianPorMes, totalDian };
-            await informesIva.guardarPasoIngresos(input.clienteId, input.anio, input.periodicidad, input.periodo, resumen);
-            return resumen;
+            return informesIva.computarResumenIngresos(input.clienteId, input.anio, input.periodicidad, input.periodo);
+          }),
+        guardarDivision: protectedProcedure
+          .input(z.object({
+            clienteId: z.number(), anio: z.number(),
+            periodicidad: z.enum(["bimestral", "cuatrimestral", "anual"]), periodo: z.number(),
+            cuenta: z.string(),
+            divisiones: z.array(z.object({
+              etiqueta: z.string().optional(), valor: z.number(),
+              clasificacion: z.enum(["gravado_19", "gravado_5", "excluido", "no_gravado"]), facturado: z.boolean(),
+            })),
+          }))
+          .mutation(async ({ input, ctx }) => {
+            await assertClienteAccesibleInformes(ctx, input.clienteId);
+            await informesIva.guardarDivisionesCuenta(
+              input.clienteId, input.anio, input.periodicidad, input.periodo, input.cuenta, input.divisiones, ctx.user.id,
+            );
+            return informesIva.computarResumenIngresos(input.clienteId, input.anio, input.periodicidad, input.periodo);
           }),
       }),
     }),

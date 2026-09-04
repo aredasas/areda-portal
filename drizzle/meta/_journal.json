@@ -330,6 +330,13 @@
       "when": 1788484345979,
       "tag": "0046_tipos_documento_dian",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "5",
+      "when": 1788491164604,
+      "tag": "0047_facturado_y_division_cuenta",
+      "breakpoints": true
     }
   ]
 }

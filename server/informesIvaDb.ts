@@ -3,6 +3,7 @@ import { getDb } from "./db";
 import {
   informesCargas, informesReportes, informesIvaConciliacion,
   informesSaldosMensuales, informesClasificacionCuentas, informesCuentasCliente, informesCuentasPuc,
+  informesDivisionesCuentaIva,
 } from "../drizzle/schema";
 
 export type Periodicidad = "bimestral" | "cuatrimestral" | "anual";
@@ -116,18 +117,35 @@ export async function getConciliacionIva(
 
 export type ClasificacionIva = "gravado_19" | "gravado_5" | "excluido" | "no_gravado";
 
+export type DivisionCuenta = {
+  orden: number;
+  etiqueta: string | null;
+  valor: number;
+  clasificacion: ClasificacionIva;
+  facturado: boolean;
+};
+
 export type CuentaResumenPeriodo = {
   cuenta: string;
   nombre: string;
   valor: number;
   clasificacion: ClasificacionIva | null;
+  facturado: boolean;
+  /** Si tiene divisiones para ESTE periodo, la cuenta se trata como
+   * varias sub-partidas (cada una con su propia tarifa y si está
+   * facturada), en vez de una sola clasificación — típico cuando una
+   * cuenta mezcla ingreso gravado y excluido sin cuentas separadas. */
+  divisiones: DivisionCuenta[];
 };
 
 /** Cuentas de ingreso (cuenta 4, ya identificadas como tipo "ingreso" al
  * cargar el libro auxiliar) que tuvieron movimiento en los meses del
  * periodo, sumadas entre todos los centros de costo — con la
- * clasificación tributaria ya guardada para este cliente, si existe. */
-export async function getCuentasIngresoDelPeriodo(clienteId: number, anio: number, meses: number[]): Promise<CuentaResumenPeriodo[]> {
+ * clasificación tributaria ya guardada para este cliente, si existe, y
+ * las divisiones (si las hay) guardadas para este periodo específico. */
+export async function getCuentasIngresoDelPeriodo(
+  clienteId: number, anio: number, meses: number[], periodicidad: Periodicidad, periodo: number,
+): Promise<CuentaResumenPeriodo[]> {
   const db = await getDb();
   if (!db) return [];
   const saldos = await db.select().from(informesSaldosMensuales).where(and(
@@ -140,29 +158,48 @@ export async function getCuentasIngresoDelPeriodo(clienteId: number, anio: numbe
   for (const s of saldos) totalPorCuenta.set(s.cuenta, (totalPorCuenta.get(s.cuenta) || 0) + s.valor);
   const cuentas = Array.from(totalPorCuenta.keys());
 
-  const [nombresCliente, nombresPuc, clasificaciones] = await Promise.all([
+  const [nombresCliente, nombresPuc, clasificaciones, divisionesGuardadas] = await Promise.all([
     db.select().from(informesCuentasCliente).where(and(eq(informesCuentasCliente.clienteId, clienteId), inArray(informesCuentasCliente.cuenta, cuentas))),
     db.select().from(informesCuentasPuc).where(inArray(informesCuentasPuc.cuenta, cuentas)),
     db.select().from(informesClasificacionCuentas).where(and(eq(informesClasificacionCuentas.clienteId, clienteId), inArray(informesClasificacionCuentas.cuenta, cuentas))),
+    db.select().from(informesDivisionesCuentaIva).where(and(
+      eq(informesDivisionesCuentaIva.clienteId, clienteId), eq(informesDivisionesCuentaIva.anio, anio),
+      eq(informesDivisionesCuentaIva.periodicidad, periodicidad), eq(informesDivisionesCuentaIva.periodo, periodo),
+      inArray(informesDivisionesCuentaIva.cuenta, cuentas),
+    )),
   ]);
   const nombrePorCuentaCliente = new Map(nombresCliente.map(n => [n.cuenta, n.nombre]));
   const nombrePorCuentaPuc = new Map(nombresPuc.map(n => [n.cuenta, n.descripcion]));
-  const clasifPorCuenta = new Map(clasificaciones.map(c => [c.cuenta, c.clasificacion as ClasificacionIva]));
+  const clasifPorCuenta = new Map(clasificaciones.map(c => [c.cuenta, c]));
+  const divisionesPorCuenta = new Map<string, DivisionCuenta[]>();
+  for (const d of divisionesGuardadas) {
+    if (!divisionesPorCuenta.has(d.cuenta)) divisionesPorCuenta.set(d.cuenta, []);
+    divisionesPorCuenta.get(d.cuenta)!.push({
+      orden: d.orden, etiqueta: d.etiqueta, valor: d.valor,
+      clasificacion: d.clasificacion as ClasificacionIva, facturado: d.facturado,
+    });
+  }
 
   return cuentas
-    .map(cuenta => ({
-      cuenta, valor: totalPorCuenta.get(cuenta) || 0,
-      nombre: nombrePorCuentaCliente.get(cuenta) || nombrePorCuentaPuc.get(cuenta) || "(sin nombre)",
-      clasificacion: clasifPorCuenta.get(cuenta) ?? null,
-    }))
+    .map(cuenta => {
+      const config = clasifPorCuenta.get(cuenta);
+      const divisiones = (divisionesPorCuenta.get(cuenta) || []).sort((a, b) => a.orden - b.orden);
+      return {
+        cuenta, valor: totalPorCuenta.get(cuenta) || 0,
+        nombre: nombrePorCuentaCliente.get(cuenta) || nombrePorCuentaPuc.get(cuenta) || "(sin nombre)",
+        clasificacion: (config?.clasificacion as ClasificacionIva) ?? null,
+        facturado: config?.facturado ?? true,
+        divisiones,
+      };
+    })
     .sort((a, b) => a.cuenta.localeCompare(b.cuenta));
 }
 
-/** Guarda (o corrige) la clasificación tributaria de una o varias cuentas
- * para este cliente — queda disponible también para los siguientes
- * periodos, sin tener que reclasificar cada vez. */
+/** Guarda (o corrige) la clasificación tributaria — y si está facturada —
+ * de una o varias cuentas para este cliente — queda disponible también
+ * para los siguientes periodos, sin tener que reclasificar cada vez. */
 export async function guardarClasificacionCuentas(
-  clienteId: number, clasificaciones: { cuenta: string; clasificacion: ClasificacionIva }[], userId: number,
+  clienteId: number, clasificaciones: { cuenta: string; clasificacion: ClasificacionIva; facturado: boolean }[], userId: number,
 ): Promise<void> {
   const db = await getDb();
   if (!db) return;
@@ -171,11 +208,38 @@ export async function guardarClasificacionCuentas(
       .where(and(eq(informesClasificacionCuentas.clienteId, clienteId), eq(informesClasificacionCuentas.cuenta, c.cuenta))).limit(1);
     if (existente.length > 0) {
       await db.update(informesClasificacionCuentas)
-        .set({ clasificacion: c.clasificacion, actualizadoPorId: userId })
+        .set({ clasificacion: c.clasificacion, facturado: c.facturado, actualizadoPorId: userId })
         .where(eq(informesClasificacionCuentas.id, existente[0].id));
     } else {
-      await db.insert(informesClasificacionCuentas).values({ clienteId, cuenta: c.cuenta, clasificacion: c.clasificacion, actualizadoPorId: userId });
+      await db.insert(informesClasificacionCuentas).values({ clienteId, cuenta: c.cuenta, clasificacion: c.clasificacion, facturado: c.facturado, actualizadoPorId: userId });
     }
+  }
+}
+
+/** Divide el valor de una cuenta, PARA ESTE PERIODO, en dos o más partes
+ * (ej. 70% gravado al 19% y 30% excluido) — cada parte con su propia
+ * tarifa y si está facturada. Reemplaza cualquier división anterior de
+ * esa cuenta en este mismo periodo. Pasar un array vacío elimina la
+ * división (la cuenta vuelve a su clasificación simple). */
+export async function guardarDivisionesCuenta(
+  clienteId: number, anio: number, periodicidad: Periodicidad, periodo: number, cuenta: string,
+  divisiones: { etiqueta?: string; valor: number; clasificacion: ClasificacionIva; facturado: boolean }[],
+  userId: number,
+): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.delete(informesDivisionesCuentaIva).where(and(
+    eq(informesDivisionesCuentaIva.clienteId, clienteId), eq(informesDivisionesCuentaIva.anio, anio),
+    eq(informesDivisionesCuentaIva.periodicidad, periodicidad), eq(informesDivisionesCuentaIva.periodo, periodo),
+    eq(informesDivisionesCuentaIva.cuenta, cuenta),
+  ));
+  for (let i = 0; i < divisiones.length; i++) {
+    const d = divisiones[i];
+    await db.insert(informesDivisionesCuentaIva).values({
+      clienteId, anio, periodicidad, periodo, cuenta, orden: i,
+      etiqueta: d.etiqueta || null, valor: d.valor, clasificacion: d.clasificacion, facturado: d.facturado,
+      actualizadoPorId: userId,
+    });
   }
 }
 
@@ -204,6 +268,49 @@ export async function getTotalDianEmitidoPorMes(clienteId: number, anio: number,
  * conciliación (subtotales por tarifa + comparación contra la DIAN) —
  * se fusiona con lo que ya hubiera en `estadoJson` de otros pasos, para
  * no perder el avance de las fases siguientes cuando estén listas. */
+/** Desglosa una cuenta en sus líneas de cálculo — si tiene divisiones
+ * para este periodo, cada división es una línea independiente con su
+ * propia tarifa y si está facturada; si no, la cuenta entera es una
+ * sola línea con su clasificación simple. Se usa para sumar subtotales
+ * sin tener que repetir esta lógica en cada consumidor. */
+export function desglosarCuenta(cuenta: CuentaResumenPeriodo): { valor: number; clasificacion: ClasificacionIva | null; facturado: boolean }[] {
+  if (cuenta.divisiones.length > 0) {
+    return cuenta.divisiones.map(d => ({ valor: d.valor, clasificacion: d.clasificacion, facturado: d.facturado }));
+  }
+  return [{ valor: cuenta.valor, clasificacion: cuenta.clasificacion, facturado: cuenta.facturado }];
+}
+
+/** Arma el resumen completo del paso "ingresos" — subtotales por tarifa
+ * (sobre TODO el ingreso, se facture o no, porque el Formulario 300 pide
+ * el total real) y la comparación contra la DIAN (que SOLO debe usar lo
+ * facturado electrónicamente, ya que eso es lo único que puede aparecer
+ * del lado de la DIAN) — y lo deja guardado en el expediente. Reutilizado
+ * tanto al guardar la clasificación de una cuenta como al guardar una
+ * división. */
+export async function computarResumenIngresos(
+  clienteId: number, anio: number, periodicidad: Periodicidad, periodo: number,
+) {
+  const meses = mesesDelPeriodo(periodicidad, periodo);
+  const [cuentas, totalDianPorMes] = await Promise.all([
+    getCuentasIngresoDelPeriodo(clienteId, anio, meses, periodicidad, periodo),
+    getTotalDianEmitidoPorMes(clienteId, anio, meses),
+  ]);
+  const totalPorClasificacion = { gravado_19: 0, gravado_5: 0, excluido: 0, no_gravado: 0 };
+  let totalContabilidad = 0;
+  let totalContabilidadFacturado = 0;
+  for (const c of cuentas) {
+    for (const linea of desglosarCuenta(c)) {
+      if (linea.clasificacion) totalPorClasificacion[linea.clasificacion] += linea.valor;
+      totalContabilidad += linea.valor;
+      if (linea.facturado) totalContabilidadFacturado += linea.valor;
+    }
+  }
+  const totalDian = totalDianPorMes.reduce((a, m) => a + (m.totalEmitidoDian ?? 0), 0);
+  const resumen = { cuentas, totalPorClasificacion, totalContabilidad, totalContabilidadFacturado, totalDianPorMes, totalDian };
+  await guardarPasoIngresos(clienteId, anio, periodicidad, periodo, resumen);
+  return resumen;
+}
+
 export async function guardarPasoIngresos(
   clienteId: number, anio: number, periodicidad: Periodicidad, codigoPeriodo: number, resumenIngresos: unknown,
 ): Promise<void> {

@@ -580,12 +580,45 @@ export const informesClasificacionCuentas = mysqlTable("informesClasificacionCue
   clienteId: int("clienteId").notNull(),
   cuenta: varchar("cuenta", { length: 12 }).notNull(),
   clasificacion: mysqlEnum("clasificacion", ["gravado_19", "gravado_5", "excluido", "no_gravado"]).notNull(),
+  /** Si el valor de esta cuenta corresponde a ingreso facturado
+   * electrónicamente — solo lo facturado se compara contra el total
+   * "Emitido" de la DIAN (hay ingresos, como rendimientos financieros,
+   * que legítimamente nunca se facturan). Por defecto true, ya que la
+   * mayoría de cuentas de ingreso sí se facturan. */
+  facturado: boolean("facturado").default(true).notNull(),
   actualizadoPorId: int("actualizadoPorId").notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 }, (table) => ({
   clienteCuentaIdx: uniqueIndex("informesClasificacionCuentas_cliente_cuenta_idx").on(table.clienteId, table.cuenta),
 }));
 export type InformeClasificacionCuenta = typeof informesClasificacionCuentas.$inferSelect;
+
+/** Cuando una sola cuenta de ingreso mezcla varias tarifas de IVA (ej.
+ * parte gravada al 19% y parte excluida, sin cuentas separadas para
+ * cada una) — permite partir el valor de esa cuenta, PARA UN PERIODO
+ * ESPECÍFICO (el valor cambia cada mes, a diferencia de la clasificación
+ * de una cuenta simple que se reutiliza entre periodos), en dos o más
+ * partes, cada una con su propia tarifa y si está facturada o no. Si
+ * una cuenta tiene divisiones para un periodo, esas reemplazan a su
+ * clasificación simple SOLO en ese periodo. */
+export const informesDivisionesCuentaIva = mysqlTable("informesDivisionesCuentaIva", {
+  id: int("id").autoincrement().primaryKey(),
+  clienteId: int("clienteId").notNull(),
+  anio: int("anio").notNull(),
+  periodicidad: mysqlEnum("periodicidad", ["bimestral", "cuatrimestral", "anual"]).notNull(),
+  periodo: int("periodo").notNull(),
+  cuenta: varchar("cuenta", { length: 12 }).notNull(),
+  orden: int("orden").notNull(),
+  etiqueta: varchar("etiqueta", { length: 100 }),
+  valor: double("valor").notNull(),
+  clasificacion: mysqlEnum("clasificacion", ["gravado_19", "gravado_5", "excluido", "no_gravado"]).notNull(),
+  facturado: boolean("facturado").default(true).notNull(),
+  actualizadoPorId: int("actualizadoPorId").notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (table) => ({
+  clientePeriodoCuentaOrdenIdx: uniqueIndex("informesDivisionesCuentaIva_idx").on(table.clienteId, table.anio, table.periodicidad, table.periodo, table.cuenta, table.orden),
+}));
+export type InformeDivisionCuentaIva = typeof informesDivisionesCuentaIva.$inferSelect;
 
 /** Configuración, POR CLIENTE, de qué representa cada tipo de documento
  * que aparece en el archivo de la DIAN — es rara la vez que un cliente

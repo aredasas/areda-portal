@@ -648,12 +648,14 @@ function IngresosIvaCard({ clienteId, anio, periodicidad, periodo }: {
   clienteId: number; anio: number; periodicidad: "bimestral" | "cuatrimestral" | "anual"; periodo: number;
 }) {
   const listarQuery = trpc.informes.iva.ingresos.listar.useQuery({ clienteId, anio, periodicidad, periodo });
-  const [clasificacionLocal, setClasificacionLocal] = useState<Record<string, string>>({});
+  const [clasificacionLocal, setClasificacionLocal] = useState<Record<string, { clasificacion: string; facturado: boolean }>>({});
   const [inicializado, setInicializado] = useState(false);
+  const [editandoDivision, setEditandoDivision] = useState<string | null>(null);
+  const [divisionLocal, setDivisionLocal] = useState<{ etiqueta: string; valor: string; clasificacion: string; facturado: boolean }[]>([]);
 
   if (!inicializado && listarQuery.data) {
-    const inicial: Record<string, string> = {};
-    for (const c of listarQuery.data.cuentas) if (c.clasificacion) inicial[c.cuenta] = c.clasificacion;
+    const inicial: Record<string, { clasificacion: string; facturado: boolean }> = {};
+    for (const c of listarQuery.data.cuentas) inicial[c.cuenta] = { clasificacion: c.clasificacion || "", facturado: c.facturado };
     setClasificacionLocal(inicial);
     setInicializado(true);
   }
@@ -661,6 +663,11 @@ function IngresosIvaCard({ clienteId, anio, periodicidad, periodo }: {
   const guardarMutation = trpc.informes.iva.ingresos.guardarClasificacion.useMutation({
     onSuccess: () => { toast.success("Clasificación de ingresos guardada"); listarQuery.refetch(); },
     onError: (err) => toast.error(err.message || "No se pudo guardar"),
+  });
+
+  const guardarDivisionMutation = trpc.informes.iva.ingresos.guardarDivision.useMutation({
+    onSuccess: () => { toast.success("División de la cuenta guardada"); setEditandoDivision(null); listarQuery.refetch(); },
+    onError: (err) => toast.error(err.message || "No se pudo guardar la división"),
   });
 
   const fmt = (n: number) => `$${Math.round(n).toLocaleString("es-CO")}`;
@@ -676,52 +683,186 @@ function IngresosIvaCard({ clienteId, anio, periodicidad, periodo }: {
   }
 
   const { cuentas, totalDianPorMes } = listarQuery.data;
-  const todasClasificadas = cuentas.every(c => !!clasificacionLocal[c.cuenta]);
-  const totalContabilidad = cuentas.reduce((a, c) => a + c.valor, 0);
+  const todasClasificadas = cuentas.every((c: any) => c.divisiones.length > 0 || !!clasificacionLocal[c.cuenta]?.clasificacion);
+
+  // Desglose local — misma lógica que el backend (desglosarCuenta), pero
+  // usando lo que el usuario tiene seleccionado en pantalla ahora mismo
+  // (antes de guardar) para que el resumen se sienta inmediato.
+  const desglose: { valor: number; clasificacion: string | null; facturado: boolean }[] = [];
+  for (const c of cuentas) {
+    if (c.divisiones.length > 0) {
+      for (const d of c.divisiones) desglose.push({ valor: d.valor, clasificacion: d.clasificacion, facturado: d.facturado });
+    } else {
+      const local = clasificacionLocal[c.cuenta];
+      desglose.push({ valor: c.valor, clasificacion: local?.clasificacion || null, facturado: local?.facturado ?? true });
+    }
+  }
+  const totalContabilidad = desglose.reduce((a, l) => a + l.valor, 0);
+  const totalFacturado = desglose.filter(l => l.facturado).reduce((a, l) => a + l.valor, 0);
   const totalDian = totalDianPorMes.reduce((a, m) => a + (m.totalEmitidoDian ?? 0), 0);
   const hayMesesSinDian = totalDianPorMes.some(m => m.totalEmitidoDian === null);
-  const diferenciaTotal = totalContabilidad - totalDian;
+  const diferenciaTotal = totalFacturado - totalDian;
+
+  const handleAbrirDivision = (cuenta: any) => {
+    if (cuenta.divisiones.length > 0) {
+      setDivisionLocal(cuenta.divisiones.map((d: any) => ({ etiqueta: d.etiqueta || "", valor: String(d.valor), clasificacion: d.clasificacion, facturado: d.facturado })));
+    } else {
+      const mitad = Math.round(cuenta.valor / 2);
+      setDivisionLocal([
+        { etiqueta: "Gravado", valor: String(mitad), clasificacion: "gravado_19", facturado: true },
+        { etiqueta: "Excluido", valor: String(cuenta.valor - mitad), clasificacion: "excluido", facturado: false },
+      ]);
+    }
+    setEditandoDivision(cuenta.cuenta);
+  };
+
+  const handleGuardarDivision = (cuenta: string) => {
+    const divisiones = divisionLocal.map(d => ({
+      etiqueta: d.etiqueta || undefined, valor: parseFloat(d.valor) || 0,
+      clasificacion: d.clasificacion as any, facturado: d.facturado,
+    }));
+    guardarDivisionMutation.mutate({ clienteId, anio, periodicidad, periodo, cuenta, divisiones });
+  };
+
+  const handleQuitarDivision = (cuenta: string) => {
+    guardarDivisionMutation.mutate({ clienteId, anio, periodicidad, periodo, cuenta, divisiones: [] });
+  };
+
+  const sumaDivisionLocal = divisionLocal.reduce((a, d) => a + (parseFloat(d.valor) || 0), 0);
+  const valorCuentaEnEdicion = cuentas.find((c: any) => c.cuenta === editandoDivision)?.valor || 0;
+  const divisionCuadra = Math.abs(sumaDivisionLocal - valorCuentaEnEdicion) < 1;
 
   return (
     <div className="border rounded-md p-3 space-y-3">
       <p className="text-xs font-medium text-muted-foreground">Paso 2 · Clasificación de ingresos</p>
+      <p className="text-xs text-muted-foreground">
+        Marca "Facturado" solo en las partidas que se facturaron electrónicamente — son las únicas que se
+        comparan contra lo que la DIAN tiene reportado. Si una cuenta mezcla ingreso gravado y excluido,
+        usa "Dividir cuenta" para separarlos.
+      </p>
       <div className="space-y-1.5">
-        {cuentas.map((c) => (
-          <div key={c.cuenta} className="flex items-center justify-between gap-2 text-sm border-b py-1.5 last:border-b-0">
-            <div className="flex-1 min-w-0">
-              <span className="font-medium">{c.cuenta}</span> <span className="text-muted-foreground truncate">{c.nombre}</span>
+        {cuentas.map((c: any) => {
+          const tieneDivision = c.divisiones.length > 0;
+          const local = clasificacionLocal[c.cuenta] || { clasificacion: "", facturado: true };
+          return (
+            <div key={c.cuenta} className="border-b pb-2 last:border-b-0 space-y-1.5">
+              <div className="flex items-center justify-between gap-2 text-sm">
+                <div className="flex-1 min-w-0">
+                  <span className="font-medium">{c.cuenta}</span> <span className="text-muted-foreground truncate">{c.nombre}</span>
+                </div>
+                <span className="shrink-0 w-32 text-right">{fmt(c.valor)}</span>
+                {!tieneDivision && (
+                  <>
+                    <Select value={local.clasificacion} onValueChange={(v) => setClasificacionLocal(prev => ({ ...prev, [c.cuenta]: { ...local, clasificacion: v } }))}>
+                      <SelectTrigger className="w-40 shrink-0 h-8 text-xs"><SelectValue placeholder="Clasificar..." /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="gravado_19">Gravado 19%</SelectItem>
+                        <SelectItem value="gravado_5">Gravado 5%</SelectItem>
+                        <SelectItem value="excluido">Excluido</SelectItem>
+                        <SelectItem value="no_gravado">No gravado</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <label className="flex items-center gap-1.5 text-xs shrink-0 cursor-pointer">
+                      <input
+                        type="checkbox" checked={local.facturado}
+                        onChange={(e) => setClasificacionLocal(prev => ({ ...prev, [c.cuenta]: { ...local, facturado: e.target.checked } }))}
+                      />
+                      Facturado
+                    </label>
+                  </>
+                )}
+                <Button variant="ghost" size="sm" className="h-8 text-xs shrink-0" onClick={() => handleAbrirDivision(c)}>
+                  {tieneDivision ? "Editar división" : "Dividir cuenta"}
+                </Button>
+              </div>
+
+              {tieneDivision && editandoDivision !== c.cuenta && (
+                <div className="ml-4 space-y-1">
+                  {c.divisiones.map((d: any, i: number) => (
+                    <div key={i} className="flex items-center justify-between text-xs text-muted-foreground">
+                      <span>{d.etiqueta || `Parte ${i + 1}`} — {NOMBRES_CLASIFICACION[d.clasificacion]}{d.facturado ? "" : " · no facturado"}</span>
+                      <span>{fmt(d.valor)}</span>
+                    </div>
+                  ))}
+                  <Button variant="link" size="sm" className="h-6 text-xs text-red-600 p-0" onClick={() => handleQuitarDivision(c.cuenta)}>
+                    Quitar división
+                  </Button>
+                </div>
+              )}
+
+              {editandoDivision === c.cuenta && (
+                <div className="ml-4 border rounded-md p-2 space-y-2 bg-muted/30">
+                  {divisionLocal.map((d, i) => (
+                    <div key={i} className="flex flex-wrap items-end gap-2">
+                      <Input
+                        placeholder="Etiqueta (opcional)" value={d.etiqueta} className="w-36 h-8 text-xs"
+                        onChange={(e) => setDivisionLocal(prev => prev.map((x, j) => j === i ? { ...x, etiqueta: e.target.value } : x))}
+                      />
+                      <Input
+                        placeholder="Valor" type="number" value={d.valor} className="w-32 h-8 text-xs"
+                        onChange={(e) => setDivisionLocal(prev => prev.map((x, j) => j === i ? { ...x, valor: e.target.value } : x))}
+                      />
+                      <Select value={d.clasificacion} onValueChange={(v) => setDivisionLocal(prev => prev.map((x, j) => j === i ? { ...x, clasificacion: v } : x))}>
+                        <SelectTrigger className="w-36 h-8 text-xs"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="gravado_19">Gravado 19%</SelectItem>
+                          <SelectItem value="gravado_5">Gravado 5%</SelectItem>
+                          <SelectItem value="excluido">Excluido</SelectItem>
+                          <SelectItem value="no_gravado">No gravado</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <label className="flex items-center gap-1.5 text-xs cursor-pointer">
+                        <input type="checkbox" checked={d.facturado} onChange={(e) => setDivisionLocal(prev => prev.map((x, j) => j === i ? { ...x, facturado: e.target.checked } : x))} />
+                        Facturado
+                      </label>
+                      {divisionLocal.length > 2 && (
+                        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setDivisionLocal(prev => prev.filter((_, j) => j !== i))}>
+                          <X className="w-3.5 h-3.5" />
+                        </Button>
+                      )}
+                    </div>
+                  ))}
+                  <div className="flex items-center gap-2">
+                    <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => setDivisionLocal(prev => [...prev, { etiqueta: "", valor: "0", clasificacion: "gravado_19", facturado: true }])}>
+                      <Plus className="w-3 h-3 mr-1" /> Agregar parte
+                    </Button>
+                    <span className={`text-xs ${divisionCuadra ? "text-green-700" : "text-amber-700"}`}>
+                      Suma: {fmt(sumaDivisionLocal)} de {fmt(valorCuentaEnEdicion)} {divisionCuadra ? "✓" : "— no cuadra con el total de la cuenta"}
+                    </span>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button size="sm" className="h-7 text-xs" disabled={guardarDivisionMutation.isPending} onClick={() => handleGuardarDivision(c.cuenta)}>
+                      {guardarDivisionMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : null}
+                      Guardar división
+                    </Button>
+                    <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setEditandoDivision(null)}>Cancelar</Button>
+                  </div>
+                </div>
+              )}
             </div>
-            <span className="shrink-0 w-32 text-right">{fmt(c.valor)}</span>
-            <Select value={clasificacionLocal[c.cuenta] || ""} onValueChange={(v) => setClasificacionLocal(prev => ({ ...prev, [c.cuenta]: v }))}>
-              <SelectTrigger className="w-40 shrink-0 h-8 text-xs"><SelectValue placeholder="Clasificar..." /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="gravado_19">Gravado 19%</SelectItem>
-                <SelectItem value="gravado_5">Gravado 5%</SelectItem>
-                <SelectItem value="excluido">Excluido</SelectItem>
-                <SelectItem value="no_gravado">No gravado</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       <Button
         size="sm" disabled={!todasClasificadas || guardarMutation.isPending}
         onClick={() => guardarMutation.mutate({
           clienteId, anio, periodicidad, periodo,
-          clasificaciones: cuentas.map(c => ({ cuenta: c.cuenta, clasificacion: clasificacionLocal[c.cuenta] as any })),
+          clasificaciones: cuentas
+            .filter((c: any) => c.divisiones.length === 0)
+            .map((c: any) => ({ cuenta: c.cuenta, clasificacion: clasificacionLocal[c.cuenta]?.clasificacion as any, facturado: clasificacionLocal[c.cuenta]?.facturado ?? true })),
         })}
       >
         {guardarMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
         Guardar clasificación
       </Button>
-      {!todasClasificadas && <p className="text-xs text-muted-foreground">Clasifica todas las cuentas para poder guardar.</p>}
+      {!todasClasificadas && <p className="text-xs text-muted-foreground">Clasifica todas las cuentas (o divídelas) para poder guardar.</p>}
 
       {todasClasificadas && (
         <div className="border-t pt-3 space-y-2">
           <p className="text-xs font-medium text-muted-foreground">Resumen del periodo</p>
           {(["gravado_19", "gravado_5", "excluido", "no_gravado"] as const).map((clas) => {
-            const total = cuentas.filter(c => clasificacionLocal[c.cuenta] === clas).reduce((a, c) => a + c.valor, 0);
+            const total = desglose.filter(l => l.clasificacion === clas).reduce((a, l) => a + l.valor, 0);
             if (total === 0) return null;
             return (
               <div key={clas} className="flex items-center justify-between text-sm">
@@ -734,9 +875,13 @@ function IngresosIvaCard({ clienteId, anio, periodicidad, periodo }: {
             <span>Total ingresos (contabilidad)</span>
             <span>{fmt(totalContabilidad)}</span>
           </div>
+          <div className="flex items-center justify-between text-xs text-muted-foreground">
+            <span>De los cuales, facturado electrónicamente</span>
+            <span>{fmt(totalFacturado)}</span>
+          </div>
 
           <div className="border-t pt-2 space-y-1">
-            <p className="text-xs font-medium text-muted-foreground">Comparación contra la DIAN (documentos Emitidos)</p>
+            <p className="text-xs font-medium text-muted-foreground">Comparación contra la DIAN (solo lo facturado)</p>
             {totalDianPorMes.map((m: any) => {
               const nombreMes = ["", "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"][m.mes];
               return (
@@ -760,14 +905,14 @@ function IngresosIvaCard({ clienteId, anio, periodicidad, periodo }: {
             {!hayMesesSinDian && Math.abs(diferenciaTotal) > Math.max(5, totalDian * 0.001) && (
               <p className="text-xs text-red-600 flex items-center gap-1.5">
                 <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                Diferencia de {fmt(diferenciaTotal)} entre la contabilidad y la DIAN — revisa mes por mes
+                Diferencia de {fmt(diferenciaTotal)} entre lo facturado y la DIAN — revisa mes por mes
                 para ubicar en cuál se presenta.
               </p>
             )}
             {!hayMesesSinDian && Math.abs(diferenciaTotal) <= Math.max(5, totalDian * 0.001) && (
               <p className="text-xs text-green-700 flex items-center gap-1.5">
                 <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
-                Los ingresos cuadran con lo que la DIAN tiene reportado.
+                Lo facturado cuadra con lo que la DIAN tiene reportado.
               </p>
             )}
           </div>
