@@ -2051,12 +2051,25 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           }
 
           const resultado = informesDian.compararDianVsAuxiliar(filasDian, documentosAux);
-          const seccionesTerceros = [
-            { titulo: "Ingresos (cuenta 4)", items: informesDian.compararPorTercero(filasDian, documentosAux, "ingreso") },
-            { titulo: "Nómina (cuentas 5105 / 5205)", items: informesDian.compararPorTercero(filasDian, documentosAux, "nomina") },
-            { titulo: "Honorarios y Servicios (cuentas 5110 / 5115 / 5210 / 5215)", items: informesDian.compararPorTercero(filasDian, documentosAux, "honorarios_servicios") },
-            { titulo: "Otras facturas recibidas (demás cuentas 5 y 14, a veces 15/16/17)", items: informesDian.compararPorTercero(filasDian, documentosAux, "otro_gasto") },
-          ];
+          // Si NINGÚN documento del libro auxiliar logró reconocerse en
+          // una cuenta 4/5/14 (columna de cuenta no confiable, o
+          // simplemente no se pudo identificar), separar por familia
+          // dejaría las 4 secciones con "Total Contabilidad" en $0 para
+          // todo el mundo — engañoso, parece un faltante masivo cuando en
+          // realidad es que no se pudo clasificar nada. En ese caso se
+          // muestra una sola comparación general (sin distinguir cuenta),
+          // que sigue siendo útil aunque mezcle ingresos y gastos.
+          const hayAlgunaCuentaReconocida = Array.from(documentosAux.values()).some(d => d.categoria !== null);
+          const seccionesTerceros = hayAlgunaCuentaReconocida
+            ? [
+              { titulo: "Ingresos (cuenta 4)", items: informesDian.compararPorTercero(filasDian, documentosAux, "ingreso") },
+              { titulo: "Nómina (cuentas 5105 / 5205)", items: informesDian.compararPorTercero(filasDian, documentosAux, "nomina") },
+              { titulo: "Honorarios y Servicios (cuentas 5110 / 5115 / 5210 / 5215)", items: informesDian.compararPorTercero(filasDian, documentosAux, "honorarios_servicios") },
+              { titulo: "Otras facturas recibidas (demás cuentas 5 y 14, a veces 15/16/17)", items: informesDian.compararPorTercero(filasDian, documentosAux, "otro_gasto") },
+            ]
+            : [
+              { titulo: "Comparación general por tercero (no se pudo identificar la cuenta contable en el archivo — se muestra todo junto, sin separar ingresos de gastos)", items: informesDian.compararPorTercero(filasDian, documentosAux) },
+            ];
           const buffer = await informesDian.generarReporteComparacionDian(
             resultado, cliente?.razonSocial || "Cliente", input.anio, input.mes, seccionesTerceros,
           );
