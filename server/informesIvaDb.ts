@@ -249,9 +249,9 @@ export async function guardarDivisionesCuenta(
  * Si algún mes tiene más de una comparación generada, se usa la más
  * reciente. Devuelve null en los meses donde nunca se guardó ese total
  * (comparaciones generadas antes de que se empezara a guardar). */
-export async function getTotalDianEmitidoPorMes(clienteId: number, anio: number, meses: number[]): Promise<{ mes: number; totalEmitidoDian: number | null }[]> {
+export async function getTotalDianEmitidoPorMes(clienteId: number, anio: number, meses: number[]): Promise<{ mes: number; totalEmitidoDian: number | null; generadoEl: Date | null }[]> {
   const db = await getDb();
-  if (!db) return meses.map(mes => ({ mes, totalEmitidoDian: null }));
+  if (!db) return meses.map(mes => ({ mes, totalEmitidoDian: null, generadoEl: null }));
   const reportes = await db.select().from(informesReportes).where(and(
     eq(informesReportes.clienteId, clienteId), eq(informesReportes.anio, anio),
     inArray(informesReportes.mes, meses), eq(informesReportes.tipo, "DIAN"),
@@ -261,7 +261,7 @@ export async function getTotalDianEmitidoPorMes(clienteId: number, anio: number,
     const actual = porMes.get(r.mes!);
     if (!actual || r.createdAt > actual.createdAt) porMes.set(r.mes!, { totalEmitidoDian: r.totalEmitidoDian, createdAt: r.createdAt });
   }
-  return meses.map(mes => ({ mes, totalEmitidoDian: porMes.get(mes)?.totalEmitidoDian ?? null }));
+  return meses.map(mes => ({ mes, totalEmitidoDian: porMes.get(mes)?.totalEmitidoDian ?? null, generadoEl: porMes.get(mes)?.createdAt ?? null }));
 }
 
 /** Guarda el resumen del paso "ingresos" dentro del expediente de la

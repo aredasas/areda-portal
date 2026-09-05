@@ -887,7 +887,10 @@ function IngresosIvaCard({ clienteId, anio, periodicidad, periodo }: {
               return (
                 <div key={m.mes} className="flex items-center justify-between text-xs">
                   <span className="text-muted-foreground">{nombreMes} {anio}</span>
-                  <span>{m.totalEmitidoDian === null ? "sin dato guardado" : fmt(m.totalEmitidoDian)}</span>
+                  <span>
+                    {m.totalEmitidoDian === null ? "sin dato guardado" : fmt(m.totalEmitidoDian)}
+                    {m.generadoEl && <span className="text-muted-foreground"> · generado {new Date(m.generadoEl).toLocaleDateString("es-CO")}</span>}
+                  </span>
                 </div>
               );
             })}
@@ -895,6 +898,10 @@ function IngresosIvaCard({ clienteId, anio, periodicidad, periodo }: {
               <span>Total DIAN (Emitido)</span>
               <span>{fmt(totalDian)}</span>
             </div>
+            <p className="text-xs text-muted-foreground">
+              Si corriges algo en la comparación DIAN o el archivo, este total no se actualiza solo — vuelve
+              a generar la comparación de ese mes para que quede al día.
+            </p>
             {hayMesesSinDian && (
               <p className="text-xs text-amber-700 flex items-center gap-1.5">
                 <AlertCircle className="w-3.5 h-3.5 shrink-0" />
