@@ -171,6 +171,14 @@ export async function parseArchivoDian(filePathOrBuffer: string | Buffer): Promi
     const valorIva = c.iva !== null ? (Number(values[c.iva]) || 0) : 0;
     const valorOtrosImpuestos = c.otrosImpuestos !== null ? (Number(values[c.otrosImpuestos]) || 0) : 0;
     const signo = signoDelTipoDian(normalizar(tipoRaw));
+    // Se usa el valor ABSOLUTO antes de aplicar el signo del tipo de
+    // documento — así el resultado es correcto sin importar si el
+    // archivo de la DIAN ya trae la nota crédito en negativo (algunos
+    // formatos de exportación lo hacen) o en positivo (otros lo hacen
+    // así, y hay que invertirlo). Si no se hiciera esto, un archivo que
+    // ya trajera el valor en negativo terminaría con el signo invertido
+    // DOS veces, devolviéndolo a positivo — el mismo síntoma reportado.
+    const netoAbs = Math.abs(totalBruto) - Math.abs(valorIva) - Math.abs(valorOtrosImpuestos);
     filas.push({
       tipo: tipoRaw,
       folio: String(folioRaw).trim(),
@@ -180,9 +188,9 @@ export async function parseArchivoDian(filePathOrBuffer: string | Buffer): Promi
       nombreEmisor: c.nombreEmisor !== null ? String(values[c.nombreEmisor] ?? "").trim() : "",
       nitReceptor: String(values[c.nitReceptor] ?? "").trim(),
       nombreReceptor: c.nombreReceptor !== null ? String(values[c.nombreReceptor] ?? "").trim() : "",
-      total: (totalBruto - valorIva - valorOtrosImpuestos) * signo,
-      totalBruto: totalBruto * signo,
-      valorImpuestos: (valorIva + valorOtrosImpuestos) * signo,
+      total: netoAbs * signo,
+      totalBruto: Math.abs(totalBruto) * signo,
+      valorImpuestos: (Math.abs(valorIva) + Math.abs(valorOtrosImpuestos)) * signo,
       grupo,
     });
   }
