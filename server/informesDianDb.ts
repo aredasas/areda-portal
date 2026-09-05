@@ -67,15 +67,42 @@ export type FilaDian = {
   fecha: string; // texto tal cual, para mostrar en el reporte
   nitEmisor: string; nombreEmisor: string;
   nitReceptor: string; nombreReceptor: string;
+  /** Valor neto de venta/compra, YA sin IVA ni otros impuestos
+   * discriminados, y YA con el signo correcto según el tipo de documento
+   * (negativo para notas crédito y notas de ajuste del documento
+   * soporte, que restan en vez de sumar). Este es el valor que se debe
+   * usar en TODAS las comparaciones — el archivo de la DIAN reporta el
+   * total con impuestos incluidos, que nunca coincide con el valor de
+   * la cuenta contable de ingreso/gasto (esa nunca incluye el IVA). */
   total: number;
+  /** El total tal cual venía en el archivo, con impuestos incluidos y
+   * sin invertir el signo — solo para trazabilidad/mostrar, nunca para
+   * comparar. */
+  totalBruto: number;
+  /** IVA y otros impuestos discriminados en el archivo, ya con el mismo
+   * signo que `total` (negativo si el documento resta). Positivo (o
+   * negativo) por defecto en 0 si el archivo no trae esa columna. */
+  valorImpuestos: number;
   grupo: "Emitido" | "Recibido" | "Desconocido";
 };
+
+/** Tipos de documento cuyo valor RESTA del total en vez de sumar — el
+ * archivo de la DIAN los reporta en positivo, pero una nota crédito
+ * anula (parcial o totalmente) una factura anterior, y una nota de
+ * ajuste del documento soporte corrige uno ya emitido — confirmado por
+ * Arlex (contador) con un caso real donde esto inflaba las ventas. */
+function signoDelTipoDian(tipoNorm: string): 1 | -1 {
+  if (tipoNorm.includes("NOTA CREDITO")) return -1;
+  if (tipoNorm.includes("AJUSTE") && tipoNorm.includes("DOCUMENTO SOPORTE")) return -1;
+  return 1;
+}
 
 type ColsDian = {
   tipo: number | null; folio: number; prefijo: number | null; fecha: number | null;
   nitEmisor: number; nombreEmisor: number | null;
   nitReceptor: number; nombreReceptor: number | null;
   total: number; grupo: number | null;
+  iva: number | null; otrosImpuestos: number | null;
 };
 
 /** Reconoce las columnas del archivo de la DIAN por sinónimo — cada
@@ -93,6 +120,12 @@ function resolverColumnasDian(headerRaw: any[]): ColsDian {
   const nombreReceptor = buscarColumna(headers, ["NOMBRE RECEPTOR", "RAZON SOCIAL RECEPTOR"]);
   const total = buscarColumna(headers, ["TOTAL"]);
   const grupo = buscarColumna(headers, ["GRUPO"]);
+  // El archivo de la DIAN suele discriminar el IVA (y a veces otro
+  // impuesto, ej. consumo) del valor total — para la conciliación
+  // interesa el valor NETO (sin impuestos), ya que la cuenta contable de
+  // ingreso/gasto nunca incluye el IVA cobrado o pagado.
+  const iva = buscarColumna(headers, ["VALOR IVA", "TOTAL IVA", "IVA"]);
+  const otrosImpuestos = buscarColumna(headers, ["OTROS IMPUESTOS", "IMPUESTO AL CONSUMO", "VALOR INC", "INC"]);
 
   const faltantes: string[] = [];
   if (folio === null) faltantes.push("folio/número de documento");
@@ -105,8 +138,9 @@ function resolverColumnasDian(headerRaw: any[]): ColsDian {
       `Encabezados encontrados: ${headerRaw.filter(Boolean).map(String).join(", ")}`,
     );
   }
-  return { tipo, folio: folio!, prefijo, fecha, nitEmisor: nitEmisor!, nombreEmisor, nitReceptor: nitReceptor!, nombreReceptor, total: total!, grupo };
+  return { tipo, folio: folio!, prefijo, fecha, nitEmisor: nitEmisor!, nombreEmisor, nitReceptor: nitReceptor!, nombreReceptor, total: total!, grupo, iva, otrosImpuestos };
 }
+
 
 export async function parseArchivoDian(filePathOrBuffer: string | Buffer): Promise<FilaDian[]> {
   // ExcelJS (incluso en modo streaming) no logra leer algunos archivos de
@@ -132,8 +166,13 @@ export async function parseArchivoDian(filePathOrBuffer: string | Buffer): Promi
     if (folioRaw === null || folioRaw === undefined || folioRaw === "") continue;
     const grupoTexto = c.grupo !== null ? String(values[c.grupo] ?? "").toLowerCase() : "";
     const grupo: FilaDian["grupo"] = grupoTexto.includes("emit") ? "Emitido" : grupoTexto.includes("recib") ? "Recibido" : "Desconocido";
+    const tipoRaw = c.tipo !== null ? String(values[c.tipo] ?? "").trim() : "";
+    const totalBruto = Number(values[c.total]) || 0;
+    const valorIva = c.iva !== null ? (Number(values[c.iva]) || 0) : 0;
+    const valorOtrosImpuestos = c.otrosImpuestos !== null ? (Number(values[c.otrosImpuestos]) || 0) : 0;
+    const signo = signoDelTipoDian(normalizar(tipoRaw));
     filas.push({
-      tipo: c.tipo !== null ? String(values[c.tipo] ?? "").trim() : "",
+      tipo: tipoRaw,
       folio: String(folioRaw).trim(),
       prefijo: c.prefijo !== null ? String(values[c.prefijo] ?? "").trim() : "",
       fecha: c.fecha !== null ? formatearFecha(values[c.fecha]) : "",
@@ -141,7 +180,9 @@ export async function parseArchivoDian(filePathOrBuffer: string | Buffer): Promi
       nombreEmisor: c.nombreEmisor !== null ? String(values[c.nombreEmisor] ?? "").trim() : "",
       nitReceptor: String(values[c.nitReceptor] ?? "").trim(),
       nombreReceptor: c.nombreReceptor !== null ? String(values[c.nombreReceptor] ?? "").trim() : "",
-      total: Number(values[c.total]) || 0,
+      total: (totalBruto - valorIva - valorOtrosImpuestos) * signo,
+      totalBruto: totalBruto * signo,
+      valorImpuestos: (valorIva + valorOtrosImpuestos) * signo,
       grupo,
     });
   }
