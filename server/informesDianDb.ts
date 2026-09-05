@@ -531,17 +531,37 @@ export type ResumenTipoDocumento = {
   grupo: "Emitido" | "Recibido";
   cantidadDian: number;
   totalDian: number;
+  /** Cruce documento a documento (número exacto, o NIT+valor con
+   * tolerancia) — es la métrica más estricta y la más ruidosa: una
+   * factura que la contabilidad consolidó distinto, o con numeración
+   * interna diferente al folio, cuenta como "sin cruzar" aunque el
+   * dinero SÍ esté completo. Sirve para ver detalle, no para juzgar si
+   * falta algo. */
   cantidadSinCruzar: number;
   totalSinCruzar: number;
+  /** Conciliación por TERCERO (agregando todo lo que le corresponde a
+   * cada NIT, sin importar cómo se repartió entre documentos) — mucho
+   * más confiable: si el total de un tercero cuadra, el dinero está
+   * completo así el cruce documento a documento no lo haya detectado.
+   * Esta es la métrica que de verdad indica si falta algo por
+   * digitar. */
+  cantidadTercerosTotal: number;
+  cantidadTercerosConciliados: number;
+  valorConciliado: number;
 };
 
 /** Resume, por cada tipo de documento de la DIAN (facturas, documento
- * soporte, nómina, etc.), cuántos hay en total y cuántos quedaron SIN
- * cruzar con la contabilidad — para ver de un vistazo qué tan completa
- * está la comparación de cada tipo, antes de entrar al detalle de las
- * demás hojas (que ya están organizadas por documento y por tercero de
- * estas mismas transacciones). */
-export function getResumenPorTipoDocumento(filasDian: FilaDian[], soloEnDian: FilaDian[]): ResumenTipoDocumento[] {
+ * soporte, nómina, etc.), cuántos hay en total y qué tan conciliado está
+ * cada uno — con las DOS métricas (documento a documento, y por tercero)
+ * para que quede claro por qué pueden diferir sin que sea un problema:
+ * el cruce por documento es sensible a diferencias de forma (facturas
+ * consolidadas, numeración distinta) que el cruce por tercero no tiene,
+ * porque compara el TOTAL de cada NIT sin importar cómo se repartió
+ * entre documentos. */
+export function getResumenPorTipoDocumento(
+  filasDian: FilaDian[], soloEnDian: FilaDian[],
+  seccionesTerceroPorTipo: Map<string, ComparacionTercero[]>,
+): ResumenTipoDocumento[] {
   const totales = getTiposDocumentoDelArchivo(filasDian);
   const sinCruzarPorClave = new Map<string, { cantidad: number; total: number }>();
   for (const f of soloEnDian) {
@@ -552,11 +572,17 @@ export function getResumenPorTipoDocumento(filasDian: FilaDian[], soloEnDian: Fi
     entrada.total += f.total;
   }
   return totales.map(t => {
-    const sinCruzar = sinCruzarPorClave.get(`${t.tipoDocumentoDian}|${t.grupo}`) || { cantidad: 0, total: 0 };
+    const clave = `${t.tipoDocumentoDian}|${t.grupo}`;
+    const sinCruzar = sinCruzarPorClave.get(clave) || { cantidad: 0, total: 0 };
+    const itemsTercero = seccionesTerceroPorTipo.get(clave) || [];
+    const conciliados = itemsTercero.filter(it => Math.abs(it.diferencia) <= Math.max(5, Math.abs(it.totalDian) * 0.001));
+    const valorConciliado = conciliados.reduce((a, it) => a + it.totalDian, 0);
     return {
       tipoDocumentoDian: t.tipoDocumentoDian, grupo: t.grupo,
       cantidadDian: t.cantidad, totalDian: t.total,
       cantidadSinCruzar: sinCruzar.cantidad, totalSinCruzar: sinCruzar.total,
+      cantidadTercerosTotal: itemsTercero.length, cantidadTercerosConciliados: conciliados.length,
+      valorConciliado,
     };
   });
 }
@@ -849,21 +875,37 @@ export async function generarReporteComparacionDian(
   if (resumenPorTipo.length > 0) {
     wsResumen.addRow([]);
     wsResumen.addRow(["Resumen por tipo de documento — facturas, documento soporte, nómina, y demás"]).font = FONT_BOLD as any;
-    const hTipo = wsResumen.addRow(["Tipo de documento", "Grupo", "Docs. DIAN", "Total DIAN", "Sin cruzar", "Total sin cruzar", "% cruzado"]);
+    wsResumen.addRow([
+      "\"% conciliado por tercero\" es la columna que de verdad indica si falta algo por digitar: compara el "
+      + "TOTAL de cada NIT, sin importar cómo se repartió entre documentos. \"% cruzado por documento\" es más "
+      + "exigente y puede salir bajo SIN que sea un problema real — una factura que la contabilidad consolidó "
+      + "distinto, o con numeración interna diferente al folio de la DIAN, cuenta ahí como \"sin cruzar\" aunque "
+      + "el dinero esté completo. Guíese por el % conciliado; use el % cruzado solo como referencia adicional.",
+    ]).font = { name: "Arial", size: 9, italic: true } as any;
+    wsResumen.getRow(wsResumen.rowCount).alignment = { wrapText: true } as any;
+    wsResumen.mergeCells(wsResumen.rowCount, 1, wsResumen.rowCount, 8);
+    wsResumen.getRow(wsResumen.rowCount).height = 60;
+    const hTipo = wsResumen.addRow([
+      "Tipo de documento", "Grupo", "Docs. DIAN", "Total DIAN",
+      "% conciliado (por tercero)", "Terceros sin conciliar", "% cruzado (por documento)", "Docs. sin cruzar",
+    ]);
     estilarEncabezado(hTipo);
     for (const t of resumenPorTipo) {
       const pctCruzado = t.cantidadDian > 0 ? ((t.cantidadDian - t.cantidadSinCruzar) / t.cantidadDian) : 1;
+      const pctConciliado = t.cantidadTercerosTotal > 0 ? (t.cantidadTercerosConciliados / t.cantidadTercerosTotal) : null;
+      const tercerosSinConciliar = t.cantidadTercerosTotal - t.cantidadTercerosConciliados;
       const r = wsResumen.addRow([
-        t.tipoDocumentoDian, t.grupo, t.cantidadDian, t.totalDian, t.cantidadSinCruzar, t.totalSinCruzar, pctCruzado,
+        t.tipoDocumentoDian, t.grupo, t.cantidadDian, t.totalDian,
+        pctConciliado, tercerosSinConciliar, pctCruzado, t.cantidadSinCruzar,
       ]);
-      if (t.cantidadSinCruzar > 0) r.eachCell(c => { c.fill = ALERTA_FILL; });
+      if (pctConciliado !== null && tercerosSinConciliar > 0) r.eachCell(c => { c.fill = ALERTA_FILL; });
     }
     wsResumen.getColumn(4).numFmt = MONEY;
-    wsResumen.getColumn(6).numFmt = MONEY;
+    wsResumen.getColumn(5).numFmt = "0%";
     wsResumen.getColumn(7).numFmt = "0%";
     wsResumen.getColumn(2).width = 12; wsResumen.getColumn(3).width = 12;
-    wsResumen.getColumn(4).width = 16; wsResumen.getColumn(5).width = 12;
-    wsResumen.getColumn(6).width = 16; wsResumen.getColumn(7).width = 12;
+    wsResumen.getColumn(4).width = 16; wsResumen.getColumn(5).width = 20;
+    wsResumen.getColumn(6).width = 18; wsResumen.getColumn(7).width = 20; wsResumen.getColumn(8).width = 14;
   }
 
   const wsContab = wb.addWorksheet("En contabilidad, no en DIAN");

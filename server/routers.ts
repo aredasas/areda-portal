@@ -2135,15 +2135,19 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           // a resolver.
           const tiposDetectadosEnArchivo = informesDian.getTiposDocumentoDelArchivo(filasDian);
           const configPorClave = new Map(configTiposDoc.map(c => [`${c.tipoDocumentoDian}|${c.grupo}`, c]));
+          const itemsTerceroPorClave = new Map<string, ReturnType<typeof informesDian.compararPorTercero>>();
           const seccionesTerceros = hayAlgunaCuentaReconocida
             ? tiposDetectadosEnArchivo.map(d => {
-              const config = configPorClave.get(`${d.tipoDocumentoDian}|${d.grupo}`);
+              const clave = `${d.tipoDocumentoDian}|${d.grupo}`;
+              const config = configPorClave.get(clave);
               const comprobantes = config?.tiposComprobanteContable ? JSON.parse(config.tiposComprobanteContable) : [];
+              const items = informesDian.compararPorTercero(filasDian, documentosAux, undefined, undefined, {
+                tipoDocumentoDian: d.tipoDocumentoDian, grupo: d.grupo, tiposComprobanteContable: comprobantes,
+              });
+              itemsTerceroPorClave.set(clave, items);
               return {
                 titulo: `${d.tipoDocumentoDian} — ${d.grupo}${comprobantes.length > 0 ? ` (vs. comprobante ${comprobantes.join("/")})` : " (sin comprobante contable asociado todavía)"}`,
-                items: informesDian.compararPorTercero(filasDian, documentosAux, undefined, undefined, {
-                  tipoDocumentoDian: d.tipoDocumentoDian, grupo: d.grupo, tiposComprobanteContable: comprobantes,
-                }),
+                items,
               };
             })
             : [
@@ -2152,7 +2156,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
 
           const tiposComprobanteAuxiliar = informesDian.getTiposComprobanteDelAuxiliar(documentosAux);
           const tiposNoClasificados = informesDian.getTiposComprobanteNoClasificados(tiposComprobanteAuxiliar, configTiposDoc);
-          const resumenPorTipo = informesDian.getResumenPorTipoDocumento(filasDian, resultado.soloEnDian);
+          const resumenPorTipo = informesDian.getResumenPorTipoDocumento(filasDian, resultado.soloEnDian, itemsTerceroPorClave);
 
           const buffer = await informesDian.generarReporteComparacionDian(
             resultado, cliente?.razonSocial || "Cliente", input.anio, input.mes, seccionesTerceros, tiposNoClasificados, resumenPorTipo,
