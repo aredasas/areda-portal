@@ -92,7 +92,12 @@ export type FilaDian = {
  * ajuste del documento soporte corrige uno ya emitido — confirmado por
  * Arlex (contador) con un caso real donde esto inflaba las ventas. */
 function signoDelTipoDian(tipoNorm: string): 1 | -1 {
-  if (tipoNorm.includes("NOTA CREDITO")) return -1;
+  // Se busca cada palabra por separado (no la frase "NOTA CREDITO" exacta
+  // y contigua) porque el nombre real que usa la DIAN es "Nota de crédito
+  // electrónica" — normalizado queda "NOTA DE CREDITO ELECTRONICA", con
+  // "DE" en medio, que nunca coincidía con la frase exacta buscada antes
+  // (bug real: por eso las notas crédito nunca restaban).
+  if (tipoNorm.includes("NOTA") && tipoNorm.includes("CREDITO")) return -1;
   if (tipoNorm.includes("AJUSTE") && tipoNorm.includes("DOCUMENTO SOPORTE")) return -1;
   return 1;
 }
@@ -521,6 +526,41 @@ export function getTiposDocumentoDelArchivo(filasDian: FilaDian[]): TipoDocument
   return Array.from(porClave.values()).sort((a, b) => b.total - a.total);
 }
 
+export type ResumenTipoDocumento = {
+  tipoDocumentoDian: string;
+  grupo: "Emitido" | "Recibido";
+  cantidadDian: number;
+  totalDian: number;
+  cantidadSinCruzar: number;
+  totalSinCruzar: number;
+};
+
+/** Resume, por cada tipo de documento de la DIAN (facturas, documento
+ * soporte, nómina, etc.), cuántos hay en total y cuántos quedaron SIN
+ * cruzar con la contabilidad — para ver de un vistazo qué tan completa
+ * está la comparación de cada tipo, antes de entrar al detalle de las
+ * demás hojas (que ya están organizadas por documento y por tercero de
+ * estas mismas transacciones). */
+export function getResumenPorTipoDocumento(filasDian: FilaDian[], soloEnDian: FilaDian[]): ResumenTipoDocumento[] {
+  const totales = getTiposDocumentoDelArchivo(filasDian);
+  const sinCruzarPorClave = new Map<string, { cantidad: number; total: number }>();
+  for (const f of soloEnDian) {
+    const clave = `${f.tipo}|${f.grupo}`;
+    if (!sinCruzarPorClave.has(clave)) sinCruzarPorClave.set(clave, { cantidad: 0, total: 0 });
+    const entrada = sinCruzarPorClave.get(clave)!;
+    entrada.cantidad++;
+    entrada.total += f.total;
+  }
+  return totales.map(t => {
+    const sinCruzar = sinCruzarPorClave.get(`${t.tipoDocumentoDian}|${t.grupo}`) || { cantidad: 0, total: 0 };
+    return {
+      tipoDocumentoDian: t.tipoDocumentoDian, grupo: t.grupo,
+      cantidadDian: t.cantidad, totalDian: t.total,
+      cantidadSinCruzar: sinCruzar.cantidad, totalSinCruzar: sinCruzar.total,
+    };
+  });
+}
+
 /** Tipos de comprobante ÚNICOS que aparecen en el libro auxiliar ya
  * parseado (ej. "FV", "CN", "CP", "ND") — para que, al configurar qué
  * tipo(s) de comprobante contable corresponden a un tipo de documento de
@@ -788,6 +828,7 @@ export async function generarReporteComparacionDian(
   resultado: ResultadoComparacionDian, clienteNombre: string, anio: number, mes: number,
   seccionesTerceros: { titulo: string; items: ComparacionTercero[] }[] = [],
   tiposNoClasificados: { tipo: string; cantidad: number }[] = [],
+  resumenPorTipo: ResumenTipoDocumento[] = [],
 ): Promise<Buffer> {
   const wb = new ExcelJS.Workbook();
   wb.creator = "Areda Work · Módulo Informes";
@@ -804,6 +845,26 @@ export async function generarReporteComparacionDian(
   rSoloDian.font = FONT_BOLD as any;
   rSoloContab.font = FONT_BOLD as any;
   wsResumen.getColumn(1).width = 48;
+
+  if (resumenPorTipo.length > 0) {
+    wsResumen.addRow([]);
+    wsResumen.addRow(["Resumen por tipo de documento — facturas, documento soporte, nómina, y demás"]).font = FONT_BOLD as any;
+    const hTipo = wsResumen.addRow(["Tipo de documento", "Grupo", "Docs. DIAN", "Total DIAN", "Sin cruzar", "Total sin cruzar", "% cruzado"]);
+    estilarEncabezado(hTipo);
+    for (const t of resumenPorTipo) {
+      const pctCruzado = t.cantidadDian > 0 ? ((t.cantidadDian - t.cantidadSinCruzar) / t.cantidadDian) : 1;
+      const r = wsResumen.addRow([
+        t.tipoDocumentoDian, t.grupo, t.cantidadDian, t.totalDian, t.cantidadSinCruzar, t.totalSinCruzar, pctCruzado,
+      ]);
+      if (t.cantidadSinCruzar > 0) r.eachCell(c => { c.fill = ALERTA_FILL; });
+    }
+    wsResumen.getColumn(4).numFmt = MONEY;
+    wsResumen.getColumn(6).numFmt = MONEY;
+    wsResumen.getColumn(7).numFmt = "0%";
+    wsResumen.getColumn(2).width = 12; wsResumen.getColumn(3).width = 12;
+    wsResumen.getColumn(4).width = 16; wsResumen.getColumn(5).width = 12;
+    wsResumen.getColumn(6).width = 16; wsResumen.getColumn(7).width = 12;
+  }
 
   const wsContab = wb.addWorksheet("En contabilidad, no en DIAN");
   wsContab.addRow([

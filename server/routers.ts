@@ -2152,9 +2152,10 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
 
           const tiposComprobanteAuxiliar = informesDian.getTiposComprobanteDelAuxiliar(documentosAux);
           const tiposNoClasificados = informesDian.getTiposComprobanteNoClasificados(tiposComprobanteAuxiliar, configTiposDoc);
+          const resumenPorTipo = informesDian.getResumenPorTipoDocumento(filasDian, resultado.soloEnDian);
 
           const buffer = await informesDian.generarReporteComparacionDian(
-            resultado, cliente?.razonSocial || "Cliente", input.anio, input.mes, seccionesTerceros, tiposNoClasificados,
+            resultado, cliente?.razonSocial || "Cliente", input.anio, input.mes, seccionesTerceros, tiposNoClasificados, resumenPorTipo,
           );
 
           const key = `informes/DIAN_${input.clienteId}_${input.anio}_${String(input.mes).padStart(2, "0")}_${Date.now()}.xlsx`;
