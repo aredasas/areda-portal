@@ -1285,6 +1285,7 @@ function ComparacionDianCard({ clienteId, anio, mes, setMes, reportes }: {
   const [tiposDetectados, setTiposDetectados] = useState<any[] | null>(null);
   const [tiposComprobanteDisponibles, setTiposComprobanteDisponibles] = useState<{ tipo: string; cantidad: number }[]>([]);
   const [edicionesTipos, setEdicionesTipos] = useState<Record<string, { categoria: string; comprobantes: string[] }>>({});
+  const [comprobantesExcluidos, setComprobantesExcluidos] = useState<string[]>([]);
 
   const auxiliarDisponibleQuery = trpc.informes.dian.auxiliarDisponible.useQuery({ clienteId, anio, mes });
 
@@ -1292,6 +1293,7 @@ function ComparacionDianCard({ clienteId, anio, mes, setMes, reportes }: {
     onSuccess: (data) => {
       setTiposDetectados(data.tipos);
       setTiposComprobanteDisponibles(data.tiposComprobanteDisponibles);
+      setComprobantesExcluidos(data.comprobantesExcluidos || []);
       const iniciales: Record<string, { categoria: string; comprobantes: string[] }> = {};
       for (const d of data.tipos) iniciales[`${d.tipoDocumentoDian}|${d.grupo}`] = { categoria: d.categoria, comprobantes: d.tiposComprobanteContable || [] };
       setEdicionesTipos(iniciales);
@@ -1302,6 +1304,11 @@ function ComparacionDianCard({ clienteId, anio, mes, setMes, reportes }: {
   const guardarTiposMutation = trpc.informes.dian.guardarTiposDocumento.useMutation({
     onSuccess: () => toast.success("Configuración de tipos de documento guardada — se usará en esta y las próximas comparaciones"),
     onError: (err) => toast.error(err.message || "No se pudo guardar la configuración"),
+  });
+
+  const guardarExcluidosMutation = trpc.informes.dian.guardarComprobantesExcluidos.useMutation({
+    onSuccess: () => toast.success("Comprobantes excluidos guardados — no se tendrán en cuenta en la conciliación"),
+    onError: (err) => toast.error(err.message || "No se pudo guardar la exclusión"),
   });
 
   const compararMutation = trpc.informes.dian.comparar.useMutation({
@@ -1358,6 +1365,13 @@ function ComparacionDianCard({ clienteId, anio, mes, setMes, reportes }: {
       return { tipoDocumentoDian: d.tipoDocumentoDian, grupo: d.grupo, categoria: edicion?.categoria || d.categoria, tiposComprobanteContable: edicion?.comprobantes || [] };
     });
     guardarTiposMutation.mutate({ clienteId, configs });
+  };
+
+  const toggleComprobanteExcluido = (tipo: string) => {
+    setComprobantesExcluidos(prev => prev.includes(tipo) ? prev.filter(t => t !== tipo) : [...prev, tipo]);
+  };
+  const handleGuardarExcluidos = () => {
+    guardarExcluidosMutation.mutate({ clienteId, tipos: comprobantesExcluidos });
   };
 
   const toggleComprobante = (clave: string, tipo: string) => {
@@ -1504,6 +1518,35 @@ function ComparacionDianCard({ clienteId, anio, mes, setMes, reportes }: {
                   Guardar configuración
                 </Button>
               </div>
+
+              {tiposComprobanteDisponibles.length > 0 && (
+                <div className="border-t pt-3 space-y-2">
+                  <p className="text-sm font-medium">Excluir de la conciliación</p>
+                  <p className="text-xs text-muted-foreground">
+                    Marca los tipos de comprobante del libro auxiliar que nunca van a tener un documento
+                    electrónico correspondiente (ajustes internos, apertura de saldos, etc.) — quedan
+                    completamente fuera de la comparación, sin aparecer como faltantes ni como "no clasificados".
+                  </p>
+                  <div className="flex flex-wrap gap-1">
+                    {tiposComprobanteDisponibles.map((tc) => {
+                      const excluido = comprobantesExcluidos.includes(tc.tipo);
+                      return (
+                        <button
+                          key={tc.tipo} type="button" onClick={() => toggleComprobanteExcluido(tc.tipo)}
+                          className={`text-xs px-2 py-1 rounded-md border ${excluido ? "bg-red-600 text-white border-red-600" : "bg-white text-muted-foreground border-input hover:bg-muted"}`}
+                          title={`${tc.cantidad} documento(s) de tipo "${tc.tipo}" en el libro auxiliar`}
+                        >
+                          {tc.tipo}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <Button size="sm" variant="outline" onClick={handleGuardarExcluidos} disabled={guardarExcluidosMutation.isPending}>
+                    {guardarExcluidosMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-2" /> : null}
+                    Guardar exclusión
+                  </Button>
+                </div>
+              )}
             </div>
           )}
 

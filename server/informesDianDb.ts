@@ -2,7 +2,7 @@ import ExcelJS from "exceljs";
 import * as XLSX from "xlsx";
 import { and, eq } from "drizzle-orm";
 import { getDb } from "./db";
-import { informesTiposDocumentoConfig, type InformeTipoDocumentoConfig } from "../drizzle/schema";
+import { informesTiposDocumentoConfig, informesComprobantesExcluidos, type InformeTipoDocumentoConfig } from "../drizzle/schema";
 
 // Utilidades de reconocimiento de columnas — mismo enfoque que el resto del
 // módulo Informes (sinónimo + coincidencia de palabra completa), pero
@@ -459,6 +459,13 @@ export type ComparacionTercero = {
   diferencia: number;
   cantidadDocumentosDian: number;
   cantidadRegistrosContabilidad: number;
+  /** "cuadra" = el total coincide; "solo_dian" = está en la DIAN pero no
+   * hay ningún registro contable de este tipo para ese NIT (falta
+   * digitar); "solo_contabilidad" = está en la contabilidad pero no hay
+   * ningún documento de la DIAN de este tipo para ese NIT (falta el
+   * documento electrónico, o no lo requiere); "diferencia" = hay de
+   * ambos lados pero los totales no cuadran. */
+  estado: "cuadra" | "solo_dian" | "solo_contabilidad" | "diferencia";
 };
 
 /** Compara documentos de la DIAN contra el libro auxiliar en dos pasadas:
@@ -575,7 +582,7 @@ export function getResumenPorTipoDocumento(
     const clave = `${t.tipoDocumentoDian}|${t.grupo}`;
     const sinCruzar = sinCruzarPorClave.get(clave) || { cantidad: 0, total: 0 };
     const itemsTercero = seccionesTerceroPorTipo.get(clave) || [];
-    const conciliados = itemsTercero.filter(it => Math.abs(it.diferencia) <= Math.max(5, Math.abs(it.totalDian) * 0.001));
+    const conciliados = itemsTercero.filter(it => it.estado === "cuadra");
     const valorConciliado = conciliados.reduce((a, it) => a + it.totalDian, 0);
     return {
       tipoDocumentoDian: t.tipoDocumentoDian, grupo: t.grupo,
@@ -614,8 +621,9 @@ export function getTiposComprobanteDelAuxiliar(documentosAux: Map<string, Docume
 export function getTiposComprobanteNoClasificados(
   tiposComprobanteDelAuxiliar: { tipo: string; cantidad: number }[],
   configs: InformeTipoDocumentoConfig[],
+  excluidos: string[] = [],
 ): { tipo: string; cantidad: number }[] {
-  const clasificados = new Set<string>();
+  const clasificados = new Set<string>(excluidos.map(t => t.trim()));
   for (const c of configs) {
     if (!c.tiposComprobanteContable) continue;
     try {
@@ -624,6 +632,36 @@ export function getTiposComprobanteNoClasificados(
     } catch { /* config con JSON inválido — se ignora, no debería pasar */ }
   }
   return tiposComprobanteDelAuxiliar.filter(t => !clasificados.has(t.tipo));
+}
+
+export async function getComprobantesExcluidos(clienteId: number): Promise<string[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const filas = await db.select().from(informesComprobantesExcluidos).where(eq(informesComprobantesExcluidos.clienteId, clienteId));
+  return filas.map(f => f.tipoComprobante);
+}
+
+/** Reemplaza la lista completa de tipos de comprobante contable (del
+ * libro auxiliar) que este cliente excluye de la conciliación DIAN —
+ * ajustes internos, apertura de saldos, y cualquier otro que nunca vaya
+ * a tener un documento electrónico correspondiente. */
+export async function guardarComprobantesExcluidos(clienteId: number, tipos: string[], userId: number): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.delete(informesComprobantesExcluidos).where(eq(informesComprobantesExcluidos.clienteId, clienteId));
+  for (const tipo of tipos) {
+    if (!tipo.trim()) continue;
+    await db.insert(informesComprobantesExcluidos).values({ clienteId, tipoComprobante: tipo.trim(), actualizadoPorId: userId });
+  }
+}
+
+/** Quita del libro auxiliar los documentos cuyo tipo de comprobante el
+ * cliente marcó como excluido — así no aparecen como "no clasificados",
+ * ni como un falso faltante en ninguna comparación. */
+export function filtrarDocumentosExcluidos(documentosAux: Map<string, DocumentoAuxiliar>, tiposExcluidos: string[]): Map<string, DocumentoAuxiliar> {
+  if (tiposExcluidos.length === 0) return documentosAux;
+  const excluidosSet = new Set(tiposExcluidos.map(t => t.trim()));
+  return new Map(Array.from(documentosAux.entries()).filter(([, doc]) => !excluidosSet.has(doc.tipo)));
 }
 
 export async function getConfigTiposDocumento(clienteId: number): Promise<InformeTipoDocumentoConfig[]> {
@@ -752,11 +790,18 @@ export function compararPorTercero(
 
   const resultado: ComparacionTercero[] = [];
   for (const [nit, datos] of Array.from(porNit.entries())) {
+    const diferencia = datos.totalDian - datos.totalContab;
+    const cuadra = Math.abs(diferencia) <= Math.max(5, Math.abs(datos.totalDian) * 0.001);
+    let estado: ComparacionTercero["estado"];
+    if (cuadra) estado = "cuadra";
+    else if (datos.cantContab === 0) estado = "solo_dian";
+    else if (datos.cantDian === 0) estado = "solo_contabilidad";
+    else estado = "diferencia";
     resultado.push({
       nit, nombre: datos.nombre || "(sin nombre)",
-      totalDian: datos.totalDian, totalContabilidad: datos.totalContab,
-      diferencia: datos.totalDian - datos.totalContab,
+      totalDian: datos.totalDian, totalContabilidad: datos.totalContab, diferencia,
       cantidadDocumentosDian: datos.cantDian, cantidadRegistrosContabilidad: datos.cantContab,
+      estado,
     });
   }
   resultado.sort((a, b) => Math.abs(b.diferencia) - Math.abs(a.diferencia));
@@ -855,6 +900,7 @@ export async function generarReporteComparacionDian(
   seccionesTerceros: { titulo: string; items: ComparacionTercero[] }[] = [],
   tiposNoClasificados: { tipo: string; cantidad: number }[] = [],
   resumenPorTipo: ResumenTipoDocumento[] = [],
+  filasDian: FilaDian[] = [],
 ): Promise<Buffer> {
   const wb = new ExcelJS.Workbook();
   wb.creator = "Areda Work · Módulo Informes";
@@ -871,6 +917,17 @@ export async function generarReporteComparacionDian(
   rSoloDian.font = FONT_BOLD as any;
   rSoloContab.font = FONT_BOLD as any;
   wsResumen.getColumn(1).width = 48;
+
+  if (filasDian.length > 0) {
+    const totalImpuestosEmitido = filasDian.filter(f => f.grupo === "Emitido").reduce((a, f) => a + f.valorImpuestos, 0);
+    const totalImpuestosRecibido = filasDian.filter(f => f.grupo === "Recibido").reduce((a, f) => a + f.valorImpuestos, 0);
+    wsResumen.addRow([]);
+    wsResumen.addRow(["Impuestos discriminados en el archivo de la DIAN (IVA y otros)"]).font = FONT_BOLD as any;
+    const rIvaEmitido = wsResumen.addRow(["IVA y otros impuestos — documentos Emitidos (ventas)", totalImpuestosEmitido]);
+    const rIvaRecibido = wsResumen.addRow(["IVA y otros impuestos — documentos Recibidos (compras)", totalImpuestosRecibido]);
+    rIvaEmitido.getCell(2).numFmt = MONEY;
+    rIvaRecibido.getCell(2).numFmt = MONEY;
+  }
 
   if (resumenPorTipo.length > 0) {
     wsResumen.addRow([]);
@@ -1052,7 +1109,13 @@ export async function generarReporteComparacionDian(
 
     for (const seccion of seccionesTerceros) {
       if (seccion.items.length === 0) continue;
-      const conDiferenciaReal = seccion.items.filter(t => !valoresCoinciden(t.totalDian, t.totalContabilidad));
+      const ETIQUETAS_ESTADO: Record<ComparacionTercero["estado"], string> = {
+        cuadra: "Cuadra",
+        solo_dian: "⚠ Solo en la DIAN — falta digitar",
+        solo_contabilidad: "En contabilidad, sin documento DIAN",
+        diferencia: "⚠ Diferencia parcial",
+      };
+      const conDiferenciaReal = seccion.items.filter(t => t.estado !== "cuadra");
       const rTitulo = wsTercero.addRow([seccion.titulo]);
       rTitulo.font = { name: "Arial", size: 11, bold: true } as any;
       wsTercero.addRow([`Con diferencia real: ${conDiferenciaReal.length} de ${seccion.items.length}`]).font = { name: "Arial", size: 9, italic: true } as any;
@@ -1062,13 +1125,12 @@ export async function generarReporteComparacionDian(
       ]);
       estilarEncabezado(hTercero);
       for (const t of seccion.items) {
-        const cuadra = valoresCoinciden(t.totalDian, t.totalContabilidad);
         const r = wsTercero.addRow([
           t.nit, t.nombre, t.totalDian, t.totalContabilidad, t.diferencia,
           t.cantidadDocumentosDian, t.cantidadRegistrosContabilidad,
-          cuadra ? "Cuadra" : "⚠ Revisar",
+          ETIQUETAS_ESTADO[t.estado],
         ]);
-        if (!cuadra) r.eachCell(c => { c.fill = ALERTA_FILL; });
+        if (t.estado !== "cuadra") r.eachCell(c => { c.fill = ALERTA_FILL; });
       }
       wsTercero.addRow([]);
     }

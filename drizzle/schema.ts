@@ -646,6 +646,25 @@ export const informesTiposDocumentoConfig = mysqlTable("informesTiposDocumentoCo
 }));
 export type InformeTipoDocumentoConfig = typeof informesTiposDocumentoConfig.$inferSelect;
 
+/** Tipos de comprobante contable (del libro auxiliar) que este cliente
+ * decidió excluir POR COMPLETO de la conciliación DIAN — distinto de
+ * "excluir" en `informesTiposDocumentoConfig` (que excluye un tipo de
+ * documento DE LA DIAN). Aquí se excluye desde el lado de la
+ * CONTABILIDAD: comprobantes que nunca van a tener un documento
+ * electrónico correspondiente (ajustes internos, apertura de saldos,
+ * etc.) y que de lo contrario aparecerían como "no clasificados" o como
+ * un falso faltante en la comparación. */
+export const informesComprobantesExcluidos = mysqlTable("informesComprobantesExcluidos", {
+  id: int("id").autoincrement().primaryKey(),
+  clienteId: int("clienteId").notNull(),
+  tipoComprobante: varchar("tipoComprobante", { length: 20 }).notNull(),
+  actualizadoPorId: int("actualizadoPorId").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (table) => ({
+  clienteTipoIdx: uniqueIndex("informesComprobantesExcluidos_cliente_tipo_idx").on(table.clienteId, table.tipoComprobante),
+}));
+export type InformeComprobanteExcluido = typeof informesComprobantesExcluidos.$inferSelect;
+
 /** Expediente de trabajo de la conciliación de IVA de un cliente para un
  * periodo (bimestral/cuatrimestral/anual) — se va llenando paso a paso:
  * clasificación de ingresos por tarifa, IVA generado, compras, IVA

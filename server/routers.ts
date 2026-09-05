@@ -2061,7 +2061,8 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
               yaConfigurado: !!previo,
             };
           });
-          return { tipos, tiposComprobanteDisponibles };
+          const comprobantesExcluidosPrevios = await informesDian.getComprobantesExcluidos(input.clienteId);
+          return { tipos, tiposComprobanteDisponibles, comprobantesExcluidos: comprobantesExcluidosPrevios };
         }),
       guardarTiposDocumento: protectedProcedure
         .input(z.object({
@@ -2075,6 +2076,22 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
         .mutation(async ({ input, ctx }) => {
           await assertClienteAccesibleInformes(ctx, input.clienteId);
           await informesDian.guardarConfigTiposDocumento(input.clienteId, input.configs, ctx.user.id);
+          return { success: true };
+        }),
+      // Tipos de comprobante del libro auxiliar (ND, AC, ajustes internos,
+      // etc.) que este cliente excluye por completo de la conciliación
+      // DIAN — distinto de "excluir" en un tipo de documento de la DIAN.
+      getComprobantesExcluidos: protectedProcedure
+        .input(z.object({ clienteId: z.number() }))
+        .query(async ({ input, ctx }) => {
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
+          return informesDian.getComprobantesExcluidos(input.clienteId);
+        }),
+      guardarComprobantesExcluidos: protectedProcedure
+        .input(z.object({ clienteId: z.number(), tipos: z.array(z.string()) }))
+        .mutation(async ({ input, ctx }) => {
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
+          await informesDian.guardarComprobantesExcluidos(input.clienteId, input.tipos, ctx.user.id);
           return { success: true };
         }),
       // Compara el archivo de reporte de documentos de la DIAN contra el
@@ -2104,10 +2121,16 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           if (filasDian.length === 0) {
             throw new Error("No se encontró ningún documento válido en el archivo de la DIAN.");
           }
-          const documentosAux = await informesDian.parseAuxiliarParaDian(bufferAuxiliar, input.anio, input.mes);
-          if (documentosAux.size === 0) {
+          const documentosAux0 = await informesDian.parseAuxiliarParaDian(bufferAuxiliar, input.anio, input.mes);
+          if (documentosAux0.size === 0) {
             throw new Error("No se encontró ningún documento válido en el libro auxiliar para ese mes.");
           }
+          // Comprobantes que el cliente decidió excluir por completo de
+          // la conciliación (ajustes internos, apertura de saldos, etc.)
+          // — se quitan ANTES de comparar nada, para que no aparezcan ni
+          // como "no clasificados" ni como un falso faltante.
+          const comprobantesExcluidos = await informesDian.getComprobantesExcluidos(input.clienteId);
+          const documentosAux = informesDian.filtrarDocumentosExcluidos(documentosAux0, comprobantesExcluidos);
 
           const resultado = informesDian.compararDianVsAuxiliar(filasDian, documentosAux);
           // Configuración que el cliente ya haya guardado sobre qué
@@ -2155,11 +2178,11 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
             ];
 
           const tiposComprobanteAuxiliar = informesDian.getTiposComprobanteDelAuxiliar(documentosAux);
-          const tiposNoClasificados = informesDian.getTiposComprobanteNoClasificados(tiposComprobanteAuxiliar, configTiposDoc);
+          const tiposNoClasificados = informesDian.getTiposComprobanteNoClasificados(tiposComprobanteAuxiliar, configTiposDoc, comprobantesExcluidos);
           const resumenPorTipo = informesDian.getResumenPorTipoDocumento(filasDian, resultado.soloEnDian, itemsTerceroPorClave);
 
           const buffer = await informesDian.generarReporteComparacionDian(
-            resultado, cliente?.razonSocial || "Cliente", input.anio, input.mes, seccionesTerceros, tiposNoClasificados, resumenPorTipo,
+            resultado, cliente?.razonSocial || "Cliente", input.anio, input.mes, seccionesTerceros, tiposNoClasificados, resumenPorTipo, filasDian,
           );
 
           const key = `informes/DIAN_${input.clienteId}_${input.anio}_${String(input.mes).padStart(2, "0")}_${Date.now()}.xlsx`;
