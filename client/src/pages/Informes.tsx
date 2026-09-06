@@ -1462,7 +1462,7 @@ function ComparacionDianCard({ clienteId, anio, mes, setMes, reportes }: {
   const compararMutation = trpc.informes.dian.comparar.useMutation({
     onSuccess: (data) => {
       toast.success(
-        `Comparación lista: ${data.soloEnDian} en la DIAN sin registrar, ${data.soloEnContabilidad} en contabilidad sin documento electrónico.`,
+        `Comparación lista: ${data.tercerosConciliados} tercero(s) conciliados, ${data.tercerosSinConciliar} con diferencia o faltantes.`,
       );
       window.open(data.signedUrl, "_blank");
       setArchivoDian(null);

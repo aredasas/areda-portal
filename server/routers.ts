@@ -2203,57 +2203,41 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           const comprobantesExcluidos = await informesDian.getComprobantesExcluidos(input.clienteId);
           const documentosAux = informesDian.filtrarDocumentosExcluidos(documentosAux0, comprobantesExcluidos);
 
-          const resultado = informesDian.compararDianVsAuxiliar(filasDian, documentosAux);
           // Configuración que el cliente ya haya guardado sobre qué
-          // representa cada tipo de documento de la DIAN (ej. "Nómina
-          // electrónica" → gasto de nómina) — si no ha configurado nada
-          // todavía, se usa el heurístico automático por nombre del tipo.
+          // representa cada tipo de documento de la DIAN y con qué
+          // tipo(s) de comprobante contable se relaciona — sin ella no
+          // hay con qué comparar del lado contable para ese tipo.
           const configTiposDoc = await informesDian.getConfigTiposDocumento(input.clienteId);
           const mapaConfigTipos = informesDian.mapaConfigTiposDocumento(configTiposDoc);
-          // Si NINGÚN documento del libro auxiliar logró reconocerse en
-          // una cuenta 4/5/14 (columna de cuenta no confiable, o
-          // simplemente no se pudo identificar), separar por familia
-          // dejaría las 4 secciones con "Total Contabilidad" en $0 para
-          // todo el mundo — engañoso, parece un faltante masivo cuando en
-          // realidad es que no se pudo clasificar nada. En ese caso se
-          // muestra una sola comparación general (sin distinguir cuenta),
-          // que sigue siendo útil aunque mezcle ingresos y gastos.
-          const hayAlgunaCuentaReconocida = Array.from(documentosAux.values()).some(d => d.categoria !== null);
-          // Cada sección de "Comparación por Tercero" se deriva de un
-          // tipo de documento EXACTO de la DIAN (no solo una categoría
-          // amplia) — usando, del lado contable, únicamente los tipos de
-          // comprobante que el cliente ya asoció a ese tipo de documento.
-          // Si un tipo de documento todavía no tiene comprobantes
-          // asociados, su sección queda con $0 del lado contable — eso es
-          // justo lo que la hoja "Tipos contables no clasificados" ayuda
-          // a resolver.
-          const tiposDetectadosEnArchivo = informesDian.getTiposDocumentoDelArchivo(filasDian);
           const configPorClave = new Map(configTiposDoc.map(c => [`${c.tipoDocumentoDian}|${c.grupo}`, c]));
+
+          // Cada sección se deriva de un tipo de documento EXACTO de la
+          // DIAN, comparado por tercero contra los tipos de comprobante
+          // configurados para ese tipo — no se calcula ningún cruce
+          // documento a documento (no se muestra en ningún lado, así que
+          // no vale la pena gastar recursos calculándolo).
+          const tiposDetectadosEnArchivo = informesDian.getTiposDocumentoDelArchivo(filasDian);
           const itemsTerceroPorClave = new Map<string, ReturnType<typeof informesDian.compararPorTercero>>();
-          const seccionesTerceros = hayAlgunaCuentaReconocida
-            ? tiposDetectadosEnArchivo.map(d => {
-              const clave = `${d.tipoDocumentoDian}|${d.grupo}`;
-              const config = configPorClave.get(clave);
-              const comprobantes = config?.tiposComprobanteContable ? JSON.parse(config.tiposComprobanteContable) : [];
-              const items = informesDian.compararPorTercero(filasDian, documentosAux, undefined, undefined, {
-                tipoDocumentoDian: d.tipoDocumentoDian, grupo: d.grupo, tiposComprobanteContable: comprobantes,
-              });
-              itemsTerceroPorClave.set(clave, items);
-              return {
-                titulo: `${d.tipoDocumentoDian} — ${d.grupo}${comprobantes.length > 0 ? ` (vs. comprobante ${comprobantes.join("/")})` : " (sin comprobante contable asociado todavía)"}`,
-                items,
-              };
-            })
-            : [
-              { titulo: "Comparación general por tercero (no se pudo identificar la cuenta contable en el archivo — se muestra todo junto, sin separar ingresos de gastos)", items: informesDian.compararPorTercero(filasDian, documentosAux) },
-            ];
+          const seccionesTerceros = tiposDetectadosEnArchivo.map(d => {
+            const clave = `${d.tipoDocumentoDian}|${d.grupo}`;
+            const config = configPorClave.get(clave);
+            const comprobantes = config?.tiposComprobanteContable ? JSON.parse(config.tiposComprobanteContable) : [];
+            const items = informesDian.compararPorTercero(filasDian, documentosAux, {
+              tipoDocumentoDian: d.tipoDocumentoDian, grupo: d.grupo, tiposComprobanteContable: comprobantes,
+            });
+            itemsTerceroPorClave.set(clave, items);
+            return {
+              titulo: `${d.tipoDocumentoDian} — ${d.grupo}${comprobantes.length > 0 ? ` (vs. comprobante ${comprobantes.join("/")})` : " (sin comprobante contable asociado todavía)"}`,
+              items,
+            };
+          });
 
           const tiposComprobanteAuxiliar = informesDian.getTiposComprobanteDelAuxiliar(documentosAux);
           const tiposNoClasificados = informesDian.getTiposComprobanteNoClasificados(tiposComprobanteAuxiliar, configTiposDoc, comprobantesExcluidos);
-          const resumenPorTipo = informesDian.getResumenPorTipoDocumento(filasDian, resultado.soloEnDian, itemsTerceroPorClave);
+          const resumenPorTipo = informesDian.getResumenPorTipoDocumento(filasDian, itemsTerceroPorClave);
 
           const buffer = await informesDian.generarReporteComparacionDian(
-            resultado, cliente?.razonSocial || "Cliente", input.anio, input.mes, seccionesTerceros, tiposNoClasificados, resumenPorTipo, filasDian,
+            cliente?.razonSocial || "Cliente", input.anio, input.mes, seccionesTerceros, tiposNoClasificados, resumenPorTipo, filasDian,
           );
 
           const key = `informes/DIAN_${input.clienteId}_${input.anio}_${String(input.mes).padStart(2, "0")}_${Date.now()}.xlsx`;
@@ -2274,11 +2258,12 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
             nivel: "detalle", fileKey, generadoPorId: ctx.user.id, totalEmitidoDian, totalRecibidoDian,
           });
           const signedUrl = await storageGetSignedUrl(fileKey);
+          const totalTercerosConciliados = resumenPorTipo.reduce((a, t) => a + t.cantidadTercerosConciliados, 0);
+          const totalTercerosTotal = resumenPorTipo.reduce((a, t) => a + t.cantidadTercerosTotal, 0);
           return {
             url, signedUrl, fileKey,
-            totalDian: resultado.totalDian, totalContabilidad: resultado.totalContabilidad,
-            emparejadosPorNumero: resultado.emparejadosPorNumero, emparejadosPorNitValor: resultado.emparejadosPorNitValor,
-            soloEnDian: resultado.soloEnDian.length, soloEnContabilidad: resultado.soloEnContabilidad.length,
+            totalDian: filasDian.length,
+            tercerosConciliados: totalTercerosConciliados, tercerosSinConciliar: totalTercerosTotal - totalTercerosConciliados,
           };
         }),
     }),
