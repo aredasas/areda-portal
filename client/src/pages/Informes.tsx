@@ -942,17 +942,25 @@ function IvaGeneradoCard({ clienteId, anio, periodicidad, periodo }: {
 }) {
   const [cuenta19Local, setCuenta19Local] = useState("");
   const [cuenta5Local, setCuenta5Local] = useState("");
+  const [cuentaMayorLocal, setCuentaMayorLocal] = useState("24");
+  const [editandoCuentaMayor, setEditandoCuentaMayor] = useState(false);
   const [inicializado, setInicializado] = useState(false);
 
   const listarQuery = trpc.informes.iva.ivaGenerado.listarCuentas.useQuery({ clienteId, anio, periodicidad, periodo });
   if (!inicializado && listarQuery.data) {
     setCuenta19Local(listarQuery.data.cuentaGenerado19 || "");
     setCuenta5Local(listarQuery.data.cuentaGenerado5 || "");
+    setCuentaMayorLocal(listarQuery.data.cuentaMayor || "24");
     setInicializado(true);
   }
 
   const guardarConfigMutation = trpc.informes.iva.ivaGenerado.guardarConfig.useMutation({
     onSuccess: () => { toast.success("Configuración de cuentas de IVA generado guardada"); compararQuery.refetch(); },
+    onError: (err) => toast.error(err.message || "No se pudo guardar"),
+  });
+
+  const guardarCuentaMayorMutation = trpc.informes.iva.ivaGenerado.guardarCuentaMayor.useMutation({
+    onSuccess: () => { toast.success("Cuenta mayor de IVA actualizada"); setEditandoCuentaMayor(false); listarQuery.refetch(); },
     onError: (err) => toast.error(err.message || "No se pudo guardar"),
   });
 
@@ -968,10 +976,34 @@ function IvaGeneradoCard({ clienteId, anio, periodicidad, periodo }: {
   return (
     <div className="border rounded-md p-3 space-y-3">
       <p className="text-xs font-medium text-muted-foreground">Paso 3 · IVA generado</p>
+
+      <div className="flex items-center gap-2 text-xs">
+        <span className="text-muted-foreground">Cuenta mayor de IVA:</span>
+        {editandoCuentaMayor ? (
+          <>
+            <Input value={cuentaMayorLocal} onChange={(e) => setCuentaMayorLocal(e.target.value)} className="w-24 h-7 text-xs" />
+            <Button size="sm" className="h-7 text-xs" disabled={guardarCuentaMayorMutation.isPending} onClick={() => guardarCuentaMayorMutation.mutate({ clienteId, cuenta: cuentaMayorLocal })}>
+              Guardar
+            </Button>
+            <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => { setEditandoCuentaMayor(false); setCuentaMayorLocal(listarQuery.data?.cuentaMayor || "24"); }}>
+              Cancelar
+            </Button>
+          </>
+        ) : (
+          <>
+            <span className="font-medium">{listarQuery.data?.cuentaMayor || "24"}</span>
+            <Button size="sm" variant="link" className="h-7 text-xs p-0" onClick={() => setEditandoCuentaMayor(true)}>
+              {(listarQuery.data?.cuentaMayor || "24") === "24" ? "¿No es la 24? Cambiar" : "Editar"}
+            </Button>
+          </>
+        )}
+      </div>
+
       {(!listarQuery.data || listarQuery.data.cuentas.length === 0) ? (
         <p className="text-xs text-muted-foreground">
-          No se encontraron cuentas 24xx con movimiento en los meses de este periodo — confirma que el libro
-          auxiliar tenga columna de código de cuenta identificable.
+          No se encontraron cuentas que empiecen en "{listarQuery.data?.cuentaMayor || "24"}" con movimiento en
+          los meses de este periodo — confirma la cuenta mayor arriba, o que el libro auxiliar tenga columna
+          de código de cuenta identificable.
         </p>
       ) : (
         <>

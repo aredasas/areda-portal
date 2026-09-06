@@ -674,7 +674,7 @@ export type InformeComprobanteExcluido = typeof informesComprobantesExcluidos.$i
 export const informesConfigCuentasIva = mysqlTable("informesConfigCuentasIva", {
   id: int("id").autoincrement().primaryKey(),
   clienteId: int("clienteId").notNull(),
-  tipoIva: mysqlEnum("tipoIva", ["generado_19", "generado_5", "descontable_19", "descontable_5", "transitorio"]).notNull(),
+  tipoIva: mysqlEnum("tipoIva", ["generado_19", "generado_5", "descontable_19", "descontable_5", "transitorio", "cuenta_mayor"]).notNull(),
   cuenta: varchar("cuenta", { length: 12 }).notNull(),
   actualizadoPorId: int("actualizadoPorId").notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),

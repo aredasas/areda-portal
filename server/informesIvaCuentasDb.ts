@@ -6,7 +6,25 @@ import { getCargaConArchivo } from "./informesDb";
 import { storageGetBuffer } from "./storage";
 import { resolverColumnasAuxiliarDian, type ColsAuxiliarDian } from "./informesDianDb";
 
-export type TipoIva = "generado_19" | "generado_5" | "descontable_19" | "descontable_5" | "transitorio";
+export type TipoIva = "generado_19" | "generado_5" | "descontable_19" | "descontable_5" | "transitorio" | "cuenta_mayor";
+
+const CUENTA_MAYOR_IVA_DEFECTO = "24";
+
+/** La cuenta mayor de IVA — casi siempre la 24 (impuestos, gravámenes y
+ * tasas por pagar), pero en casos excepcionales el cliente usa un código
+ * distinto en su PUC. Se guarda por cliente; si nunca se ha confirmado,
+ * se usa "24" como valor por defecto (comportamiento de siempre). */
+export async function getCuentaMayorIva(clienteId: number): Promise<string> {
+  const db = await getDb();
+  if (!db) return CUENTA_MAYOR_IVA_DEFECTO;
+  const fila = await db.select().from(informesConfigCuentasIva)
+    .where(and(eq(informesConfigCuentasIva.clienteId, clienteId), eq(informesConfigCuentasIva.tipoIva, "cuenta_mayor"))).limit(1);
+  return fila[0]?.cuenta || CUENTA_MAYOR_IVA_DEFECTO;
+}
+
+export async function guardarCuentaMayorIva(clienteId: number, cuenta: string, userId: number): Promise<void> {
+  await guardarConfigCuentasIva(clienteId, [{ tipoIva: "cuenta_mayor", cuenta }], userId);
+}
 
 /** Lee el libro auxiliar (mismo archivo ya cargado para Estado de
  * Resultados/Comparación DIAN) y suma el saldo de CADA cuenta que

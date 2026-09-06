@@ -351,6 +351,13 @@
       "when": 1788644087830,
       "tag": "0049_config_cuentas_iva",
       "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "5",
+      "when": 1788732694815,
+      "tag": "0050_cuenta_mayor_iva",
+      "breakpoints": true
     }
   ]
 }

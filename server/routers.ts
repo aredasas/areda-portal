@@ -2026,13 +2026,21 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           .query(async ({ input, ctx }) => {
             await assertClienteAccesibleInformes(ctx, input.clienteId);
             const meses = informesIva.mesesDelPeriodo(input.periodicidad, input.periodo);
+            const cuentaMayor = await informesIvaCuentas.getCuentaMayorIva(input.clienteId);
             const [cuentas, config] = await Promise.all([
-              informesIvaCuentas.getCuentasPrefijoDelPeriodo(input.clienteId, input.anio, meses, ["24"]),
+              informesIvaCuentas.getCuentasPrefijoDelPeriodo(input.clienteId, input.anio, meses, [cuentaMayor]),
               informesIvaCuentas.getConfigCuentasIva(input.clienteId),
             ]);
             const cuentaGenerado19 = config.find(c => c.tipoIva === "generado_19")?.cuenta || null;
             const cuentaGenerado5 = config.find(c => c.tipoIva === "generado_5")?.cuenta || null;
-            return { cuentas, cuentaGenerado19, cuentaGenerado5 };
+            return { cuentas, cuentaGenerado19, cuentaGenerado5, cuentaMayor };
+          }),
+        guardarCuentaMayor: protectedProcedure
+          .input(z.object({ clienteId: z.number(), cuenta: z.string().min(1) }))
+          .mutation(async ({ input, ctx }) => {
+            await assertClienteAccesibleInformes(ctx, input.clienteId);
+            await informesIvaCuentas.guardarCuentaMayorIva(input.clienteId, input.cuenta.trim(), ctx.user.id);
+            return { success: true };
           }),
         guardarConfig: protectedProcedure
           .input(z.object({ clienteId: z.number(), cuentaGenerado19: z.string().optional(), cuentaGenerado5: z.string().optional() }))
