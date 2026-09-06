@@ -555,6 +555,10 @@ export type ResumenTipoDocumento = {
   cantidadTercerosTotal: number;
   cantidadTercerosConciliados: number;
   valorConciliado: number;
+  /** IVA y otros impuestos discriminados que trae este tipo de
+   * documento — al frente de cada tipo, en vez de un solo total global
+   * separado, para ver de un vistazo cuál tipo genera cuánto impuesto. */
+  totalImpuestos: number;
 };
 
 /** Resume, por cada tipo de documento de la DIAN (facturas, documento
@@ -578,6 +582,11 @@ export function getResumenPorTipoDocumento(
     entrada.cantidad++;
     entrada.total += f.total;
   }
+  const impuestosPorClave = new Map<string, number>();
+  for (const f of filasDian) {
+    const clave = `${f.tipo}|${f.grupo}`;
+    impuestosPorClave.set(clave, (impuestosPorClave.get(clave) || 0) + f.valorImpuestos);
+  }
   return totales.map(t => {
     const clave = `${t.tipoDocumentoDian}|${t.grupo}`;
     const sinCruzar = sinCruzarPorClave.get(clave) || { cantidad: 0, total: 0 };
@@ -589,7 +598,7 @@ export function getResumenPorTipoDocumento(
       cantidadDian: t.cantidad, totalDian: t.total,
       cantidadSinCruzar: sinCruzar.cantidad, totalSinCruzar: sinCruzar.total,
       cantidadTercerosTotal: itemsTercero.length, cantidadTercerosConciliados: conciliados.length,
-      valorConciliado,
+      valorConciliado, totalImpuestos: impuestosPorClave.get(clave) || 0,
     };
   });
 }
@@ -905,6 +914,7 @@ export async function generarReporteComparacionDian(
   const wb = new ExcelJS.Workbook();
   wb.creator = "Areda Work · Módulo Informes";
 
+  // ==================== HOJA 1: RESUMEN ====================
   const wsResumen = wb.addWorksheet("Resumen");
   wsResumen.addRow([`COMPARACIÓN DIAN vs CONTABILIDAD · ${clienteNombre} · ${anio}-${String(mes).padStart(2, "0")}`]).font = FONT_TITLE as any;
   wsResumen.addRow([]);
@@ -918,20 +928,9 @@ export async function generarReporteComparacionDian(
   rSoloContab.font = FONT_BOLD as any;
   wsResumen.getColumn(1).width = 48;
 
-  if (filasDian.length > 0) {
-    const totalImpuestosEmitido = filasDian.filter(f => f.grupo === "Emitido").reduce((a, f) => a + f.valorImpuestos, 0);
-    const totalImpuestosRecibido = filasDian.filter(f => f.grupo === "Recibido").reduce((a, f) => a + f.valorImpuestos, 0);
-    wsResumen.addRow([]);
-    wsResumen.addRow(["Impuestos discriminados en el archivo de la DIAN (IVA y otros)"]).font = FONT_BOLD as any;
-    const rIvaEmitido = wsResumen.addRow(["IVA y otros impuestos — documentos Emitidos (ventas)", totalImpuestosEmitido]);
-    const rIvaRecibido = wsResumen.addRow(["IVA y otros impuestos — documentos Recibidos (compras)", totalImpuestosRecibido]);
-    rIvaEmitido.getCell(2).numFmt = MONEY;
-    rIvaRecibido.getCell(2).numFmt = MONEY;
-  }
-
   if (resumenPorTipo.length > 0) {
     wsResumen.addRow([]);
-    wsResumen.addRow(["Resumen por tipo de documento — facturas, documento soporte, nómina, y demás"]).font = FONT_BOLD as any;
+    wsResumen.addRow(["Resumen por tipo de documento — con el IVA/impuestos que reporta cada uno al frente"]).font = FONT_BOLD as any;
     wsResumen.addRow([
       "\"% conciliado por tercero\" es la columna que de verdad indica si falta algo por digitar: compara el "
       + "TOTAL de cada NIT, sin importar cómo se repartió entre documentos. \"% cruzado por documento\" es más "
@@ -940,10 +939,10 @@ export async function generarReporteComparacionDian(
       + "el dinero esté completo. Guíese por el % conciliado; use el % cruzado solo como referencia adicional.",
     ]).font = { name: "Arial", size: 9, italic: true } as any;
     wsResumen.getRow(wsResumen.rowCount).alignment = { wrapText: true } as any;
-    wsResumen.mergeCells(wsResumen.rowCount, 1, wsResumen.rowCount, 8);
+    wsResumen.mergeCells(wsResumen.rowCount, 1, wsResumen.rowCount, 9);
     wsResumen.getRow(wsResumen.rowCount).height = 60;
     const hTipo = wsResumen.addRow([
-      "Tipo de documento", "Grupo", "Docs. DIAN", "Total DIAN",
+      "Tipo de documento", "Grupo", "Docs. DIAN", "Total DIAN", "IVA/impuestos",
       "% conciliado (por tercero)", "Terceros sin conciliar", "% cruzado (por documento)", "Docs. sin cruzar",
     ]);
     estilarEncabezado(hTipo);
@@ -952,24 +951,36 @@ export async function generarReporteComparacionDian(
       const pctConciliado = t.cantidadTercerosTotal > 0 ? (t.cantidadTercerosConciliados / t.cantidadTercerosTotal) : null;
       const tercerosSinConciliar = t.cantidadTercerosTotal - t.cantidadTercerosConciliados;
       const r = wsResumen.addRow([
-        t.tipoDocumentoDian, t.grupo, t.cantidadDian, t.totalDian,
+        t.tipoDocumentoDian, t.grupo, t.cantidadDian, t.totalDian, t.totalImpuestos,
         pctConciliado, tercerosSinConciliar, pctCruzado, t.cantidadSinCruzar,
       ]);
       if (pctConciliado !== null && tercerosSinConciliar > 0) r.eachCell(c => { c.fill = ALERTA_FILL; });
     }
     wsResumen.getColumn(4).numFmt = MONEY;
-    wsResumen.getColumn(5).numFmt = "0%";
-    wsResumen.getColumn(7).numFmt = "0%";
+    wsResumen.getColumn(5).numFmt = MONEY;
+    wsResumen.getColumn(6).numFmt = "0%";
+    wsResumen.getColumn(8).numFmt = "0%";
     wsResumen.getColumn(2).width = 12; wsResumen.getColumn(3).width = 12;
-    wsResumen.getColumn(4).width = 16; wsResumen.getColumn(5).width = 20;
-    wsResumen.getColumn(6).width = 18; wsResumen.getColumn(7).width = 20; wsResumen.getColumn(8).width = 14;
+    wsResumen.getColumn(4).width = 16; wsResumen.getColumn(5).width = 14; wsResumen.getColumn(6).width = 20;
+    wsResumen.getColumn(7).width = 18; wsResumen.getColumn(8).width = 20; wsResumen.getColumn(9).width = 14;
   }
 
-  const wsContab = wb.addWorksheet("En contabilidad, no en DIAN");
-  wsContab.addRow([
-    "Agrupado por tipo de documento contable — verificar si corresponden a servicios públicos, nómina, u otros pagos que no requieren documento electrónico.",
-  ]).font = { name: "Arial", size: 9, italic: true } as any;
-  wsContab.addRow([]);
+  if (tiposNoClasificados.length > 0) {
+    wsResumen.addRow([]);
+    const nombres = tiposNoClasificados.map(t => t.tipo).join(", ");
+    wsResumen.addRow([`⚠ Tipos de comprobante contable sin clasificar todavía (${tiposNoClasificados.length}): ${nombres}`]).font = { name: "Arial", size: 9, italic: true, color: { argb: "FFB45309" } } as any;
+  }
+
+  // ==================== HOJA 2: DETALLE ====================
+  // Combina lo que está solo en un lado y no en el otro — agrupado por
+  // tipo de documento, con subtotal — para revisar caso por caso cuando
+  // el resumen o la comparación por tercero señalen algo pendiente.
+  const wsDetalle = wb.addWorksheet("Detalle");
+  wsDetalle.addRow(["Documentos que no cruzaron uno a uno con el otro lado — agrupados por tipo de documento."]).font = { name: "Arial", size: 9, italic: true } as any;
+  wsDetalle.addRow([]);
+
+  wsDetalle.addRow(["En contabilidad, sin encontrar en la DIAN"]).font = { name: "Arial", size: 12, bold: true };
+  wsDetalle.addRow(["(verificar si corresponden a servicios públicos, nómina, u otros pagos que no requieren documento electrónico)"]).font = { name: "Arial", size: 9, italic: true };
   const gruposContab = new Map<string, DocumentoAuxiliar[]>();
   for (const doc of resultado.soloEnContabilidad) {
     if (!gruposContab.has(doc.tipo)) gruposContab.set(doc.tipo, []);
@@ -982,26 +993,20 @@ export async function generarReporteComparacionDian(
   });
   for (const [tipo, docs] of tiposContabOrdenados) {
     const totalTipo = docs.reduce((s, d) => s + d.valor, 0);
-    const rTitulo = wsContab.addRow([`Tipo de comprobante: ${tipo}`, "", "", "", "", "", `${docs.length} documento(s)`]);
+    const rTitulo = wsDetalle.addRow([`Tipo de comprobante: ${tipo}`, "", "", "", "", "", `${docs.length} documento(s)`]);
     rTitulo.font = FONT_BOLD as any;
-    const hContab = wsContab.addRow(["Tipo", "Número documento", "Fecha", "Tercero (NIT)", "Nombre tercero", "Valor", "Filas contables"]);
+    const hContab = wsDetalle.addRow(["Tipo", "Número documento", "Fecha", "Tercero (NIT)", "Nombre tercero", "Valor", "Filas contables"]);
     estilarEncabezado(hContab);
     for (const doc of docs.sort((a, b) => b.valor - a.valor)) {
-      wsContab.addRow([doc.tipo, doc.numero, doc.fecha, doc.tercero, doc.nombreTercero, doc.valor, doc.filas]);
+      wsDetalle.addRow([doc.tipo, doc.numero, doc.fecha, doc.tercero, doc.nombreTercero, doc.valor, doc.filas]);
     }
-    const rSubtotal = wsContab.addRow(["", "", "", "", "Subtotal", totalTipo, ""]);
+    const rSubtotal = wsDetalle.addRow(["", "", "", "", "Subtotal", totalTipo, ""]);
     rSubtotal.font = FONT_BOLD as any;
-    wsContab.addRow([]);
+    wsDetalle.addRow([]);
   }
-  wsContab.getColumn(6).numFmt = MONEY;
-  wsContab.getColumn(1).width = 10; wsContab.getColumn(2).width = 16; wsContab.getColumn(3).width = 12;
-  wsContab.getColumn(4).width = 16; wsContab.getColumn(5).width = 34; wsContab.getColumn(6).width = 16; wsContab.getColumn(7).width = 14;
 
-  const wsDian = wb.addWorksheet("En DIAN, no en contabilidad");
-  wsDian.addRow([
-    "ATENCIÓN, agrupado por tipo de documento — estos documentos electrónicos no se encontraron en la contabilidad, posible ingreso o gasto sin registrar.",
-  ]).font = { name: "Arial", size: 9, italic: true, bold: true } as any;
-  wsDian.addRow([]);
+  wsDetalle.addRow([]);
+  wsDetalle.addRow(["⚠ En la DIAN, sin encontrar en contabilidad — posible ingreso o gasto sin registrar"]).font = { name: "Arial", size: 12, bold: true, color: { argb: "FFB91C1C" } };
   const gruposDian = new Map<string, FilaDian[]>();
   for (const f of resultado.soloEnDian) {
     const clave = `${f.tipo}|${f.grupo}`;
@@ -1016,105 +1021,51 @@ export async function generarReporteComparacionDian(
   for (const [clave, filas] of tiposDianOrdenados) {
     const [tipo, grupo] = clave.split("|");
     const totalTipo = filas.reduce((s, d) => s + d.total, 0);
-    const rTitulo = wsDian.addRow([`${tipo} — ${grupo}`, "", "", "", "", "", "", "", "", `${filas.length} documento(s)`]);
+    const rTitulo = wsDetalle.addRow([`${tipo} — ${grupo}`, "", "", "", "", "", "", "", "", `${filas.length} documento(s)`]);
     rTitulo.font = FONT_BOLD as any;
-    const hDian = wsDian.addRow(["Grupo", "Tipo de documento", "Prefijo", "Folio", "Fecha", "NIT Emisor", "Nombre Emisor", "NIT Receptor", "Nombre Receptor", "Total"]);
+    const hDian = wsDetalle.addRow(["Grupo", "Tipo de documento", "Prefijo", "Folio", "Fecha", "NIT Emisor", "Nombre Emisor", "NIT Receptor", "Nombre Receptor", "Total"]);
     estilarEncabezado(hDian);
     for (const f of filas.sort((a, b) => b.total - a.total)) {
-      const r = wsDian.addRow([f.grupo, f.tipo, f.prefijo, f.folio, f.fecha, f.nitEmisor, f.nombreEmisor, f.nitReceptor, f.nombreReceptor, f.total]);
+      const r = wsDetalle.addRow([f.grupo, f.tipo, f.prefijo, f.folio, f.fecha, f.nitEmisor, f.nombreEmisor, f.nitReceptor, f.nombreReceptor, f.total]);
       r.eachCell(c => { c.fill = ALERTA_FILL; });
     }
-    const rSubtotal = wsDian.addRow(["", "", "", "", "", "", "", "", "Subtotal", totalTipo]);
+    const rSubtotal = wsDetalle.addRow(["", "", "", "", "", "", "", "", "Subtotal", totalTipo]);
     rSubtotal.font = FONT_BOLD as any;
-    wsDian.addRow([]);
+    wsDetalle.addRow([]);
   }
-  wsDian.getColumn(10).numFmt = MONEY;
-  wsDian.getColumn(1).width = 12; wsDian.getColumn(2).width = 24; wsDian.getColumn(3).width = 10;
-  wsDian.getColumn(4).width = 12; wsDian.getColumn(5).width = 12; wsDian.getColumn(6).width = 16;
-  wsDian.getColumn(7).width = 30; wsDian.getColumn(8).width = 16; wsDian.getColumn(9).width = 30; wsDian.getColumn(10).width = 16;
+  wsDetalle.getColumn(6).numFmt = MONEY;
+  wsDetalle.getColumn(10).numFmt = MONEY;
+  wsDetalle.getColumn(1).width = 22; wsDetalle.getColumn(2).width = 20; wsDetalle.getColumn(3).width = 12;
+  wsDetalle.getColumn(4).width = 16; wsDetalle.getColumn(5).width = 30; wsDetalle.getColumn(6).width = 16;
+  wsDetalle.getColumn(7).width = 30; wsDetalle.getColumn(8).width = 16; wsDetalle.getColumn(9).width = 30;
+  wsDetalle.getColumn(10).width = 16;
 
-  // Cruce por tercero entre los dos "sobrantes" — cuando el mismo tercero
-  // aparece en ambas listas de pendientes, es muy probable que sea la
-  // MISMA transacción que no logró cruzar automáticamente (por número o
-  // formato de fecha distintos) — revisando esto primero se detecta más
-  // rápido qué es un faltante real y qué es solo un desfase de cruce.
-  const porNitContab = new Map<string, DocumentoAuxiliar[]>();
-  for (const doc of resultado.soloEnContabilidad) {
-    const nit = soloDigitos(doc.tercero);
-    if (!nit) continue;
-    if (!porNitContab.has(nit)) porNitContab.set(nit, []);
-    porNitContab.get(nit)!.push(doc);
-  }
-  const porNitDian = new Map<string, FilaDian[]>();
-  for (const f of resultado.soloEnDian) {
-    const nit = soloDigitos(f.grupo === "Recibido" ? f.nitEmisor : f.nitReceptor);
-    if (!nit) continue;
-    if (!porNitDian.has(nit)) porNitDian.set(nit, []);
-    porNitDian.get(nit)!.push(f);
-  }
-  const nitsEnAmbos = Array.from(porNitContab.keys()).filter(nit => porNitDian.has(nit));
-
-  if (nitsEnAmbos.length > 0) {
-    const wsCruce = wb.addWorksheet("Posibles coincidencias (mismo tercero)");
-    wsCruce.addRow([
-      "Mismo tercero aparece en las dos listas de pendientes — revisar primero, probablemente sea la misma transacción sin cruzar por número/fecha distintos.",
-    ]).font = { name: "Arial", size: 9, italic: true, bold: true } as any;
-    const hCruce = wsCruce.addRow([
-      "Tercero (NIT)", "— Contabilidad: Tipo", "Número", "Fecha", "Valor",
-      "— DIAN: Tipo", "Folio", "Fecha", "Total", "Diferencia",
-    ]);
-    estilarEncabezado(hCruce);
-    for (const nit of nitsEnAmbos) {
-      const contabs = porNitContab.get(nit)!;
-      const dians = porNitDian.get(nit)!;
-      const maxFilas = Math.max(contabs.length, dians.length);
-      for (let i = 0; i < maxFilas; i++) {
-        const c = contabs[i];
-        const d = dians[i];
-        const r = wsCruce.addRow([
-          i === 0 ? nit : "",
-          c?.tipo || "", c?.numero || "", c?.fecha || "", c?.valor ?? "",
-          d?.tipo || "", d?.folio || "", d?.fecha || "", d?.total ?? "",
-          c && d ? Math.abs(c.valor - d.total) : "",
-        ]);
-        if (i === 0) r.font = FONT_BOLD as any;
-      }
-    }
-    wsCruce.getColumn(5).numFmt = MONEY;
-    wsCruce.getColumn(9).numFmt = MONEY;
-    wsCruce.getColumn(10).numFmt = MONEY;
-    wsCruce.getColumn(1).width = 16; wsCruce.getColumn(2).width = 12; wsCruce.getColumn(3).width = 12;
-    wsCruce.getColumn(4).width = 12; wsCruce.getColumn(5).width = 16; wsCruce.getColumn(6).width = 12;
-    wsCruce.getColumn(7).width = 12; wsCruce.getColumn(8).width = 12; wsCruce.getColumn(9).width = 16;
-    wsCruce.getColumn(10).width = 14;
-  }
-
-  const totalItemsTerceros = seccionesTerceros.reduce((a, s) => a + s.items.length, 0);
-  if (totalItemsTerceros > 0) {
+  // ==================== HOJA 3: COMPARACIÓN POR TERCERO ====================
+  // Una sola hoja, con una sección por cada tipo de documento configurado
+  // — factura electrónica emitida, notas crédito emitidas, etc. — cada
+  // una con sus terceros, el valor en la DIAN y en la contabilidad
+  // (usando solo los comprobantes que se le asociaron a ese tipo).
+  if (seccionesTerceros.length > 0) {
     const wsTercero = wb.addWorksheet("Comparación por Tercero");
     wsTercero.addRow([
-      "Compara el TOTAL de cada tercero (NIT) entre la DIAN y la contabilidad, separado por tipo de "
-      + "documento — nómina contra las cuentas de nómina (5105/5205), documento soporte contra "
-      + "honorarios y servicios, y las demás facturas recibidas contra el resto de cuentas 5 y 14 "
-      + "(a veces 15/16/17). Los movimientos que no son ingreso ni gasto/deducción (traslados, "
-      + "préstamos, y otros de cuentas de balance) ya se excluyeron de esta comparación. Si el total "
-      + "de un tercero cuadra, muy probablemente todo está digitado aunque el cruce por documento no lo "
-      + "haya detectado (facturas consolidadas, fechas distintas, etc.). Si el total NO cuadra, ahí sí "
-      + "hay indicio real de un faltante de digitación, y por cuánto.",
+      "Compara, tipo de transacción por tipo de transacción, el total de cada tercero (NIT) entre la DIAN y "
+      + "los documentos contables configurados para ese tipo. Si el total de un tercero cuadra, muy "
+      + "probablemente todo está digitado. Si no cuadra, el estado indica de qué lado falta.",
     ]).font = { name: "Arial", size: 9, italic: true, bold: true } as any;
     wsTercero.getRow(1).alignment = { wrapText: true } as any;
     wsTercero.mergeCells(1, 1, 1, 8);
-    wsTercero.getRow(1).height = 60;
+    wsTercero.getRow(1).height = 45;
     wsTercero.addRow([]);
+
+    const ETIQUETAS_ESTADO: Record<ComparacionTercero["estado"], string> = {
+      cuadra: "Cuadra",
+      solo_dian: "⚠ Solo en la DIAN — falta digitar",
+      solo_contabilidad: "En contabilidad, sin documento DIAN",
+      diferencia: "⚠ Diferencia parcial",
+    };
 
     for (const seccion of seccionesTerceros) {
       if (seccion.items.length === 0) continue;
-      const ETIQUETAS_ESTADO: Record<ComparacionTercero["estado"], string> = {
-        cuadra: "Cuadra",
-        solo_dian: "⚠ Solo en la DIAN — falta digitar",
-        solo_contabilidad: "En contabilidad, sin documento DIAN",
-        diferencia: "⚠ Diferencia parcial",
-      };
       const conDiferenciaReal = seccion.items.filter(t => t.estado !== "cuadra");
       const rTitulo = wsTercero.addRow([seccion.titulo]);
       rTitulo.font = { name: "Arial", size: 11, bold: true } as any;
@@ -1138,24 +1089,6 @@ export async function generarReporteComparacionDian(
     wsTercero.getColumn(1).width = 16; wsTercero.getColumn(2).width = 34; wsTercero.getColumn(3).width = 16;
     wsTercero.getColumn(4).width = 18; wsTercero.getColumn(5).width = 14; wsTercero.getColumn(6).width = 12;
     wsTercero.getColumn(7).width = 20; wsTercero.getColumn(8).width = 12;
-  }
-
-  if (tiposNoClasificados.length > 0) {
-    const wsNoClasif = wb.addWorksheet("Tipos contables no clasificados");
-    wsNoClasif.addRow([
-      "Estos tipos de comprobante aparecen en el libro auxiliar de este mes, pero todavía no están asociados a "
-      + "ningún tipo de documento de la DIAN en la configuración de este cliente — sin esa asociación, sus "
-      + "movimientos no se comparan en ninguna de las hojas anteriores. Ve a \"Revisar y configurar tipos de "
-      + "documento\" y asígnalos al tipo de documento de la DIAN que corresponda.",
-    ]).font = { name: "Arial", size: 9, italic: true, bold: true } as any;
-    wsNoClasif.getRow(1).alignment = { wrapText: true } as any;
-    wsNoClasif.mergeCells(1, 1, 1, 2);
-    wsNoClasif.getRow(1).height = 45;
-    wsNoClasif.addRow([]);
-    const hNoClasif = wsNoClasif.addRow(["Tipo de comprobante", "Cantidad de documentos"]);
-    estilarEncabezado(hNoClasif);
-    for (const t of tiposNoClasificados) wsNoClasif.addRow([t.tipo, t.cantidad]);
-    wsNoClasif.getColumn(1).width = 24; wsNoClasif.getColumn(2).width = 22;
   }
 
   const buffer = await wb.xlsx.writeBuffer();
