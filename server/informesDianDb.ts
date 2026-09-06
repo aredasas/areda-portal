@@ -223,7 +223,7 @@ export type DocumentoAuxiliar = {
   categoria: "ingreso" | "nomina" | "honorarios_servicios" | "otro_gasto" | null;
 };
 
-type ColsAuxiliarDian = {
+export type ColsAuxiliarDian = {
   numero: number; tercero: number; nombreTercero: number | null;
   debito: number; credito: number; tipo: number | null; cuenta: number | null;
   modoFecha: "combinada" | "separada" | "ninguna";
@@ -250,7 +250,7 @@ function categorizarCuenta(cuentaRaw: string): DocumentoAuxiliar["categoria"] {
   return null; // 1 (excepto 14-17), 2, 3, 6, 7, 8, 9 — no es ingreso ni gasto/deducción
 }
 
-function resolverColumnasAuxiliarDian(headerRaw: any[]): ColsAuxiliarDian {
+export function resolverColumnasAuxiliarDian(headerRaw: any[]): ColsAuxiliarDian {
   const headers = Array.from(headerRaw, h => (h ? normalizar(String(h)) : ""));
   const numero = buscarColumna(headers, ["NUMERO", "DOCUMENTO", "CONSECUTIVO", "NRO DOCUMENTO", "NUM DOCUMENTO", "COMPROBANTE"]);
   const tercero = buscarColumna(headers, ["IDENTIFICACION", "NIT TERCERO", "NIT", "TERCERO"]);

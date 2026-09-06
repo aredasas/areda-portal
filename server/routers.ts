@@ -88,6 +88,7 @@ import { generarReporteERM } from "./informesReportERM";
 import * as informesDian from "./informesDianDb";
 import * as informesGestionCliente from "./informesGestionClienteDb";
 import * as informesIva from "./informesIvaDb";
+import * as informesIvaCuentas from "./informesIvaCuentasDb";
 import * as rentaDb from "./rentaDb";
 import { storagePut, storageGetSignedUrl, storageGetBuffer } from "./storage";
 import { invokeLLM } from "./_core/llm";
@@ -2009,6 +2010,68 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
               input.clienteId, input.anio, input.periodicidad, input.periodo, input.cuenta, input.divisiones, ctx.user.id,
             );
             return informesIva.computarResumenIngresos(input.clienteId, input.anio, input.periodicidad, input.periodo);
+          }),
+      }),
+      // Paso 3 — IVA generado: confirmar cuál cuenta contable (casi
+      // siempre sub-cuenta de la 2408) corresponde al IVA generado al
+      // 19% y al 5%, y cotejar que la tarifa aplicada sobre la base ya
+      // clasificada en el paso de ingresos sea igual al valor contable
+      // real de esa cuenta.
+      ivaGenerado: router({
+        listarCuentas: protectedProcedure
+          .input(z.object({
+            clienteId: z.number(), anio: z.number(),
+            periodicidad: z.enum(["bimestral", "cuatrimestral", "anual"]), periodo: z.number(),
+          }))
+          .query(async ({ input, ctx }) => {
+            await assertClienteAccesibleInformes(ctx, input.clienteId);
+            const meses = informesIva.mesesDelPeriodo(input.periodicidad, input.periodo);
+            const [cuentas, config] = await Promise.all([
+              informesIvaCuentas.getCuentasPrefijoDelPeriodo(input.clienteId, input.anio, meses, ["24"]),
+              informesIvaCuentas.getConfigCuentasIva(input.clienteId),
+            ]);
+            const cuentaGenerado19 = config.find(c => c.tipoIva === "generado_19")?.cuenta || null;
+            const cuentaGenerado5 = config.find(c => c.tipoIva === "generado_5")?.cuenta || null;
+            return { cuentas, cuentaGenerado19, cuentaGenerado5 };
+          }),
+        guardarConfig: protectedProcedure
+          .input(z.object({ clienteId: z.number(), cuentaGenerado19: z.string().optional(), cuentaGenerado5: z.string().optional() }))
+          .mutation(async ({ input, ctx }) => {
+            await assertClienteAccesibleInformes(ctx, input.clienteId);
+            const configs: { tipoIva: informesIvaCuentas.TipoIva; cuenta: string }[] = [];
+            if (input.cuentaGenerado19) configs.push({ tipoIva: "generado_19", cuenta: input.cuentaGenerado19 });
+            if (input.cuentaGenerado5) configs.push({ tipoIva: "generado_5", cuenta: input.cuentaGenerado5 });
+            await informesIvaCuentas.guardarConfigCuentasIva(input.clienteId, configs, ctx.user.id);
+            return { success: true };
+          }),
+        comparar: protectedProcedure
+          .input(z.object({
+            clienteId: z.number(), anio: z.number(),
+            periodicidad: z.enum(["bimestral", "cuatrimestral", "anual"]), periodo: z.number(),
+          }))
+          .query(async ({ input, ctx }) => {
+            await assertClienteAccesibleInformes(ctx, input.clienteId);
+            const expediente = await informesIva.getConciliacionIva(input.clienteId, input.anio, input.periodicidad, input.periodo);
+            let estado: any = {};
+            try { estado = expediente?.estadoJson ? JSON.parse(expediente.estadoJson) : {}; } catch { estado = {}; }
+            const totalPorClasificacion = estado.ingresos?.totalPorClasificacion;
+            if (!totalPorClasificacion) {
+              throw new Error("Primero completa y guarda el Paso 2 (clasificación de ingresos) de este periodo.");
+            }
+            const config = await informesIvaCuentas.getConfigCuentasIva(input.clienteId);
+            const cuenta19 = config.find(c => c.tipoIva === "generado_19")?.cuenta || null;
+            const cuenta5 = config.find(c => c.tipoIva === "generado_5")?.cuenta || null;
+            const meses = informesIva.mesesDelPeriodo(input.periodicidad, input.periodo);
+
+            const esperado19 = totalPorClasificacion.gravado_19 * 0.19;
+            const esperado5 = totalPorClasificacion.gravado_5 * 0.05;
+            const real19 = cuenta19 ? await informesIvaCuentas.getSaldoCuentaEnPeriodo(input.clienteId, input.anio, meses, cuenta19) : null;
+            const real5 = cuenta5 ? await informesIvaCuentas.getSaldoCuentaEnPeriodo(input.clienteId, input.anio, meses, cuenta5) : null;
+
+            return {
+              tarifa19: { base: totalPorClasificacion.gravado_19, esperado: esperado19, cuenta: cuenta19, real: real19, diferencia: real19 !== null ? esperado19 - real19 : null },
+              tarifa5: { base: totalPorClasificacion.gravado_5, esperado: esperado5, cuenta: cuenta5, real: real5, diferencia: real5 !== null ? esperado5 - real5 : null },
+            };
           }),
       }),
     }),

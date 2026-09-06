@@ -619,7 +619,10 @@ function IvaTab({ clienteId, anio }: { clienteId: number; anio: number }) {
                 continuar.
               </p>
             ) : conciliacionQuery.data ? (
-              <IngresosIvaCard clienteId={clienteId} anio={anio} periodicidad={periodicidad} periodo={periodo} />
+              <div className="space-y-4">
+                <IngresosIvaCard clienteId={clienteId} anio={anio} periodicidad={periodicidad} periodo={periodo} />
+                <IvaGeneradoCard clienteId={clienteId} anio={anio} periodicidad={periodicidad} periodo={periodo} />
+              </div>
             ) : (
               <div className="pt-1">
                 <Button size="sm" onClick={() => iniciarMutation.mutate({ clienteId, anio, periodicidad, periodo })} disabled={iniciarMutation.isPending}>
@@ -924,6 +927,119 @@ function IngresosIvaCard({ clienteId, anio, periodicidad, periodo }: {
             )}
           </div>
         </div>
+      )}
+    </div>
+  );
+}
+
+/** Paso 3 de la conciliación de IVA — confirma cuál cuenta contable
+ * corresponde al IVA generado al 19% y al 5% (casi siempre sub-cuentas
+ * de la 2408), y cotejar que la tarifa aplicada sobre la base ya
+ * clasificada en el paso de ingresos sea igual al valor real de esa
+ * cuenta. */
+function IvaGeneradoCard({ clienteId, anio, periodicidad, periodo }: {
+  clienteId: number; anio: number; periodicidad: "bimestral" | "cuatrimestral" | "anual"; periodo: number;
+}) {
+  const [cuenta19Local, setCuenta19Local] = useState("");
+  const [cuenta5Local, setCuenta5Local] = useState("");
+  const [inicializado, setInicializado] = useState(false);
+
+  const listarQuery = trpc.informes.iva.ivaGenerado.listarCuentas.useQuery({ clienteId, anio, periodicidad, periodo });
+  if (!inicializado && listarQuery.data) {
+    setCuenta19Local(listarQuery.data.cuentaGenerado19 || "");
+    setCuenta5Local(listarQuery.data.cuentaGenerado5 || "");
+    setInicializado(true);
+  }
+
+  const guardarConfigMutation = trpc.informes.iva.ivaGenerado.guardarConfig.useMutation({
+    onSuccess: () => { toast.success("Configuración de cuentas de IVA generado guardada"); compararQuery.refetch(); },
+    onError: (err) => toast.error(err.message || "No se pudo guardar"),
+  });
+
+  const compararQuery = trpc.informes.iva.ivaGenerado.comparar.useQuery(
+    { clienteId, anio, periodicidad, periodo },
+    { enabled: !!(listarQuery.data?.cuentaGenerado19 || listarQuery.data?.cuentaGenerado5) },
+  );
+
+  const fmt = (n: number) => `$${Math.round(n).toLocaleString("es-CO")}`;
+
+  if (listarQuery.isLoading) return <div className="flex justify-center py-6"><Loader2 className="w-5 h-5 animate-spin" /></div>;
+
+  return (
+    <div className="border rounded-md p-3 space-y-3">
+      <p className="text-xs font-medium text-muted-foreground">Paso 3 · IVA generado</p>
+      {(!listarQuery.data || listarQuery.data.cuentas.length === 0) ? (
+        <p className="text-xs text-muted-foreground">
+          No se encontraron cuentas 24xx con movimiento en los meses de este periodo — confirma que el libro
+          auxiliar tenga columna de código de cuenta identificable.
+        </p>
+      ) : (
+        <>
+          <p className="text-xs text-muted-foreground">
+            Elige, de las cuentas 24xx con movimiento en el periodo, cuál es la de IVA generado al 19% y cuál
+            la del 5%. Se guarda por cliente, para los siguientes periodos también.
+          </p>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <Label className="text-xs">Cuenta IVA generado 19%</Label>
+              <Select value={cuenta19Local} onValueChange={setCuenta19Local}>
+                <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Elegir cuenta..." /></SelectTrigger>
+                <SelectContent>
+                  {listarQuery.data.cuentas.map((c: any) => (
+                    <SelectItem key={c.cuenta} value={c.cuenta}>{c.cuenta} — {c.nombre} ({fmt(c.valor)})</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Cuenta IVA generado 5%</Label>
+              <Select value={cuenta5Local} onValueChange={setCuenta5Local}>
+                <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Elegir cuenta..." /></SelectTrigger>
+                <SelectContent>
+                  {listarQuery.data.cuentas.map((c: any) => (
+                    <SelectItem key={c.cuenta} value={c.cuenta}>{c.cuenta} — {c.nombre} ({fmt(c.valor)})</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <Button
+            size="sm" disabled={guardarConfigMutation.isPending || (!cuenta19Local && !cuenta5Local)}
+            onClick={() => guardarConfigMutation.mutate({ clienteId, cuentaGenerado19: cuenta19Local || undefined, cuentaGenerado5: cuenta5Local || undefined })}
+          >
+            {guardarConfigMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-2" /> : null}
+            Guardar configuración
+          </Button>
+
+          {compararQuery.data && (
+            <div className="border-t pt-3 space-y-3">
+              <p className="text-xs font-medium text-muted-foreground">Comparación — tarifa × base vs. valor contable real</p>
+              {(["tarifa19", "tarifa5"] as const).map((clave) => {
+                const t = compararQuery.data[clave];
+                const tarifa = clave === "tarifa19" ? "19%" : "5%";
+                if (!t.cuenta) {
+                  return <p key={clave} className="text-xs text-muted-foreground">IVA {tarifa}: sin cuenta configurada todavía.</p>;
+                }
+                const cuadra = t.diferencia !== null && Math.abs(t.diferencia) <= Math.max(5, Math.abs(t.esperado) * 0.001);
+                return (
+                  <div key={clave} className="text-sm space-y-1 border-b pb-2 last:border-b-0">
+                    <p className="font-medium">IVA generado {tarifa} — cuenta {t.cuenta}</p>
+                    <div className="flex justify-between text-xs"><span className="text-muted-foreground">Base gravada</span><span>{fmt(t.base)}</span></div>
+                    <div className="flex justify-between text-xs"><span className="text-muted-foreground">IVA esperado (tarifa × base)</span><span>{fmt(t.esperado)}</span></div>
+                    <div className="flex justify-between text-xs"><span className="text-muted-foreground">Valor real en la cuenta</span><span>{t.real !== null ? fmt(t.real) : "—"}</span></div>
+                    {t.diferencia !== null && (
+                      cuadra ? (
+                        <p className="text-xs text-green-700 flex items-center gap-1.5"><CheckCircle2 className="w-3.5 h-3.5 shrink-0" /> Cuadra</p>
+                      ) : (
+                        <p className="text-xs text-red-600 flex items-center gap-1.5"><AlertCircle className="w-3.5 h-3.5 shrink-0" /> Diferencia de {fmt(t.diferencia)}</p>
+                      )
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </>
       )}
     </div>
   );

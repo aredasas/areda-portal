@@ -665,6 +665,24 @@ export const informesComprobantesExcluidos = mysqlTable("informesComprobantesExc
 }));
 export type InformeComprobanteExcluido = typeof informesComprobantesExcluidos.$inferSelect;
 
+/** Configuración, POR CLIENTE, de qué cuenta contable corresponde a cada
+ * rol de IVA — generado 19%/5% (Fase 3), descontable 19%/5% (Fase 5), y
+ * transitorio (Fase 6). En la mayoría de los casos es una sub-cuenta de
+ * la 2408, pero se deja como texto libre porque el PUC de cada cliente
+ * puede variar. Se reutiliza entre periodos, igual que la clasificación
+ * de cuentas de ingreso. */
+export const informesConfigCuentasIva = mysqlTable("informesConfigCuentasIva", {
+  id: int("id").autoincrement().primaryKey(),
+  clienteId: int("clienteId").notNull(),
+  tipoIva: mysqlEnum("tipoIva", ["generado_19", "generado_5", "descontable_19", "descontable_5", "transitorio"]).notNull(),
+  cuenta: varchar("cuenta", { length: 12 }).notNull(),
+  actualizadoPorId: int("actualizadoPorId").notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (table) => ({
+  clienteTipoIvaIdx: uniqueIndex("informesConfigCuentasIva_cliente_tipo_idx").on(table.clienteId, table.tipoIva),
+}));
+export type InformeConfigCuentaIva = typeof informesConfigCuentasIva.$inferSelect;
+
 /** Expediente de trabajo de la conciliación de IVA de un cliente para un
  * periodo (bimestral/cuatrimestral/anual) — se va llenando paso a paso:
  * clasificación de ingresos por tarifa, IVA generado, compras, IVA
