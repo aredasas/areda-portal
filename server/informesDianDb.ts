@@ -435,11 +435,17 @@ export async function parseAuxiliarParaDian(
     // comparan (esos son valorCuenta4 y valorCuentaGasto, por separado).
     const claveExpuesta = `${fila.numero}|${Math.round(valorParaClave)}|${fila.claveDoc}`;
     if (!documentos.has(claveExpuesta)) {
+      // Sin una columna de cuenta confiable, es imposible saber cuál línea
+      // es cuenta 4 y cuál es 14/5/62 — en vez de dejar ambos valores en
+      // $0 (que se vería como "no se encontró nada" sin serlo), se usa el
+      // valor máximo histórico (como antes de esta mejora) para los dos
+      // campos, así la comparación por tercero sigue mostrando un valor
+      // real sin importar cuál de los dos use.
       documentos.set(claveExpuesta, {
         numero: fila.numero, tercero: fila.tercero, nombreTercero: fila.nombreTercero,
         tipo: fila.tipo, fecha: fila.fecha, filas: 0, categoria,
-        valorCuenta4: valorCuenta4PorClaveDoc.get(fila.claveDoc) || 0,
-        valorCuentaGasto: valorGastoPorClaveDoc.get(fila.claveDoc) || 0,
+        valorCuenta4: hayColumnaCuenta ? (valorCuenta4PorClaveDoc.get(fila.claveDoc) || 0) : valorParaClave,
+        valorCuentaGasto: hayColumnaCuenta ? (valorGastoPorClaveDoc.get(fila.claveDoc) || 0) : valorParaClave,
       });
     }
     documentos.get(claveExpuesta)!.filas++;

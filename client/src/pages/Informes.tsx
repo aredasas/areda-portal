@@ -1481,7 +1481,18 @@ function ComparacionDianCard({ clienteId, anio, mes, setMes, reportes }: {
 
   const hayAuxiliarCargado = !!auxiliarDisponibleQuery.data;
   const puedeComparar = !!archivoDian && hayAuxiliarCargado;
-  const comparacionesGeneradas = (reportes || []).filter((r: any) => r.tipo === "DIAN");
+  const comparacionesGeneradas = (() => {
+    const todasDelAnio = (reportes || []).filter((r: any) => r.tipo === "DIAN");
+    // Cada vez que se regenera la comparación de un mes queda un registro
+    // nuevo — se muestra solo la más reciente de cada mes, no el
+    // historial completo de regeneraciones.
+    const masRecientePorMes = new Map<number, any>();
+    for (const r of todasDelAnio) {
+      const actual = masRecientePorMes.get(r.mes);
+      if (!actual || new Date(r.createdAt) > new Date(actual.createdAt)) masRecientePorMes.set(r.mes, r);
+    }
+    return Array.from(masRecientePorMes.values()).sort((a, b) => a.mes - b.mes);
+  })();
 
   const handleComparar = async () => {
     if (!archivoDian || !puedeComparar) return;
@@ -1717,7 +1728,10 @@ function ComparacionDianCard({ clienteId, anio, mes, setMes, reportes }: {
           <CardContent className="space-y-2">
             {comparacionesGeneradas.map((r: any) => (
               <div key={r.id} className="flex items-center justify-between border rounded-md p-2 text-sm">
-                <span>Comparación DIAN {MESES[r.mes - 1]} {r.anio}</span>
+                <span>
+                  Comparación DIAN {MESES[r.mes - 1]} {r.anio}
+                  <span className="text-muted-foreground"> · generado {new Date(r.createdAt).toLocaleDateString("es-CO")}</span>
+                </span>
                 <ReporteDownloadLink fileKey={r.fileKey} />
               </div>
             ))}
