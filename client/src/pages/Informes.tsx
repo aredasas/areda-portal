@@ -651,6 +651,7 @@ function IngresosIvaCard({ clienteId, anio, periodicidad, periodo }: {
   clienteId: number; anio: number; periodicidad: "bimestral" | "cuatrimestral" | "anual"; periodo: number;
 }) {
   const listarQuery = trpc.informes.iva.ingresos.listar.useQuery({ clienteId, anio, periodicidad, periodo });
+  const utils = trpc.useUtils();
   const [clasificacionLocal, setClasificacionLocal] = useState<Record<string, { clasificacion: string; facturado: boolean }>>({});
   const [inicializado, setInicializado] = useState(false);
   const [editandoDivision, setEditandoDivision] = useState<string | null>(null);
@@ -663,13 +664,18 @@ function IngresosIvaCard({ clienteId, anio, periodicidad, periodo }: {
     setInicializado(true);
   }
 
+  // El Paso 3 (IVA generado) calcula "esperado" a partir de la base
+  // gravada de este paso — al guardar aquí, se invalida esa consulta
+  // para que se recalcule sola, sin tener que recargar la página.
+  const refrescarIvaGenerado = () => utils.informes.iva.ivaGenerado.comparar.invalidate({ clienteId, anio, periodicidad, periodo });
+
   const guardarMutation = trpc.informes.iva.ingresos.guardarClasificacion.useMutation({
-    onSuccess: () => { toast.success("Clasificación de ingresos guardada"); listarQuery.refetch(); },
+    onSuccess: () => { toast.success("Clasificación de ingresos guardada"); listarQuery.refetch(); refrescarIvaGenerado(); },
     onError: (err) => toast.error(err.message || "No se pudo guardar"),
   });
 
   const guardarDivisionMutation = trpc.informes.iva.ingresos.guardarDivision.useMutation({
-    onSuccess: () => { toast.success("División de la cuenta guardada"); setEditandoDivision(null); listarQuery.refetch(); },
+    onSuccess: () => { toast.success("División de la cuenta guardada"); setEditandoDivision(null); listarQuery.refetch(); refrescarIvaGenerado(); },
     onError: (err) => toast.error(err.message || "No se pudo guardar la división"),
   });
 
