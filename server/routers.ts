@@ -2012,6 +2012,57 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
             return informesIva.computarResumenIngresos(input.clienteId, input.anio, input.periodicidad, input.periodo);
           }),
       }),
+      // Paso 4 — compras: mismo patrón que el paso de ingresos, pero con
+      // las cuentas 14 (inventario) y 62 (compras) — el usuario clasifica
+      // cada una por tarifa (o divide si mezcla varias), y se compara
+      // contra el total "Recibido" que la DIAN ya tiene reportado.
+      compras: router({
+        listar: protectedProcedure
+          .input(z.object({
+            clienteId: z.number(), anio: z.number(),
+            periodicidad: z.enum(["bimestral", "cuatrimestral", "anual"]), periodo: z.number(),
+          }))
+          .query(async ({ input, ctx }) => {
+            await assertClienteAccesibleInformes(ctx, input.clienteId);
+            const meses = informesIva.mesesDelPeriodo(input.periodicidad, input.periodo);
+            const [cuentas, totalDianPorMes] = await Promise.all([
+              informesIva.getCuentasComprasDelPeriodo(input.clienteId, input.anio, meses, input.periodicidad, input.periodo),
+              informesIva.getTotalDianRecibidoPorMes(input.clienteId, input.anio, meses),
+            ]);
+            return { cuentas, totalDianPorMes };
+          }),
+        guardarClasificacion: protectedProcedure
+          .input(z.object({
+            clienteId: z.number(), anio: z.number(),
+            periodicidad: z.enum(["bimestral", "cuatrimestral", "anual"]), periodo: z.number(),
+            clasificaciones: z.array(z.object({
+              cuenta: z.string(), clasificacion: z.enum(["gravado_19", "gravado_5", "excluido", "no_gravado"]),
+              facturado: z.boolean(),
+            })),
+          }))
+          .mutation(async ({ input, ctx }) => {
+            await assertClienteAccesibleInformes(ctx, input.clienteId);
+            await informesIva.guardarClasificacionCuentas(input.clienteId, input.clasificaciones, ctx.user.id);
+            return informesIva.computarResumenCompras(input.clienteId, input.anio, input.periodicidad, input.periodo);
+          }),
+        guardarDivision: protectedProcedure
+          .input(z.object({
+            clienteId: z.number(), anio: z.number(),
+            periodicidad: z.enum(["bimestral", "cuatrimestral", "anual"]), periodo: z.number(),
+            cuenta: z.string(),
+            divisiones: z.array(z.object({
+              etiqueta: z.string().optional(), valor: z.number(),
+              clasificacion: z.enum(["gravado_19", "gravado_5", "excluido", "no_gravado"]), facturado: z.boolean(),
+            })),
+          }))
+          .mutation(async ({ input, ctx }) => {
+            await assertClienteAccesibleInformes(ctx, input.clienteId);
+            await informesIva.guardarDivisionesCuenta(
+              input.clienteId, input.anio, input.periodicidad, input.periodo, input.cuenta, input.divisiones, ctx.user.id,
+            );
+            return informesIva.computarResumenCompras(input.clienteId, input.anio, input.periodicidad, input.periodo);
+          }),
+      }),
       // Paso 3 — IVA generado: confirmar cuál cuenta contable (casi
       // siempre sub-cuenta de la 2408) corresponde al IVA generado al
       // 19% y al 5%, y cotejar que la tarifa aplicada sobre la base ya

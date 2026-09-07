@@ -5,6 +5,7 @@ import {
   informesSaldosMensuales, informesClasificacionCuentas, informesCuentasCliente, informesCuentasPuc,
   informesDivisionesCuentaIva,
 } from "../drizzle/schema";
+import { getCuentasPrefijoDelPeriodo as getCuentasPorPrefijoEnVivo } from "./informesIvaCuentasDb";
 
 export type Periodicidad = "bimestral" | "cuatrimestral" | "anual";
 
@@ -321,5 +322,134 @@ export async function guardarPasoIngresos(
   let estado: Record<string, unknown> = {};
   try { estado = existente.estadoJson ? JSON.parse(existente.estadoJson) : {}; } catch { estado = {}; }
   estado.ingresos = resumenIngresos;
+  await db.update(informesIvaConciliacion).set({ estadoJson: JSON.stringify(estado) }).where(eq(informesIvaConciliacion.id, existente.id));
+}
+
+// ==================== PASO 4: COMPRAS ====================
+
+/** Cuentas de compras (14 inventario y 62 compras) con movimiento en los
+ * meses del periodo — la 62 se lee de `informesSaldosMensuales` (se
+ * guarda ahí como tipo "costo" junto con la 61, se filtra por prefijo);
+ * la 14 NO se guarda ahí (el Estado de Resultados descarta toda cuenta
+ * que no sea 4/5/6), así que se lee en vivo del libro auxiliar, igual
+ * que se hace para las cuentas de IVA en el Paso 3. */
+export async function getCuentasComprasDelPeriodo(
+  clienteId: number, anio: number, meses: number[], periodicidad: Periodicidad, periodo: number,
+): Promise<CuentaResumenPeriodo[]> {
+  const db = await getDb();
+  if (!db) return [];
+
+  const [saldosCosto, cuentas14EnVivo] = await Promise.all([
+    db.select().from(informesSaldosMensuales).where(and(
+      eq(informesSaldosMensuales.clienteId, clienteId), eq(informesSaldosMensuales.anio, anio),
+      inArray(informesSaldosMensuales.mes, meses), eq(informesSaldosMensuales.tipo, "costo"),
+    )),
+    getCuentasPorPrefijoEnVivo(clienteId, anio, meses, ["14"]),
+  ]);
+
+  const totalPorCuenta = new Map<string, number>();
+  for (const s of saldosCosto) {
+    if (!s.cuenta.startsWith("62")) continue; // la 61 también es "costo" — no interesa aquí, solo compras (62)
+    totalPorCuenta.set(s.cuenta, (totalPorCuenta.get(s.cuenta) || 0) + s.valor);
+  }
+  for (const c of cuentas14EnVivo) {
+    totalPorCuenta.set(c.cuenta, (totalPorCuenta.get(c.cuenta) || 0) + c.valor);
+  }
+  if (totalPorCuenta.size === 0) return [];
+
+  const cuentas = Array.from(totalPorCuenta.keys());
+  const [nombresCliente, nombresPuc, clasificaciones, divisionesGuardadas] = await Promise.all([
+    db.select().from(informesCuentasCliente).where(and(eq(informesCuentasCliente.clienteId, clienteId), inArray(informesCuentasCliente.cuenta, cuentas))),
+    db.select().from(informesCuentasPuc).where(inArray(informesCuentasPuc.cuenta, cuentas)),
+    db.select().from(informesClasificacionCuentas).where(and(eq(informesClasificacionCuentas.clienteId, clienteId), inArray(informesClasificacionCuentas.cuenta, cuentas))),
+    db.select().from(informesDivisionesCuentaIva).where(and(
+      eq(informesDivisionesCuentaIva.clienteId, clienteId), eq(informesDivisionesCuentaIva.anio, anio),
+      eq(informesDivisionesCuentaIva.periodicidad, periodicidad), eq(informesDivisionesCuentaIva.periodo, periodo),
+      inArray(informesDivisionesCuentaIva.cuenta, cuentas),
+    )),
+  ]);
+  const nombrePorCuentaCliente = new Map(nombresCliente.map(n => [n.cuenta, n.nombre]));
+  const nombrePorCuentaPuc = new Map(nombresPuc.map(n => [n.cuenta, n.descripcion]));
+  const clasifPorCuenta = new Map(clasificaciones.map(c => [c.cuenta, c]));
+  const divisionesPorCuenta = new Map<string, DivisionCuenta[]>();
+  for (const d of divisionesGuardadas) {
+    if (!divisionesPorCuenta.has(d.cuenta)) divisionesPorCuenta.set(d.cuenta, []);
+    divisionesPorCuenta.get(d.cuenta)!.push({
+      orden: d.orden, etiqueta: d.etiqueta, valor: d.valor,
+      clasificacion: d.clasificacion as ClasificacionIva, facturado: d.facturado,
+    });
+  }
+
+  return cuentas
+    .map(cuenta => {
+      const config = clasifPorCuenta.get(cuenta);
+      const divisiones = (divisionesPorCuenta.get(cuenta) || []).sort((a, b) => a.orden - b.orden);
+      return {
+        cuenta, valor: totalPorCuenta.get(cuenta) || 0,
+        nombre: nombrePorCuentaCliente.get(cuenta) || nombrePorCuentaPuc.get(cuenta) || "(sin nombre)",
+        clasificacion: (config?.clasificacion as ClasificacionIva) ?? null,
+        facturado: config?.facturado ?? true,
+        divisiones,
+      };
+    })
+    .sort((a, b) => a.cuenta.localeCompare(b.cuenta));
+}
+
+/** Igual que `getTotalDianEmitidoPorMes`, pero del lado "Recibido" —
+ * las compras/gastos que la DIAN tiene reportados electrónicamente para
+ * cada mes del periodo. */
+export async function getTotalDianRecibidoPorMes(clienteId: number, anio: number, meses: number[]): Promise<{ mes: number; totalRecibidoDian: number | null; generadoEl: Date | null }[]> {
+  const db = await getDb();
+  if (!db) return meses.map(mes => ({ mes, totalRecibidoDian: null, generadoEl: null }));
+  const reportes = await db.select().from(informesReportes).where(and(
+    eq(informesReportes.clienteId, clienteId), eq(informesReportes.anio, anio),
+    inArray(informesReportes.mes, meses), eq(informesReportes.tipo, "DIAN"),
+  ));
+  const porMes = new Map<number, { totalRecibidoDian: number | null; createdAt: Date }>();
+  for (const r of reportes) {
+    const actual = porMes.get(r.mes!);
+    if (!actual || r.createdAt > actual.createdAt) porMes.set(r.mes!, { totalRecibidoDian: r.totalRecibidoDian, createdAt: r.createdAt });
+  }
+  return meses.map(mes => ({ mes, totalRecibidoDian: porMes.get(mes)?.totalRecibidoDian ?? null, generadoEl: porMes.get(mes)?.createdAt ?? null }));
+}
+
+/** Arma el resumen completo del paso "compras" — mismo patrón que
+ * `computarResumenIngresos`: subtotales por tarifa sobre TODA la compra
+ * (facturada o no, para el total real del Formulario 300), y la
+ * comparación contra la DIAN usando solo lo facturado electrónicamente. */
+export async function computarResumenCompras(
+  clienteId: number, anio: number, periodicidad: Periodicidad, periodo: number,
+) {
+  const meses = mesesDelPeriodo(periodicidad, periodo);
+  const [cuentas, totalDianPorMes] = await Promise.all([
+    getCuentasComprasDelPeriodo(clienteId, anio, meses, periodicidad, periodo),
+    getTotalDianRecibidoPorMes(clienteId, anio, meses),
+  ]);
+  const totalPorClasificacion = { gravado_19: 0, gravado_5: 0, excluido: 0, no_gravado: 0 };
+  let totalContabilidad = 0;
+  let totalContabilidadFacturado = 0;
+  for (const c of cuentas) {
+    for (const linea of desglosarCuenta(c)) {
+      if (linea.clasificacion) totalPorClasificacion[linea.clasificacion] += linea.valor;
+      totalContabilidad += linea.valor;
+      if (linea.facturado) totalContabilidadFacturado += linea.valor;
+    }
+  }
+  const totalDian = totalDianPorMes.reduce((a, m) => a + (m.totalRecibidoDian ?? 0), 0);
+  const resumen = { cuentas, totalPorClasificacion, totalContabilidad, totalContabilidadFacturado, totalDianPorMes, totalDian };
+  await guardarPasoCompras(clienteId, anio, periodicidad, periodo, resumen);
+  return resumen;
+}
+
+export async function guardarPasoCompras(
+  clienteId: number, anio: number, periodicidad: Periodicidad, codigoPeriodo: number, resumenCompras: unknown,
+): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  const existente = await getConciliacionIva(clienteId, anio, periodicidad, codigoPeriodo);
+  if (!existente) throw new Error("No existe el expediente de esta conciliación — inicia el periodo primero.");
+  let estado: Record<string, unknown> = {};
+  try { estado = existente.estadoJson ? JSON.parse(existente.estadoJson) : {}; } catch { estado = {}; }
+  estado.compras = resumenCompras;
   await db.update(informesIvaConciliacion).set({ estadoJson: JSON.stringify(estado) }).where(eq(informesIvaConciliacion.id, existente.id));
 }
