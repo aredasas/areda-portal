@@ -970,7 +970,7 @@ function ComprasIvaCard({ clienteId, anio, periodicidad, periodo }: {
   }
 
   const guardarExcluidosMutation = trpc.informes.iva.compras.guardarTiposExcluidos.useMutation({
-    onSuccess: () => { toast.success("Filtro de documentos guardado — se aplica a este y los próximos periodos"); listarQuery.refetch(); setMostrarFiltro(false); },
+    onSuccess: () => { toast.success("Filtro de documentos guardado — se aplica a este y los próximos periodos"); listarQuery.refetch(); tiposDocQuery.refetch(); setMostrarFiltro(false); },
     onError: (err) => toast.error(err.message || "No se pudo guardar"),
   });
 
@@ -1084,14 +1084,28 @@ function ComprasIvaCard({ clienteId, anio, periodicidad, periodo }: {
                       <button
                         key={t.tipo} type="button" onClick={() => toggleExcluido(t.tipo)}
                         className={`text-xs px-2 py-1 rounded-md border ${excluido ? "bg-red-600 text-white border-red-600" : "bg-white text-muted-foreground border-input hover:bg-muted"}`}
-                        title={`${t.cantidad} línea(s), $${Math.round(t.valor).toLocaleString("es-CO")}`}
+                        title={`${t.cantidad} línea(s), $${Math.round(t.valor).toLocaleString("es-CO")} — suma de las cuentas 14 y 62 juntas para este tipo, no de una cuenta en particular`}
                       >
                         {t.tipo || "(sin tipo)"}
                       </button>
                     );
                   })}
                 </div>
-                <p className="text-xs text-muted-foreground">En rojo = excluido del cálculo de compras.</p>
+                <p className="text-xs text-muted-foreground">
+                  En rojo = excluido del cálculo de compras. El valor al pasar el mouse es la suma de las
+                  cuentas 14 y 62 juntas para ese tipo — no el valor de una cuenta específica.
+                </p>
+                {(() => {
+                  const guardados = new Set(tiposDocQuery.data.excluidos);
+                  const hayCambiosSinGuardar = excluidosLocal.length !== guardados.size || excluidosLocal.some(t => !guardados.has(t));
+                  return hayCambiosSinGuardar ? (
+                    <p className="text-xs text-amber-700 flex items-center gap-1.5">
+                      <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                      Cambios sin guardar — los valores de las cuentas de abajo todavía NO reflejan esta
+                      selección. Guarda el filtro para que se actualicen.
+                    </p>
+                  ) : null;
+                })()}
                 <Button size="sm" variant="outline" onClick={() => guardarExcluidosMutation.mutate({ clienteId, tipos: excluidosLocal })} disabled={guardarExcluidosMutation.isPending}>
                   {guardarExcluidosMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-2" /> : null}
                   Guardar filtro
