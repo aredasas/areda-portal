@@ -50,7 +50,7 @@ function formatearFecha(raw: any): string {
  * en la práctica corresponde al número real del documento (el prefijo de
  * tipo casi nunca es solo dígitos, y los segmentos de consecutivo/checaje
  * suelen ser más cortos que el número principal). */
-function extraerNumeroDocumento(raw: string | null | undefined): string {
+export function extraerNumeroDocumento(raw: string | null | undefined): string {
   const texto = raw || "";
   const corridas = texto.match(/\d+/g) || [];
   if (corridas.length === 0) return "";

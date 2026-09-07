@@ -81,7 +81,14 @@ function sumarSaldosPorCuentaYTipo(buffer: Buffer, prefijos: string[], convencio
     if (!values) continue;
     const cuentaRaw = String(values[cols.cuenta] ?? "").trim();
     if (!cuentaRaw || !prefijos.some(p => cuentaRaw.startsWith(p))) continue;
-    const tipoRaw = cols.tipo !== null ? String(values[cols.tipo] ?? "").trim() : "";
+    // Igual que en `parseAuxiliarParaDian`: si no hay una columna de tipo
+    // dedicada, el tipo suele venir combinado con el número en un solo
+    // campo "Comprobante" (ej. "FC-00526" = tipo "FC", número "526") —
+    // se toma el prefijo alfabético de ese mismo campo como sustituto.
+    const numeroTexto = String(values[cols.numero] ?? "");
+    const tipoRaw = cols.tipo !== null
+      ? String(values[cols.tipo] ?? "").trim()
+      : (numeroTexto.match(/^[A-Za-z]+/)?.[0] || "");
     const debito = Number(values[cols.debito]) || 0;
     const credito = Number(values[cols.credito]) || 0;
     const delta = convencion === "pasivo" ? (credito - debito) : (debito - credito);
