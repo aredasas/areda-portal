@@ -666,13 +666,14 @@ export async function deduplicarSaldosMensuales(clienteId: number): Promise<{ fi
 export async function guardarReporteGenerado(data: {
   clienteId: number; anio: number; mes?: number | null; tipo: "ERM" | "ERI" | "DIAN";
   nivel: "resumen" | "detalle"; fileKey: string; generadoPorId: number;
-  totalEmitidoDian?: number; totalRecibidoDian?: number;
+  totalEmitidoDian?: number; totalRecibidoDian?: number; totalesPorTipoJson?: string;
 }): Promise<void> {
   const db = await getDb();
   if (!db) return;
   await db.insert(informesReportes).values({
     ...data, mes: data.mes ?? null,
     totalEmitidoDian: data.totalEmitidoDian ?? null, totalRecibidoDian: data.totalRecibidoDian ?? null,
+    totalesPorTipoJson: data.totalesPorTipoJson ?? null,
   });
 }
 

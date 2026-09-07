@@ -1016,8 +1016,8 @@ function ComprasIvaCard({ clienteId, anio, periodicidad, periodo }: {
   }
   const totalContabilidad = desglose.reduce((a, l) => a + l.valor, 0);
   const totalFacturado = desglose.filter(l => l.facturado).reduce((a, l) => a + l.valor, 0);
-  const totalDian = totalDianPorMes.reduce((a, m) => a + (m.totalRecibidoDian ?? 0), 0);
-  const hayMesesSinDian = totalDianPorMes.some(m => m.totalRecibidoDian === null);
+  const totalDian = totalDianPorMes.reduce((a, m) => a + (m.total ?? 0), 0);
+  const hayMesesSinDian = totalDianPorMes.some(m => m.total === null);
   const diferenciaTotal = totalFacturado - totalDian;
 
   const handleAbrirDivision = (cuenta: any) => {
@@ -1257,13 +1257,17 @@ function ComprasIvaCard({ clienteId, anio, periodicidad, periodo }: {
 
           <div className="border-t pt-2 space-y-1">
             <p className="text-xs font-medium text-muted-foreground">Comparación contra la DIAN (solo lo facturado)</p>
+            <p className="text-xs text-muted-foreground">
+              El total de la DIAN aquí solo incluye los tipos de documento cuyo comprobante contable está
+              configurado y activo (no excluido) en el filtro de arriba — no todo lo "Recibido".
+            </p>
             {totalDianPorMes.map((m: any) => {
               const nombreMes = ["", "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"][m.mes];
               return (
                 <div key={m.mes} className="flex items-center justify-between text-xs">
                   <span className="text-muted-foreground">{nombreMes} {anio}</span>
                   <span>
-                    {m.totalRecibidoDian === null ? "sin dato guardado" : fmt(m.totalRecibidoDian)}
+                    {m.total === null ? "sin dato guardado" : fmt(m.total)}
                     {m.generadoEl && <span className="text-muted-foreground"> · generado {new Date(m.generadoEl).toLocaleDateString("es-CO")}</span>}
                   </span>
                 </div>

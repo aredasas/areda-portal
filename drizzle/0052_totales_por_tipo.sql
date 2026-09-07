@@ -1,0 +1,1 @@
+ALTER TABLE `informesReportes` ADD `totalesPorTipoJson` text;

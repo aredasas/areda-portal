@@ -2027,7 +2027,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
             const meses = informesIva.mesesDelPeriodo(input.periodicidad, input.periodo);
             const [cuentas, totalDianPorMes] = await Promise.all([
               informesIva.getCuentasComprasDelPeriodo(input.clienteId, input.anio, meses, input.periodicidad, input.periodo),
-              informesIva.getTotalDianRecibidoPorMes(input.clienteId, input.anio, meses),
+              informesIva.getTotalDianRecibidoComprasPorMes(input.clienteId, input.anio, meses),
             ]);
             return { cuentas, totalDianPorMes };
           }),
@@ -2329,9 +2329,15 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           // (por tipo de documento) que ya usa el resto de la comparación.
           const totalEmitidoDian = filasDian.filter(f => informesDian.categorizarFilaDianConConfig(f, mapaConfigTipos) === "ingreso").reduce((a, f) => a + f.total, 0);
           const totalRecibidoDian = filasDian.filter(f => f.grupo === "Recibido").reduce((a, f) => a + f.total, 0);
+          // Desglose por tipo de documento exacto — para que otros pasos
+          // (ej. compras de IVA) puedan comparar contra SOLO los tipos
+          // que les corresponden, en vez del total "Recibido" completo.
+          const totalesPorTipoJson = JSON.stringify(
+            tiposDetectadosEnArchivo.map(d => ({ tipoDocumentoDian: d.tipoDocumentoDian, grupo: d.grupo, total: d.total })),
+          );
           await informesDb.guardarReporteGenerado({
             clienteId: input.clienteId, anio: input.anio, mes: input.mes, tipo: "DIAN",
-            nivel: "detalle", fileKey, generadoPorId: ctx.user.id, totalEmitidoDian, totalRecibidoDian,
+            nivel: "detalle", fileKey, generadoPorId: ctx.user.id, totalEmitidoDian, totalRecibidoDian, totalesPorTipoJson,
           });
           const signedUrl = await storageGetSignedUrl(fileKey);
           const totalTercerosConciliados = resumenPorTipo.reduce((a, t) => a + t.cantidadTercerosConciliados, 0);

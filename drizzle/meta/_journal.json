@@ -365,6 +365,13 @@
       "when": 1788743608266,
       "tag": "0051_compras_tipos_excluidos",
       "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "5",
+      "when": 1788793178239,
+      "tag": "0052_totales_por_tipo",
+      "breakpoints": true
     }
   ]
 }

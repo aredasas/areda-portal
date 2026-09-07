@@ -5,6 +5,7 @@ import {
   informesSaldosMensuales, informesClasificacionCuentas, informesCuentasCliente, informesCuentasPuc,
   informesDivisionesCuentaIva,
 } from "../drizzle/schema";
+import { getConfigTiposDocumento } from "./informesDianDb";
 import {
   getCuentasPrefijoConFiltroDelPeriodo, getTiposComprobantePorPrefijoDelPeriodo,
   getComprasTiposExcluidos as getComprasTiposExcluidosDeCuentas,
@@ -412,6 +413,67 @@ export async function getTotalDianRecibidoPorMes(clienteId: number, anio: number
   return meses.map(mes => ({ mes, totalRecibidoDian: porMes.get(mes)?.totalRecibidoDian ?? null, generadoEl: porMes.get(mes)?.createdAt ?? null }));
 }
 
+/** Igual que `getTotalDianRecibidoPorMes`, pero filtrado a SOLO los
+ * tipos de documento de la DIAN que corresponden a los tipos de
+ * comprobante contable que realmente se están usando para calcular las
+ * cuentas de compras (14/62) de este periodo — no todo lo "Recibido"
+ * (que mezcla documento soporte, nómina, notas, etc., que no son
+ * compras). Usa el desglose por tipo que se guarda al generar cada
+ * Comparación DIAN (`totalesPorTipoJson`) — comparaciones generadas
+ * ANTES de que existiera ese desglose no lo tienen, y ese mes queda en
+ * null (hay que regenerar esa comparación). */
+export async function getTotalDianRecibidoComprasPorMes(
+  clienteId: number, anio: number, meses: number[],
+): Promise<{ mes: number; total: number | null; generadoEl: Date | null }[]> {
+  const db = await getDb();
+  if (!db) return meses.map(mes => ({ mes, total: null, generadoEl: null }));
+
+  const [tiposComprobanteCompras, excluidosArr, configTiposDoc] = await Promise.all([
+    getTiposComprobanteComprasDelPeriodo(clienteId, anio, meses),
+    getComprasTiposExcluidosDeCuentas(clienteId),
+    getConfigTiposDocumento(clienteId),
+  ]);
+  const excluidos = new Set(excluidosArr.map(t => t.trim()));
+  const comprobantesActivos = new Set(tiposComprobanteCompras.filter(t => !excluidos.has(t.tipo)).map(t => t.tipo));
+
+  // Tipos de documento DIAN (grupo Recibido) cuyo comprobante contable
+  // asociado está entre los que realmente se usan (no excluidos) para
+  // calcular las cuentas de compras.
+  const tiposDianRelevantes = new Set<string>();
+  for (const c of configTiposDoc) {
+    if (c.grupo !== "Recibido" || !c.tiposComprobanteContable) continue;
+    try {
+      const lista: string[] = JSON.parse(c.tiposComprobanteContable);
+      if (lista.some(t => comprobantesActivos.has(t.trim()))) {
+        tiposDianRelevantes.add(`${c.tipoDocumentoDian}|${c.grupo}`);
+      }
+    } catch { /* config inválida — se ignora */ }
+  }
+
+  const reportes = await db.select().from(informesReportes).where(and(
+    eq(informesReportes.clienteId, clienteId), eq(informesReportes.anio, anio),
+    inArray(informesReportes.mes, meses), eq(informesReportes.tipo, "DIAN"),
+  ));
+  const porMes = new Map<number, { totalesPorTipoJson: string | null; createdAt: Date }>();
+  for (const r of reportes) {
+    const actual = porMes.get(r.mes!);
+    if (!actual || r.createdAt > actual.createdAt) porMes.set(r.mes!, { totalesPorTipoJson: r.totalesPorTipoJson, createdAt: r.createdAt });
+  }
+
+  return meses.map(mes => {
+    const entrada = porMes.get(mes);
+    if (!entrada) return { mes, total: null, generadoEl: null };
+    if (!entrada.totalesPorTipoJson) return { mes, total: null, generadoEl: entrada.createdAt }; // comparación vieja, sin desglose — hay que regenerarla
+    try {
+      const desglose: { tipoDocumentoDian: string; grupo: string; total: number }[] = JSON.parse(entrada.totalesPorTipoJson);
+      const total = desglose.filter(d => tiposDianRelevantes.has(`${d.tipoDocumentoDian}|${d.grupo}`)).reduce((a, d) => a + d.total, 0);
+      return { mes, total, generadoEl: entrada.createdAt };
+    } catch {
+      return { mes, total: null, generadoEl: entrada.createdAt };
+    }
+  });
+}
+
 /** Arma el resumen completo del paso "compras" — mismo patrón que
  * `computarResumenIngresos`: subtotales por tarifa sobre TODA la compra
  * (facturada o no, para el total real del Formulario 300), y la
@@ -433,7 +495,7 @@ export async function computarResumenCompras(
   const meses = mesesDelPeriodo(periodicidad, periodo);
   const [cuentas, totalDianPorMes] = await Promise.all([
     getCuentasComprasDelPeriodo(clienteId, anio, meses, periodicidad, periodo),
-    getTotalDianRecibidoPorMes(clienteId, anio, meses),
+    getTotalDianRecibidoComprasPorMes(clienteId, anio, meses),
   ]);
   const totalPorClasificacion = { gravado_19: 0, gravado_5: 0, excluido: 0, no_gravado: 0 };
   let totalContabilidad = 0;
@@ -445,7 +507,7 @@ export async function computarResumenCompras(
       if (linea.facturado) totalContabilidadFacturado += linea.valor;
     }
   }
-  const totalDian = totalDianPorMes.reduce((a, m) => a + (m.totalRecibidoDian ?? 0), 0);
+  const totalDian = totalDianPorMes.reduce((a, m) => a + (m.total ?? 0), 0);
   const resumen = { cuentas, totalPorClasificacion, totalContabilidad, totalContabilidadFacturado, totalDianPorMes, totalDian };
   await guardarPasoCompras(clienteId, anio, periodicidad, periodo, resumen);
   return resumen;

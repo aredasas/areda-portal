@@ -560,6 +560,14 @@ export const informesReportes = mysqlTable("informesReportes", {
    * IVA) sin tener que volver a subir el archivo de la DIAN cada vez. */
   totalEmitidoDian: double("totalEmitidoDian"),
   totalRecibidoDian: double("totalRecibidoDian"),
+  /** Solo se llena cuando tipo="DIAN" — desglose por CADA tipo de
+   * documento (JSON: {tipoDocumentoDian, grupo, total}[]) del archivo de
+   * la DIAN de ese mes. Permite que otros pasos (ej. Paso 4 de IVA,
+   * "compras") comparen contra SOLO los tipos de documento que
+   * correspondan, en vez del total "Recibido" completo (que mezcla
+   * facturas de compra con documento soporte, nómina, etc.) — sin tener
+   * que volver a subir el archivo de la DIAN. */
+  totalesPorTipoJson: text("totalesPorTipoJson"),
   generadoPorId: int("generadoPorId").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 }, (table) => ({
