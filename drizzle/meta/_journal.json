@@ -358,6 +358,13 @@
       "when": 1788732694815,
       "tag": "0050_cuenta_mayor_iva",
       "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "5",
+      "when": 1788743608266,
+      "tag": "0051_compras_tipos_excluidos",
+      "breakpoints": true
     }
   ]
 }

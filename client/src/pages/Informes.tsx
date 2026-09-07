@@ -12,7 +12,7 @@ import { trpc } from "@/lib/trpc";
 import {
   Upload, FileSpreadsheet, Loader2, Download, CheckCircle2, XCircle, AlertCircle, Clock, Plus,
   Sparkles, LineChart, Landmark, Banknote, Receipt, Construction,
-  BookOpen, Pencil, Check, X, Search, Wrench, FileBarChart,
+  BookOpen, Pencil, Check, X, Search, Wrench, FileBarChart, ChevronUp, ChevronDown,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -948,10 +948,19 @@ function ComprasIvaCard({ clienteId, anio, periodicidad, periodo }: {
   clienteId: number; anio: number; periodicidad: "bimestral" | "cuatrimestral" | "anual"; periodo: number;
 }) {
   const listarQuery = trpc.informes.iva.compras.listar.useQuery({ clienteId, anio, periodicidad, periodo });
+  const tiposDocQuery = trpc.informes.iva.compras.tiposDocumento.useQuery({ clienteId, anio, periodicidad, periodo });
   const [clasificacionLocal, setClasificacionLocal] = useState<Record<string, { clasificacion: string; facturado: boolean }>>({});
   const [inicializado, setInicializado] = useState(false);
   const [editandoDivision, setEditandoDivision] = useState<string | null>(null);
   const [divisionLocal, setDivisionLocal] = useState<{ etiqueta: string; valor: string; clasificacion: string; facturado: boolean }[]>([]);
+  const [excluidosLocal, setExcluidosLocal] = useState<string[]>([]);
+  const [excluidosInicializado, setExcluidosInicializado] = useState(false);
+  const [mostrarFiltro, setMostrarFiltro] = useState(false);
+
+  if (!excluidosInicializado && tiposDocQuery.data) {
+    setExcluidosLocal(tiposDocQuery.data.excluidos);
+    setExcluidosInicializado(true);
+  }
 
   if (!inicializado && listarQuery.data) {
     const inicial: Record<string, { clasificacion: string; facturado: boolean }> = {};
@@ -959,6 +968,11 @@ function ComprasIvaCard({ clienteId, anio, periodicidad, periodo }: {
     setClasificacionLocal(inicial);
     setInicializado(true);
   }
+
+  const guardarExcluidosMutation = trpc.informes.iva.compras.guardarTiposExcluidos.useMutation({
+    onSuccess: () => { toast.success("Filtro de documentos guardado — se aplica a este y los próximos periodos"); listarQuery.refetch(); setMostrarFiltro(false); },
+    onError: (err) => toast.error(err.message || "No se pudo guardar"),
+  });
 
   const guardarMutation = trpc.informes.iva.compras.guardarClasificacion.useMutation({
     onSuccess: () => { toast.success("Clasificación de compras guardada"); listarQuery.refetch(); },
@@ -971,6 +985,9 @@ function ComprasIvaCard({ clienteId, anio, periodicidad, periodo }: {
   });
 
   const fmt = (n: number) => `$${Math.round(n).toLocaleString("es-CO")}`;
+  const toggleExcluido = (tipo: string) => {
+    setExcluidosLocal(prev => prev.includes(tipo) ? prev.filter(t => t !== tipo) : [...prev, tipo]);
+  };
 
   if (listarQuery.isLoading) return <div className="flex justify-center py-6"><Loader2 className="w-5 h-5 animate-spin" /></div>;
   if (!listarQuery.data || listarQuery.data.cuentas.length === 0) {
@@ -1040,6 +1057,50 @@ function ComprasIvaCard({ clienteId, anio, periodicidad, periodo }: {
         comparan contra lo que la DIAN tiene reportado. Si una cuenta mezcla compra gravada y excluida,
         usa "Dividir cuenta" para separarlos.
       </p>
+
+      <div className="border rounded-md p-2 bg-muted/20">
+        <button type="button" className="flex items-center justify-between w-full text-xs font-medium" onClick={() => setMostrarFiltro(v => !v)}>
+          <span>Filtrar documentos de compra (excluir asientos de costo de venta)</span>
+          {mostrarFiltro ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+        </button>
+        {mostrarFiltro && (
+          <div className="mt-2 space-y-2">
+            <p className="text-xs text-muted-foreground">
+              Las cuentas 14 y 62 también reciben asientos internos (ej. traspaso de inventario a costo de
+              venta cuando se factura una venta) — esos no son compras reales. Marca qué tipo(s) de
+              comprobante corresponden a esos asientos internos, para excluirlos del cálculo. Se guarda por
+              cliente, para los siguientes periodos también.
+            </p>
+            {tiposDocQuery.isLoading ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : !tiposDocQuery.data || tiposDocQuery.data.tipos.length === 0 ? (
+              <p className="text-xs text-muted-foreground">No se encontraron tipos de comprobante en las cuentas 14/62 de este periodo.</p>
+            ) : (
+              <>
+                <div className="flex flex-wrap gap-1">
+                  {tiposDocQuery.data.tipos.map((t: any) => {
+                    const excluido = excluidosLocal.includes(t.tipo);
+                    return (
+                      <button
+                        key={t.tipo} type="button" onClick={() => toggleExcluido(t.tipo)}
+                        className={`text-xs px-2 py-1 rounded-md border ${excluido ? "bg-red-600 text-white border-red-600" : "bg-white text-muted-foreground border-input hover:bg-muted"}`}
+                        title={`${t.cantidad} línea(s), $${Math.round(t.valor).toLocaleString("es-CO")}`}
+                      >
+                        {t.tipo || "(sin tipo)"}
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="text-xs text-muted-foreground">En rojo = excluido del cálculo de compras.</p>
+                <Button size="sm" variant="outline" onClick={() => guardarExcluidosMutation.mutate({ clienteId, tipos: excluidosLocal })} disabled={guardarExcluidosMutation.isPending}>
+                  {guardarExcluidosMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-2" /> : null}
+                  Guardar filtro
+                </Button>
+              </>
+            )}
+          </div>
+        )}
+      </div>
       <div className="space-y-1.5">
         {cuentas.map((c: any) => {
           const tieneDivision = c.divisiones.length > 0;

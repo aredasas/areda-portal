@@ -665,6 +665,25 @@ export const informesComprobantesExcluidos = mysqlTable("informesComprobantesExc
 }));
 export type InformeComprobanteExcluido = typeof informesComprobantesExcluidos.$inferSelect;
 
+/** Tipos de comprobante que este cliente excluye ESPECÍFICAMENTE del
+ * Paso 4 de IVA (clasificación de compras, cuentas 14 y 62) — distinto
+ * de `informesComprobantesExcluidos` (que excluye de la Comparación
+ * DIAN por completo). Las cuentas 14 y 62 también reciben asientos de
+ * costo de venta (traspaso interno de inventario a costo cuando se
+ * vende), que no son compras reales y no deben sumarse a la base de
+ * IVA — el usuario marca aquí qué tipo(s) de comprobante son esos
+ * asientos internos, para que se excluyan del cálculo. */
+export const informesComprasTiposExcluidos = mysqlTable("informesComprasTiposExcluidos", {
+  id: int("id").autoincrement().primaryKey(),
+  clienteId: int("clienteId").notNull(),
+  tipoComprobante: varchar("tipoComprobante", { length: 20 }).notNull(),
+  actualizadoPorId: int("actualizadoPorId").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (table) => ({
+  clienteTipoIdx: uniqueIndex("informesComprasTiposExcluidos_cliente_tipo_idx").on(table.clienteId, table.tipoComprobante),
+}));
+export type InformeCompraTipoExcluido = typeof informesComprasTiposExcluidos.$inferSelect;
+
 /** Configuración, POR CLIENTE, de qué cuenta contable corresponde a cada
  * rol de IVA — generado 19%/5% (Fase 3), descontable 19%/5% (Fase 5), y
  * transitorio (Fase 6). En la mayoría de los casos es una sub-cuenta de

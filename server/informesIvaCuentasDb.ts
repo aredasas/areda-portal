@@ -1,7 +1,7 @@
 import { and, eq, inArray } from "drizzle-orm";
 import * as XLSX from "xlsx";
 import { getDb } from "./db";
-import { informesConfigCuentasIva, informesCuentasCliente, informesCuentasPuc, type InformeConfigCuentaIva } from "../drizzle/schema";
+import { informesConfigCuentasIva, informesCuentasCliente, informesCuentasPuc, informesComprasTiposExcluidos, type InformeConfigCuentaIva } from "../drizzle/schema";
 import { getCargaConArchivo } from "./informesDb";
 import { storageGetBuffer } from "./storage";
 import { resolverColumnasAuxiliarDian, type ColsAuxiliarDian } from "./informesDianDb";
@@ -26,14 +26,20 @@ export async function guardarCuentaMayorIva(clienteId: number, cuenta: string, u
   await guardarConfigCuentasIva(clienteId, [{ tipoIva: "cuenta_mayor", cuenta }], userId);
 }
 
+export type ConvencionSaldo = "pasivo" | "activo_gasto";
+
 /** Lee el libro auxiliar (mismo archivo ya cargado para Estado de
  * Resultados/Comparación DIAN) y suma el saldo de CADA cuenta que
  * empiece con alguno de los prefijos dados — para cuentas de balance
- * (como la 2408 de IVA) que `informesSaldosMensuales` descarta por
- * completo (esa tabla solo guarda ingreso/costo/gasto, cuentas 4/5/6).
- * Convencion debito-credito de pasivo: el saldo aumenta con el credito
- * y disminuye con el debito. */
-function sumarSaldosPorCuenta(buffer: Buffer, prefijos: string[]): Map<string, number> {
+ * (como la 2408 de IVA, o la 14/62 de compras) que `informesSaldosMensuales`
+ * descarta por completo o no discrimina lo suficiente (esa tabla solo
+ * guarda ingreso/costo/gasto agregado por cuenta, sin tipo de
+ * comprobante). "pasivo" (el default) usa crédito-débito, correcto
+ * para cuentas como la 24 de IVA, que aumentan con el crédito.
+ * "activo_gasto" usa débito-crédito, correcto para cuentas de activo
+ * (14 inventario) o costo/gasto (5, 62), que aumentan con el débito —
+ * usar la convención equivocada invierte el signo del resultado. */
+function sumarSaldosPorCuenta(buffer: Buffer, prefijos: string[], convencion: ConvencionSaldo = "pasivo"): Map<string, number> {
   const wb = XLSX.read(buffer, { type: "buffer", cellDates: false });
   const ws = wb.Sheets[wb.SheetNames[0]];
   const filas: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null, raw: true });
@@ -50,9 +56,111 @@ function sumarSaldosPorCuenta(buffer: Buffer, prefijos: string[]): Map<string, n
     if (!cuentaRaw || !prefijos.some(p => cuentaRaw.startsWith(p))) continue;
     const debito = Number(values[cols.debito]) || 0;
     const credito = Number(values[cols.credito]) || 0;
-    saldos.set(cuentaRaw, (saldos.get(cuentaRaw) || 0) + (credito - debito));
+    const delta = convencion === "pasivo" ? (credito - debito) : (debito - credito);
+    saldos.set(cuentaRaw, (saldos.get(cuentaRaw) || 0) + delta);
   }
   return saldos;
+}
+
+/** Igual que `sumarSaldosPorCuenta`, pero conserva también el tipo de
+ * comprobante de cada línea — necesario cuando hace falta filtrar por
+ * tipo de documento antes de sumar (ej. excluir los asientos internos
+ * de costo de venta de las cuentas 14/62, que no son compras reales). */
+function sumarSaldosPorCuentaYTipo(buffer: Buffer, prefijos: string[], convencion: ConvencionSaldo): Map<string, { cuenta: string; tipo: string; valor: number }> {
+  const wb = XLSX.read(buffer, { type: "buffer", cellDates: false });
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const filas: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null, raw: true });
+  if (filas.length < 2) return new Map();
+
+  const cols: ColsAuxiliarDian = resolverColumnasAuxiliarDian(filas[0]);
+  if (cols.cuenta === null) return new Map();
+
+  const saldos = new Map<string, { cuenta: string; tipo: string; valor: number }>();
+  for (let i = 1; i < filas.length; i++) {
+    const values = filas[i];
+    if (!values) continue;
+    const cuentaRaw = String(values[cols.cuenta] ?? "").trim();
+    if (!cuentaRaw || !prefijos.some(p => cuentaRaw.startsWith(p))) continue;
+    const tipoRaw = cols.tipo !== null ? String(values[cols.tipo] ?? "").trim() : "";
+    const debito = Number(values[cols.debito]) || 0;
+    const credito = Number(values[cols.credito]) || 0;
+    const delta = convencion === "pasivo" ? (credito - debito) : (debito - credito);
+    const clave = `${cuentaRaw}|${tipoRaw}`;
+    if (!saldos.has(clave)) saldos.set(clave, { cuenta: cuentaRaw, tipo: tipoRaw, valor: 0 });
+    saldos.get(clave)!.valor += delta;
+  }
+  return saldos;
+}
+
+export type TipoComprobanteConValor = { tipo: string; cantidad: number; valor: number };
+
+/** Lista, sin duplicados, cada tipo de comprobante que tuvo movimiento
+ * en cuentas con alguno de los prefijos dados, a través de todos los
+ * meses del periodo — para que el usuario decida cuáles representan
+ * documentos reales (compras) y cuáles son asientos internos (ej.
+ * traspaso de inventario a costo de venta) que no deben contarse. */
+export async function getTiposComprobantePorPrefijoDelPeriodo(
+  clienteId: number, anio: number, meses: number[], prefijos: string[], convencion: ConvencionSaldo,
+): Promise<TipoComprobanteConValor[]> {
+  const porTipo = new Map<string, { cantidad: number; valor: number }>();
+  for (const mes of meses) {
+    const carga = await getCargaConArchivo(clienteId, anio, mes);
+    if (!carga?.fileKey) continue;
+    const buffer = await storageGetBuffer(carga.fileKey);
+    const saldosDelMes = sumarSaldosPorCuentaYTipo(buffer, prefijos, convencion);
+    for (const { tipo, valor } of Array.from(saldosDelMes.values())) {
+      if (!porTipo.has(tipo)) porTipo.set(tipo, { cantidad: 0, valor: 0 });
+      const entrada = porTipo.get(tipo)!;
+      entrada.cantidad++;
+      entrada.valor += valor;
+    }
+  }
+  return Array.from(porTipo.entries())
+    .map(([tipo, d]) => ({ tipo, cantidad: d.cantidad, valor: d.valor }))
+    .sort((a, b) => Math.abs(b.valor) - Math.abs(a.valor));
+}
+
+/** Igual que `getCuentasPrefijoDelPeriodo`, pero excluyendo del cálculo
+ * las líneas cuyo tipo de comprobante esté en `tiposExcluidos` — para
+ * dejar fuera los asientos internos de costo de venta u otros
+ * movimientos que no son compras reales, antes de sumar el saldo final
+ * de cada cuenta. */
+export async function getCuentasPrefijoConFiltroDelPeriodo(
+  clienteId: number, anio: number, meses: number[], prefijos: string[], tiposExcluidos: string[], convencion: ConvencionSaldo,
+): Promise<CuentaIvaResumen[]> {
+  const excluidosSet = new Set(tiposExcluidos.map(t => t.trim()));
+  const totalPorCuenta = new Map<string, number>();
+  for (const mes of meses) {
+    const carga = await getCargaConArchivo(clienteId, anio, mes);
+    if (!carga?.fileKey) continue;
+    const buffer = await storageGetBuffer(carga.fileKey);
+    const saldosDelMes = sumarSaldosPorCuentaYTipo(buffer, prefijos, convencion);
+    for (const { cuenta, tipo, valor } of Array.from(saldosDelMes.values())) {
+      if (excluidosSet.has(tipo)) continue;
+      totalPorCuenta.set(cuenta, (totalPorCuenta.get(cuenta) || 0) + valor);
+    }
+  }
+  if (totalPorCuenta.size === 0) return [];
+
+  const cuentas = Array.from(totalPorCuenta.keys());
+  const db = await getDb();
+  let nombrePorCuentaCliente = new Map<string, string>();
+  let nombrePorCuentaPuc = new Map<string, string | null>();
+  if (db) {
+    const [nombresCliente, nombresPuc] = await Promise.all([
+      db.select().from(informesCuentasCliente).where(and(eq(informesCuentasCliente.clienteId, clienteId), inArray(informesCuentasCliente.cuenta, cuentas))),
+      db.select().from(informesCuentasPuc).where(inArray(informesCuentasPuc.cuenta, cuentas)),
+    ]);
+    nombrePorCuentaCliente = new Map(nombresCliente.map(n => [n.cuenta, n.nombre]));
+    nombrePorCuentaPuc = new Map(nombresPuc.map(n => [n.cuenta, n.descripcion]));
+  }
+
+  return cuentas
+    .map(cuenta => ({
+      cuenta, valor: totalPorCuenta.get(cuenta) || 0,
+      nombre: nombrePorCuentaCliente.get(cuenta) || nombrePorCuentaPuc.get(cuenta) || "(sin nombre)",
+    }))
+    .sort((a, b) => a.cuenta.localeCompare(b.cuenta));
 }
 
 export type CuentaIvaResumen = { cuenta: string; nombre: string; valor: number };
@@ -134,5 +242,25 @@ export async function guardarConfigCuentasIva(clienteId: number, configs: { tipo
     } else {
       await db.insert(informesConfigCuentasIva).values({ clienteId, tipoIva: c.tipoIva, cuenta: c.cuenta, actualizadoPorId: userId });
     }
+  }
+}
+
+export async function getComprasTiposExcluidos(clienteId: number): Promise<string[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const filas = await db.select().from(informesComprasTiposExcluidos).where(eq(informesComprasTiposExcluidos.clienteId, clienteId));
+  return filas.map(f => f.tipoComprobante);
+}
+
+/** Reemplaza la lista completa de tipos de comprobante que este cliente
+ * excluye del Paso 4 de IVA (compras, cuentas 14/62) — asientos de
+ * costo de venta u otros movimientos que no son compras reales. */
+export async function guardarComprasTiposExcluidos(clienteId: number, tipos: string[], userId: number): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.delete(informesComprasTiposExcluidos).where(eq(informesComprasTiposExcluidos.clienteId, clienteId));
+  for (const tipo of tipos) {
+    if (!tipo.trim()) continue;
+    await db.insert(informesComprasTiposExcluidos).values({ clienteId, tipoComprobante: tipo.trim(), actualizadoPorId: userId });
   }
 }

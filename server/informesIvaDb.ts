@@ -5,7 +5,11 @@ import {
   informesSaldosMensuales, informesClasificacionCuentas, informesCuentasCliente, informesCuentasPuc,
   informesDivisionesCuentaIva,
 } from "../drizzle/schema";
-import { getCuentasPrefijoDelPeriodo as getCuentasPorPrefijoEnVivo } from "./informesIvaCuentasDb";
+import {
+  getCuentasPrefijoConFiltroDelPeriodo, getTiposComprobantePorPrefijoDelPeriodo,
+  getComprasTiposExcluidos as getComprasTiposExcluidosDeCuentas,
+  guardarComprasTiposExcluidos as guardarComprasTiposExcluidosDeCuentas,
+} from "./informesIvaCuentasDb";
 
 export type Periodicidad = "bimestral" | "cuatrimestral" | "anual";
 
@@ -333,30 +337,25 @@ export async function guardarPasoIngresos(
  * la 14 NO se guarda ahí (el Estado de Resultados descarta toda cuenta
  * que no sea 4/5/6), así que se lee en vivo del libro auxiliar, igual
  * que se hace para las cuentas de IVA en el Paso 3. */
+/** Cuentas de compras (14 inventario y 62 compras) con movimiento en los
+ * meses del periodo, EXCLUYENDO las líneas cuyo tipo de comprobante el
+ * cliente haya marcado como asiento interno (ej. traspaso de inventario
+ * a costo de venta, que no es una compra real). Ambas cuentas se leen
+ * en vivo del libro auxiliar con desglose por tipo de comprobante — ya
+ * no se usa `informesSaldosMensuales` para la 62, porque esa tabla no
+ * guarda el tipo de comprobante necesario para poder filtrar. Convención
+ * débito-crédito (activo/costo), no crédito-débito como el IVA. */
 export async function getCuentasComprasDelPeriodo(
   clienteId: number, anio: number, meses: number[], periodicidad: Periodicidad, periodo: number,
 ): Promise<CuentaResumenPeriodo[]> {
   const db = await getDb();
   if (!db) return [];
 
-  const [saldosCosto, cuentas14EnVivo] = await Promise.all([
-    db.select().from(informesSaldosMensuales).where(and(
-      eq(informesSaldosMensuales.clienteId, clienteId), eq(informesSaldosMensuales.anio, anio),
-      inArray(informesSaldosMensuales.mes, meses), eq(informesSaldosMensuales.tipo, "costo"),
-    )),
-    getCuentasPorPrefijoEnVivo(clienteId, anio, meses, ["14"]),
-  ]);
+  const tiposExcluidos = await getComprasTiposExcluidosDeCuentas(clienteId);
+  const cuentasEncontradas = await getCuentasPrefijoConFiltroDelPeriodo(clienteId, anio, meses, ["14", "62"], tiposExcluidos, "activo_gasto");
+  if (cuentasEncontradas.length === 0) return [];
 
-  const totalPorCuenta = new Map<string, number>();
-  for (const s of saldosCosto) {
-    if (!s.cuenta.startsWith("62")) continue; // la 61 también es "costo" — no interesa aquí, solo compras (62)
-    totalPorCuenta.set(s.cuenta, (totalPorCuenta.get(s.cuenta) || 0) + s.valor);
-  }
-  for (const c of cuentas14EnVivo) {
-    totalPorCuenta.set(c.cuenta, (totalPorCuenta.get(c.cuenta) || 0) + c.valor);
-  }
-  if (totalPorCuenta.size === 0) return [];
-
+  const totalPorCuenta = new Map(cuentasEncontradas.map(c => [c.cuenta, c.valor]));
   const cuentas = Array.from(totalPorCuenta.keys());
   const [nombresCliente, nombresPuc, clasificaciones, divisionesGuardadas] = await Promise.all([
     db.select().from(informesCuentasCliente).where(and(eq(informesCuentasCliente.clienteId, clienteId), inArray(informesCuentasCliente.cuenta, cuentas))),
@@ -417,6 +416,17 @@ export async function getTotalDianRecibidoPorMes(clienteId: number, anio: number
  * `computarResumenIngresos`: subtotales por tarifa sobre TODA la compra
  * (facturada o no, para el total real del Formulario 300), y la
  * comparación contra la DIAN usando solo lo facturado electrónicamente. */
+/** Tipos de comprobante que tuvieron movimiento en las cuentas 14/62 del
+ * periodo — para que el usuario elija cuáles son compras reales y
+ * cuáles son asientos internos (ej. traspaso a costo de venta) que hay
+ * que excluir del cálculo. */
+export async function getTiposComprobanteComprasDelPeriodo(clienteId: number, anio: number, meses: number[]): Promise<{ tipo: string; cantidad: number; valor: number }[]> {
+  return getTiposComprobantePorPrefijoDelPeriodo(clienteId, anio, meses, ["14", "62"], "activo_gasto");
+}
+
+export const getComprasTiposExcluidos = getComprasTiposExcluidosDeCuentas;
+export const guardarComprasTiposExcluidos = guardarComprasTiposExcluidosDeCuentas;
+
 export async function computarResumenCompras(
   clienteId: number, anio: number, periodicidad: Periodicidad, periodo: number,
 ) {

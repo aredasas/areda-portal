@@ -2031,6 +2031,31 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
             ]);
             return { cuentas, totalDianPorMes };
           }),
+        // Tipos de comprobante que tuvieron movimiento en las cuentas
+        // 14/62 del periodo, y cuáles ya están marcados como asiento
+        // interno (no compra real) — para configurar el filtro antes de
+        // clasificar.
+        tiposDocumento: protectedProcedure
+          .input(z.object({
+            clienteId: z.number(), anio: z.number(),
+            periodicidad: z.enum(["bimestral", "cuatrimestral", "anual"]), periodo: z.number(),
+          }))
+          .query(async ({ input, ctx }) => {
+            await assertClienteAccesibleInformes(ctx, input.clienteId);
+            const meses = informesIva.mesesDelPeriodo(input.periodicidad, input.periodo);
+            const [tipos, excluidos] = await Promise.all([
+              informesIva.getTiposComprobanteComprasDelPeriodo(input.clienteId, input.anio, meses),
+              informesIva.getComprasTiposExcluidos(input.clienteId),
+            ]);
+            return { tipos, excluidos };
+          }),
+        guardarTiposExcluidos: protectedProcedure
+          .input(z.object({ clienteId: z.number(), tipos: z.array(z.string()) }))
+          .mutation(async ({ input, ctx }) => {
+            await assertClienteAccesibleInformes(ctx, input.clienteId);
+            await informesIva.guardarComprasTiposExcluidos(input.clienteId, input.tipos, ctx.user.id);
+            return { success: true };
+          }),
         guardarClasificacion: protectedProcedure
           .input(z.object({
             clienteId: z.number(), anio: z.number(),
