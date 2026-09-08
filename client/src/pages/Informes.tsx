@@ -1332,7 +1332,7 @@ function IvaGeneradoCard({ clienteId, anio, periodicidad, periodo }: {
   }
 
   const guardarConfigMutation = trpc.informes.iva.ivaGenerado.guardarConfig.useMutation({
-    onSuccess: () => { toast.success("Configuración de cuentas de IVA generado guardada"); compararQuery.refetch(); },
+    onSuccess: () => { toast.success("Configuración de cuentas de IVA generado guardada"); listarQuery.refetch(); compararQuery.refetch(); },
     onError: (err) => toast.error(err.message || "No se pudo guardar"),
   });
 
@@ -1341,9 +1341,13 @@ function IvaGeneradoCard({ clienteId, anio, periodicidad, periodo }: {
     onError: (err) => toast.error(err.message || "No se pudo guardar"),
   });
 
+  // Habilitada según lo que ya está SELECCIONADO en pantalla (no lo que
+  // trajo la carga inicial) — así la comparación aparece de inmediato la
+  // primera vez que se configura una cuenta, sin depender de que
+  // `listarQuery` se haya refrescado.
   const compararQuery = trpc.informes.iva.ivaGenerado.comparar.useQuery(
     { clienteId, anio, periodicidad, periodo },
-    { enabled: !!(listarQuery.data?.cuentaGenerado19 || listarQuery.data?.cuentaGenerado5) },
+    { enabled: !!(cuenta19Local || cuenta5Local) },
   );
 
   const fmt = (n: number) => `$${Math.round(n).toLocaleString("es-CO")}`;
@@ -1469,13 +1473,17 @@ function IvaDescontableCard({ clienteId, anio, periodicidad, periodo }: {
   }
 
   const guardarConfigMutation = trpc.informes.iva.ivaDescontable.guardarConfig.useMutation({
-    onSuccess: () => { toast.success("Configuración de cuentas de IVA descontable guardada"); compararQuery.refetch(); },
+    onSuccess: () => { toast.success("Configuración de cuentas de IVA descontable guardada"); listarQuery.refetch(); compararQuery.refetch(); },
     onError: (err: any) => toast.error(err.message || "No se pudo guardar"),
   });
 
+  // Habilitada según lo que ya está SELECCIONADO en pantalla (no lo que
+  // trajo la carga inicial) — así la comparación aparece de inmediato la
+  // primera vez que se configura una cuenta, sin depender de que
+  // `listarQuery` se haya refrescado.
   const compararQuery = trpc.informes.iva.ivaDescontable.comparar.useQuery(
     { clienteId, anio, periodicidad, periodo },
-    { enabled: !!(listarQuery.data?.cuentaDescontable19 || listarQuery.data?.cuentaDescontable5) },
+    { enabled: !!(cuenta19Local || cuenta5Local) },
   );
 
   const fmt = (n: number) => `$${Math.round(n).toLocaleString("es-CO")}`;
