@@ -2158,6 +2158,77 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
             };
           }),
       }),
+      // Paso 5 — IVA descontable: mismo cotejo que el Paso 3, pero con la
+      // base gravada de COMPRAS (Paso 4) y las cuentas de IVA
+      // descontable — además, verifica qué proporción de esa base está
+      // facturada electrónicamente (solo lo facturado da derecho al
+      // descontable en la práctica).
+      ivaDescontable: router({
+        listarCuentas: protectedProcedure
+          .input(z.object({
+            clienteId: z.number(), anio: z.number(),
+            periodicidad: z.enum(["bimestral", "cuatrimestral", "anual"]), periodo: z.number(),
+          }))
+          .query(async ({ input, ctx }) => {
+            await assertClienteAccesibleInformes(ctx, input.clienteId);
+            const meses = informesIva.mesesDelPeriodo(input.periodicidad, input.periodo);
+            const cuentaMayor = await informesIvaCuentas.getCuentaMayorIva(input.clienteId);
+            const [cuentas, config] = await Promise.all([
+              informesIvaCuentas.getCuentasPrefijoDelPeriodo(input.clienteId, input.anio, meses, [cuentaMayor]),
+              informesIvaCuentas.getConfigCuentasIva(input.clienteId),
+            ]);
+            const cuentaDescontable19 = config.find(c => c.tipoIva === "descontable_19")?.cuenta || null;
+            const cuentaDescontable5 = config.find(c => c.tipoIva === "descontable_5")?.cuenta || null;
+            return { cuentas, cuentaDescontable19, cuentaDescontable5, cuentaMayor };
+          }),
+        guardarConfig: protectedProcedure
+          .input(z.object({ clienteId: z.number(), cuentaDescontable19: z.string().optional(), cuentaDescontable5: z.string().optional() }))
+          .mutation(async ({ input, ctx }) => {
+            await assertClienteAccesibleInformes(ctx, input.clienteId);
+            const configs: { tipoIva: informesIvaCuentas.TipoIva; cuenta: string }[] = [];
+            if (input.cuentaDescontable19) configs.push({ tipoIva: "descontable_19", cuenta: input.cuentaDescontable19 });
+            if (input.cuentaDescontable5) configs.push({ tipoIva: "descontable_5", cuenta: input.cuentaDescontable5 });
+            await informesIvaCuentas.guardarConfigCuentasIva(input.clienteId, configs, ctx.user.id);
+            return { success: true };
+          }),
+        comparar: protectedProcedure
+          .input(z.object({
+            clienteId: z.number(), anio: z.number(),
+            periodicidad: z.enum(["bimestral", "cuatrimestral", "anual"]), periodo: z.number(),
+          }))
+          .query(async ({ input, ctx }) => {
+            await assertClienteAccesibleInformes(ctx, input.clienteId);
+            const expediente = await informesIva.getConciliacionIva(input.clienteId, input.anio, input.periodicidad, input.periodo);
+            let estado: any = {};
+            try { estado = expediente?.estadoJson ? JSON.parse(expediente.estadoJson) : {}; } catch { estado = {}; }
+            const totalPorClasificacion = estado.compras?.totalPorClasificacion;
+            if (!totalPorClasificacion) {
+              throw new Error("Primero completa y guarda el Paso 4 (clasificación de compras) de este periodo.");
+            }
+            const config = await informesIvaCuentas.getConfigCuentasIva(input.clienteId);
+            const cuenta19 = config.find(c => c.tipoIva === "descontable_19")?.cuenta || null;
+            const cuenta5 = config.find(c => c.tipoIva === "descontable_5")?.cuenta || null;
+            const meses = informesIva.mesesDelPeriodo(input.periodicidad, input.periodo);
+
+            const esperado19 = totalPorClasificacion.gravado_19 * 0.19;
+            const esperado5 = totalPorClasificacion.gravado_5 * 0.05;
+            const real19 = cuenta19 ? await informesIvaCuentas.getSaldoCuentaEnPeriodo(input.clienteId, input.anio, meses, cuenta19) : null;
+            const real5 = cuenta5 ? await informesIvaCuentas.getSaldoCuentaEnPeriodo(input.clienteId, input.anio, meses, cuenta5) : null;
+
+            // Qué proporción de la base de compras (todas las tarifas)
+            // está facturada electrónicamente — solo eso da derecho al
+            // descontable en la práctica.
+            const totalContabilidad = estado.compras?.totalContabilidad ?? 0;
+            const totalContabilidadFacturado = estado.compras?.totalContabilidadFacturado ?? 0;
+            const pctFacturado = totalContabilidad > 0 ? (totalContabilidadFacturado / totalContabilidad) : null;
+
+            return {
+              tarifa19: { base: totalPorClasificacion.gravado_19, esperado: esperado19, cuenta: cuenta19, real: real19, diferencia: real19 !== null ? esperado19 - real19 : null },
+              tarifa5: { base: totalPorClasificacion.gravado_5, esperado: esperado5, cuenta: cuenta5, real: real5, diferencia: real5 !== null ? esperado5 - real5 : null },
+              pctFacturado, totalContabilidad, totalContabilidadFacturado,
+            };
+          }),
+      }),
     }),
     dian: router({
       // Consulta si ya existe un libro auxiliar cargado (desde Estado de

@@ -623,6 +623,7 @@ function IvaTab({ clienteId, anio }: { clienteId: number; anio: number }) {
                 <IngresosIvaCard clienteId={clienteId} anio={anio} periodicidad={periodicidad} periodo={periodo} />
                 <IvaGeneradoCard clienteId={clienteId} anio={anio} periodicidad={periodicidad} periodo={periodo} />
                 <ComprasIvaCard clienteId={clienteId} anio={anio} periodicidad={periodicidad} periodo={periodo} />
+                <IvaDescontableCard clienteId={clienteId} anio={anio} periodicidad={periodicidad} periodo={periodo} />
               </div>
             ) : (
               <div className="pt-1">
@@ -1452,6 +1453,138 @@ function IvaGeneradoCard({ clienteId, anio, periodicidad, periodo }: {
     </div>
   );
 }
+
+function IvaDescontableCard({ clienteId, anio, periodicidad, periodo }: {
+  clienteId: number; anio: number; periodicidad: "bimestral" | "cuatrimestral" | "anual"; periodo: number;
+}) {
+  const [cuenta19Local, setCuenta19Local] = useState("");
+  const [cuenta5Local, setCuenta5Local] = useState("");
+  const [inicializado, setInicializado] = useState(false);
+
+  const listarQuery = trpc.informes.iva.ivaDescontable.listarCuentas.useQuery({ clienteId, anio, periodicidad, periodo });
+  if (!inicializado && listarQuery.data) {
+    setCuenta19Local(listarQuery.data.cuentaDescontable19 || "");
+    setCuenta5Local(listarQuery.data.cuentaDescontable5 || "");
+    setInicializado(true);
+  }
+
+  const guardarConfigMutation = trpc.informes.iva.ivaDescontable.guardarConfig.useMutation({
+    onSuccess: () => { toast.success("Configuración de cuentas de IVA descontable guardada"); compararQuery.refetch(); },
+    onError: (err: any) => toast.error(err.message || "No se pudo guardar"),
+  });
+
+  const compararQuery = trpc.informes.iva.ivaDescontable.comparar.useQuery(
+    { clienteId, anio, periodicidad, periodo },
+    { enabled: !!(listarQuery.data?.cuentaDescontable19 || listarQuery.data?.cuentaDescontable5) },
+  );
+
+  const fmt = (n: number) => `$${Math.round(n).toLocaleString("es-CO")}`;
+
+  if (listarQuery.isLoading) return <div className="flex justify-center py-6"><Loader2 className="w-5 h-5 animate-spin" /></div>;
+
+  return (
+    <div className="border rounded-md p-3 space-y-3">
+      <p className="text-xs font-medium text-muted-foreground">Paso 5 · IVA descontable</p>
+
+      <div className="flex items-center gap-2 text-xs">
+        <span className="text-muted-foreground">Cuenta mayor de IVA:</span>
+        <span className="font-medium">{listarQuery.data?.cuentaMayor || "24"}</span>
+        <span className="text-muted-foreground">(se edita desde el Paso 3)</span>
+      </div>
+
+      {(!listarQuery.data || listarQuery.data.cuentas.length === 0) ? (
+        <p className="text-xs text-muted-foreground">
+          No se encontraron cuentas que empiecen en "{listarQuery.data?.cuentaMayor || "24"}" con movimiento en
+          los meses de este periodo — confirma la cuenta mayor arriba, o que el libro auxiliar tenga columna
+          de código de cuenta identificable.
+        </p>
+      ) : (
+        <>
+          <p className="text-xs text-muted-foreground">
+            Elige, de las cuentas 24xx con movimiento en el periodo, cuál es la de IVA descontable al 19% y cuál
+            la del 5%. Se guarda por cliente, para los siguientes periodos también.
+          </p>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <Label className="text-xs">Cuenta IVA descontable 19%</Label>
+              <Select value={cuenta19Local} onValueChange={setCuenta19Local}>
+                <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Elegir cuenta..." /></SelectTrigger>
+                <SelectContent>
+                  {listarQuery.data.cuentas.map((c: any) => (
+                    <SelectItem key={c.cuenta} value={c.cuenta}>{c.cuenta} — {c.nombre} ({fmt(c.valor)})</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Cuenta IVA descontable 5%</Label>
+              <Select value={cuenta5Local} onValueChange={setCuenta5Local}>
+                <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Elegir cuenta..." /></SelectTrigger>
+                <SelectContent>
+                  {listarQuery.data.cuentas.map((c: any) => (
+                    <SelectItem key={c.cuenta} value={c.cuenta}>{c.cuenta} — {c.nombre} ({fmt(c.valor)})</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <Button
+            size="sm" disabled={guardarConfigMutation.isPending || (!cuenta19Local && !cuenta5Local)}
+            onClick={() => guardarConfigMutation.mutate({ clienteId, cuentaDescontable19: cuenta19Local || undefined, cuentaDescontable5: cuenta5Local || undefined })}
+          >
+            {guardarConfigMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-2" /> : null}
+            Guardar configuración
+          </Button>
+
+          {compararQuery.data && (
+            <div className="border-t pt-3 space-y-3">
+              <p className="text-xs font-medium text-muted-foreground">Comparación — tarifa × base vs. valor contable real</p>
+              {(["tarifa19", "tarifa5"] as const).map((clave) => {
+                const t = compararQuery.data[clave];
+                const tarifa = clave === "tarifa19" ? "19%" : "5%";
+                if (!t.cuenta) {
+                  return <p key={clave} className="text-xs text-muted-foreground">IVA {tarifa}: sin cuenta configurada todavía.</p>;
+                }
+                const cuadra = t.diferencia !== null && Math.abs(t.diferencia) <= Math.max(5, Math.abs(t.esperado) * 0.001);
+                return (
+                  <div key={clave} className="text-sm space-y-1 border-b pb-2 last:border-b-0">
+                    <p className="font-medium">IVA descontable {tarifa} — cuenta {t.cuenta}</p>
+                    <div className="flex justify-between text-xs"><span className="text-muted-foreground">Base gravada</span><span>{fmt(t.base)}</span></div>
+                    <div className="flex justify-between text-xs"><span className="text-muted-foreground">IVA esperado (tarifa × base)</span><span>{fmt(t.esperado)}</span></div>
+                    <div className="flex justify-between text-xs"><span className="text-muted-foreground">Valor real en la cuenta</span><span>{t.real !== null ? fmt(t.real) : "—"}</span></div>
+                    {t.diferencia !== null && (
+                      cuadra ? (
+                        <p className="text-xs text-green-700 flex items-center gap-1.5"><CheckCircle2 className="w-3.5 h-3.5 shrink-0" /> Cuadra</p>
+                      ) : (
+                        <p className="text-xs text-red-600 flex items-center gap-1.5"><AlertCircle className="w-3.5 h-3.5 shrink-0" /> Diferencia de {fmt(t.diferencia)}</p>
+                      )
+                    )}
+                  </div>
+                );
+              })}
+              {compararQuery.data.pctFacturado !== null && (
+                <div className="border-t pt-2 space-y-1">
+                  <p className="text-xs font-medium text-muted-foreground">Compras facturadas electrónicamente</p>
+                  <div className="flex justify-between text-xs"><span className="text-muted-foreground">Total compras (todas las tarifas)</span><span>{fmt(compararQuery.data.totalContabilidad)}</span></div>
+                  <div className="flex justify-between text-xs"><span className="text-muted-foreground">Facturado electrónicamente</span><span>{fmt(compararQuery.data.totalContabilidadFacturado)} ({Math.round(compararQuery.data.pctFacturado * 100)}%)</span></div>
+                  {compararQuery.data.pctFacturado < 0.95 && (
+                    <p className="text-xs text-amber-700 flex items-center gap-1.5">
+                      <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                      Una parte importante de las compras no está marcada como facturada — en la práctica,
+                      solo lo facturado da derecho al IVA descontable. Revisa el Paso 4 si esto no es lo
+                      esperado.
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 
 function ProximamenteCard({ icono: Icono, titulo, descripcion }: { icono: any; titulo: string; descripcion: string }) {
   return (
