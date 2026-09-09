@@ -185,7 +185,7 @@ function extraerCentroCodigo(valorCrudo: any): string {
  * cuando el código es impar y el último grupo de 3 empieza en "0" — un
  * código impar cuyo último grupo NO empieza en cero se deja intacto, para
  * no alterar un auxiliar que legítimamente necesite 3 dígitos ahí. */
-function normalizarCuentaPUC(codigo: string): string {
+export function normalizarCuentaPUC(codigo: string): string {
   if (codigo.length % 2 === 1 && codigo.length >= 3 && codigo[codigo.length - 3] === "0") {
     return codigo.slice(0, -3) + codigo.slice(-2);
   }

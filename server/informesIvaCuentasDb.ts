@@ -2,7 +2,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import * as XLSX from "xlsx";
 import { getDb } from "./db";
 import { informesConfigCuentasIva, informesCuentasCliente, informesCuentasPuc, informesComprasTiposExcluidos, type InformeConfigCuentaIva } from "../drizzle/schema";
-import { getCargaConArchivo } from "./informesDb";
+import { getCargaConArchivo, normalizarCuentaPUC } from "./informesDb";
 import { storageGetBuffer } from "./storage";
 import { resolverColumnasAuxiliarDian, type ColsAuxiliarDian } from "./informesDianDb";
 
@@ -54,6 +54,13 @@ function columnaCuentaEsConfiable(filas: any[][], colIndex: number): boolean {
   return numericos / muestra.length >= 0.7;
 }
 
+// Se normaliza el código de cuenta (mismo criterio del formato
+// "Syscafe" que ya usa el resto del sistema) porque el catálogo de
+// cuentas del cliente (plan de cuentas subido aparte) guarda los
+// nombres con el código YA NORMALIZADO — sin esto, un código impar del
+// libro auxiliar (ej. "240805001") nunca coincidía con la clave del
+// catálogo ("24080501"), y la cuenta aparecía siempre "sin nombre"
+// aunque el plan de cuentas sí la tuviera.
 function sumarSaldosPorCuenta(buffer: Buffer, prefijos: string[], convencion: ConvencionSaldo = "pasivo"): Map<string, number> {
   const wb = XLSX.read(buffer, { type: "buffer", cellDates: false });
   const ws = wb.Sheets[wb.SheetNames[0]];
@@ -67,7 +74,7 @@ function sumarSaldosPorCuenta(buffer: Buffer, prefijos: string[], convencion: Co
   for (let i = 1; i < filas.length; i++) {
     const values = filas[i];
     if (!values) continue;
-    const cuentaRaw = String(values[cols.cuenta] ?? "").trim();
+    const cuentaRaw = normalizarCuentaPUC(String(values[cols.cuenta] ?? "").trim());
     if (!cuentaRaw || !prefijos.some(p => cuentaRaw.startsWith(p))) continue;
     const debito = Number(values[cols.debito]) || 0;
     const credito = Number(values[cols.credito]) || 0;
@@ -94,7 +101,7 @@ function sumarSaldosPorCuentaYTipo(buffer: Buffer, prefijos: string[], convencio
   for (let i = 1; i < filas.length; i++) {
     const values = filas[i];
     if (!values) continue;
-    const cuentaRaw = String(values[cols.cuenta] ?? "").trim();
+    const cuentaRaw = normalizarCuentaPUC(String(values[cols.cuenta] ?? "").trim());
     if (!cuentaRaw || !prefijos.some(p => cuentaRaw.startsWith(p))) continue;
     // Igual que en `parseAuxiliarParaDian`: si no hay una columna de tipo
     // dedicada, el tipo suele venir combinado con el número en un solo
