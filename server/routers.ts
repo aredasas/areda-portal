@@ -2103,13 +2103,13 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
             await assertClienteAccesibleInformes(ctx, input.clienteId);
             const meses = informesIva.mesesDelPeriodo(input.periodicidad, input.periodo);
             const cuentaMayor = await informesIvaCuentas.getCuentaMayorIva(input.clienteId);
-            const [cuentas, config] = await Promise.all([
-              informesIvaCuentas.getCuentasPrefijoDelPeriodo(input.clienteId, input.anio, meses, [cuentaMayor]),
+            const [diagnostico, config] = await Promise.all([
+              informesIvaCuentas.getCuentasPrefijoDelPeriodoConDiagnostico(input.clienteId, input.anio, meses, [cuentaMayor]),
               informesIvaCuentas.getConfigCuentasIva(input.clienteId),
             ]);
             const cuentaGenerado19 = config.find(c => c.tipoIva === "generado_19")?.cuenta || null;
             const cuentaGenerado5 = config.find(c => c.tipoIva === "generado_5")?.cuenta || null;
-            return { cuentas, cuentaGenerado19, cuentaGenerado5, cuentaMayor };
+            return { cuentas: diagnostico.cuentas, cuentaGenerado19, cuentaGenerado5, cuentaMayor, diagnostico };
           }),
         guardarCuentaMayor: protectedProcedure
           .input(z.object({ clienteId: z.number(), cuenta: z.string().min(1) }))
@@ -2173,13 +2173,13 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
             await assertClienteAccesibleInformes(ctx, input.clienteId);
             const meses = informesIva.mesesDelPeriodo(input.periodicidad, input.periodo);
             const cuentaMayor = await informesIvaCuentas.getCuentaMayorIva(input.clienteId);
-            const [cuentas, config] = await Promise.all([
-              informesIvaCuentas.getCuentasPrefijoDelPeriodo(input.clienteId, input.anio, meses, [cuentaMayor]),
+            const [diagnostico, config] = await Promise.all([
+              informesIvaCuentas.getCuentasPrefijoDelPeriodoConDiagnostico(input.clienteId, input.anio, meses, [cuentaMayor]),
               informesIvaCuentas.getConfigCuentasIva(input.clienteId),
             ]);
             const cuentaDescontable19 = config.find(c => c.tipoIva === "descontable_19")?.cuenta || null;
             const cuentaDescontable5 = config.find(c => c.tipoIva === "descontable_5")?.cuenta || null;
-            return { cuentas, cuentaDescontable19, cuentaDescontable5, cuentaMayor };
+            return { cuentas: diagnostico.cuentas, cuentaDescontable19, cuentaDescontable5, cuentaMayor, diagnostico };
           }),
         guardarConfig: protectedProcedure
           .input(z.object({ clienteId: z.number(), cuentaDescontable19: z.string().optional(), cuentaDescontable5: z.string().optional() }))

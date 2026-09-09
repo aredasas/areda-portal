@@ -39,6 +39,21 @@ export type ConvencionSaldo = "pasivo" | "activo_gasto";
  * "activo_gasto" usa débito-crédito, correcto para cuentas de activo
  * (14 inventario) o costo/gasto (5, 62), que aumentan con el débito —
  * usar la convención equivocada invierte el signo del resultado. */
+/** Confirma que la columna de cuenta detectada realmente contenga
+ * códigos numéricos (ej. "240805"), no el nombre descriptivo de la
+ * cuenta — un sinónimo genérico puede coincidir con la columna
+ * equivocada (ej. "Cuenta contable" en vez de "Código contable"), y sin
+ * esta validación el filtro por prefijo nunca encuentra nada (el nombre
+ * nunca empieza en "24"), pareciendo que la cuenta no existe en el
+ * archivo cuando en realidad sí está — mismo bug ya corregido antes en
+ * el parser de la Comparación DIAN. */
+function columnaCuentaEsConfiable(filas: any[][], colIndex: number): boolean {
+  const muestra = filas.slice(1, 51).map(f => f?.[colIndex]).filter(v => v !== null && v !== undefined && v !== "");
+  if (muestra.length === 0) return false;
+  const numericos = muestra.filter(v => /^\d+$/.test(String(v).trim())).length;
+  return numericos / muestra.length >= 0.7;
+}
+
 function sumarSaldosPorCuenta(buffer: Buffer, prefijos: string[], convencion: ConvencionSaldo = "pasivo"): Map<string, number> {
   const wb = XLSX.read(buffer, { type: "buffer", cellDates: false });
   const ws = wb.Sheets[wb.SheetNames[0]];
@@ -46,7 +61,7 @@ function sumarSaldosPorCuenta(buffer: Buffer, prefijos: string[], convencion: Co
   if (filas.length < 2) return new Map();
 
   const cols: ColsAuxiliarDian = resolverColumnasAuxiliarDian(filas[0]);
-  if (cols.cuenta === null) return new Map();
+  if (cols.cuenta === null || !columnaCuentaEsConfiable(filas, cols.cuenta)) return new Map();
 
   const saldos = new Map<string, number>();
   for (let i = 1; i < filas.length; i++) {
@@ -73,7 +88,7 @@ function sumarSaldosPorCuentaYTipo(buffer: Buffer, prefijos: string[], convencio
   if (filas.length < 2) return new Map();
 
   const cols: ColsAuxiliarDian = resolverColumnasAuxiliarDian(filas[0]);
-  if (cols.cuenta === null) return new Map();
+  if (cols.cuenta === null || !columnaCuentaEsConfiable(filas, cols.cuenta)) return new Map();
 
   const saldos = new Map<string, { cuenta: string; tipo: string; valor: number }>();
   for (let i = 1; i < filas.length; i++) {
@@ -178,21 +193,52 @@ export type CuentaIvaResumen = { cuenta: string; nombre: string; valor: number }
  * que el usuario elija de una lista real cuál es la cuenta de IVA
  * generado 19%, cuál la de 5%, etc., en vez de escribir el codigo a
  * mano. */
-export async function getCuentasPrefijoDelPeriodo(
+export type DiagnosticoCuentasPeriodo = {
+  cuentas: CuentaIvaResumen[];
+  mesesConArchivo: number;
+  mesesConColumnaCuentaConfiable: number;
+  totalMeses: number;
+};
+
+/** Igual que `getCuentasPrefijoDelPeriodo`, pero además informa CUÁNTOS
+ * meses del periodo tenían el libro auxiliar cargado, y de esos,
+ * cuántos tenían una columna de código de cuenta reconocible — para
+ * poder explicar en la interfaz POR QUÉ no aparece ninguna cuenta,
+ * en vez de un simple "no se encontraron cuentas" sin más contexto. */
+export async function getCuentasPrefijoDelPeriodoConDiagnostico(
   clienteId: number, anio: number, meses: number[], prefijos: string[] = ["24"],
-): Promise<CuentaIvaResumen[]> {
+): Promise<DiagnosticoCuentasPeriodo> {
   const totalPorCuenta = new Map<string, number>();
+  let mesesConArchivo = 0;
+  let mesesConColumnaCuentaConfiable = 0;
   for (const mes of meses) {
     const carga = await getCargaConArchivo(clienteId, anio, mes);
     if (!carga?.fileKey) continue;
+    mesesConArchivo++;
     const buffer = await storageGetBuffer(carga.fileKey);
     const saldosDelMes = sumarSaldosPorCuenta(buffer, prefijos);
+    if (columnaCuentaDelArchivoEsConfiable(buffer)) mesesConColumnaCuentaConfiable++;
     for (const [cuenta, valor] of Array.from(saldosDelMes.entries())) {
       totalPorCuenta.set(cuenta, (totalPorCuenta.get(cuenta) || 0) + valor);
     }
   }
-  if (totalPorCuenta.size === 0) return [];
+  const cuentas = await nombrarCuentas(clienteId, totalPorCuenta);
+  return { cuentas, mesesConArchivo, mesesConColumnaCuentaConfiable, totalMeses: meses.length };
+}
 
+/** Confirma si el archivo, tal como está, tiene una columna de cuenta
+ * reconocible y confiable — usado solo para el diagnóstico de arriba. */
+function columnaCuentaDelArchivoEsConfiable(buffer: Buffer): boolean {
+  const wb = XLSX.read(buffer, { type: "buffer", cellDates: false });
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const filas: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null, raw: true });
+  if (filas.length < 2) return false;
+  const cols: ColsAuxiliarDian = resolverColumnasAuxiliarDian(filas[0]);
+  return cols.cuenta !== null && columnaCuentaEsConfiable(filas, cols.cuenta);
+}
+
+async function nombrarCuentas(clienteId: number, totalPorCuenta: Map<string, number>): Promise<CuentaIvaResumen[]> {
+  if (totalPorCuenta.size === 0) return [];
   const cuentas = Array.from(totalPorCuenta.keys());
   const db = await getDb();
   let nombrePorCuentaCliente = new Map<string, string>();
@@ -205,13 +251,19 @@ export async function getCuentasPrefijoDelPeriodo(
     nombrePorCuentaCliente = new Map(nombresCliente.map(n => [n.cuenta, n.nombre]));
     nombrePorCuentaPuc = new Map(nombresPuc.map(n => [n.cuenta, n.descripcion]));
   }
-
   return cuentas
     .map(cuenta => ({
       cuenta, valor: totalPorCuenta.get(cuenta) || 0,
       nombre: nombrePorCuentaCliente.get(cuenta) || nombrePorCuentaPuc.get(cuenta) || "(sin nombre)",
     }))
     .sort((a, b) => a.cuenta.localeCompare(b.cuenta));
+}
+
+export async function getCuentasPrefijoDelPeriodo(
+  clienteId: number, anio: number, meses: number[], prefijos: string[] = ["24"],
+): Promise<CuentaIvaResumen[]> {
+  const diagnostico = await getCuentasPrefijoDelPeriodoConDiagnostico(clienteId, anio, meses, prefijos);
+  return diagnostico.cuentas;
 }
 
 /** Suma el saldo de una cuenta ESPECIFICA (codigo exacto) a traves de

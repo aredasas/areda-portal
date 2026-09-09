@@ -1381,11 +1381,38 @@ function IvaGeneradoCard({ clienteId, anio, periodicidad, periodo }: {
       </div>
 
       {(!listarQuery.data || listarQuery.data.cuentas.length === 0) ? (
-        <p className="text-xs text-muted-foreground">
-          No se encontraron cuentas que empiecen en "{listarQuery.data?.cuentaMayor || "24"}" con movimiento en
-          los meses de este periodo — confirma la cuenta mayor arriba, o que el libro auxiliar tenga columna
-          de código de cuenta identificable.
-        </p>
+        <div className="text-xs text-muted-foreground space-y-1">
+          {(() => {
+            const d = listarQuery.data?.diagnostico;
+            if (!d) return <p>Cargando diagnóstico...</p>;
+            if (d.mesesConArchivo === 0) {
+              return (
+                <p className="text-amber-700 flex items-center gap-1.5">
+                  <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                  No se encontró el libro auxiliar cargado para ningún mes de este periodo ({d.totalMeses} mes(es)) —
+                  ve a "Estado de Resultados" y confirma que esté cargado.
+                </p>
+              );
+            }
+            if (d.mesesConColumnaCuentaConfiable === 0) {
+              return (
+                <p className="text-amber-700 flex items-center gap-1.5">
+                  <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                  El libro auxiliar está cargado para {d.mesesConArchivo} de {d.totalMeses} mes(es), pero no se
+                  pudo identificar con confianza la columna de código de cuenta en el archivo — revisa que
+                  tenga una columna de código contable con valores numéricos (no el nombre de la cuenta).
+                </p>
+              );
+            }
+            return (
+              <p>
+                El libro auxiliar está cargado y la columna de cuenta se identificó, pero no se encontró
+                ningún movimiento en cuentas que empiecen en "{listarQuery.data?.cuentaMayor || "24"}" en este
+                periodo — confirma la cuenta mayor arriba.
+              </p>
+            );
+          })()}
+        </div>
       ) : (
         <>
           <p className="text-xs text-muted-foreground">
@@ -1501,11 +1528,38 @@ function IvaDescontableCard({ clienteId, anio, periodicidad, periodo }: {
       </div>
 
       {(!listarQuery.data || listarQuery.data.cuentas.length === 0) ? (
-        <p className="text-xs text-muted-foreground">
-          No se encontraron cuentas que empiecen en "{listarQuery.data?.cuentaMayor || "24"}" con movimiento en
-          los meses de este periodo — confirma la cuenta mayor arriba, o que el libro auxiliar tenga columna
-          de código de cuenta identificable.
-        </p>
+        <div className="text-xs text-muted-foreground space-y-1">
+          {(() => {
+            const d = listarQuery.data?.diagnostico;
+            if (!d) return <p>Cargando diagnóstico...</p>;
+            if (d.mesesConArchivo === 0) {
+              return (
+                <p className="text-amber-700 flex items-center gap-1.5">
+                  <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                  No se encontró el libro auxiliar cargado para ningún mes de este periodo ({d.totalMeses} mes(es)) —
+                  ve a "Estado de Resultados" y confirma que esté cargado.
+                </p>
+              );
+            }
+            if (d.mesesConColumnaCuentaConfiable === 0) {
+              return (
+                <p className="text-amber-700 flex items-center gap-1.5">
+                  <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                  El libro auxiliar está cargado para {d.mesesConArchivo} de {d.totalMeses} mes(es), pero no se
+                  pudo identificar con confianza la columna de código de cuenta en el archivo — revisa que
+                  tenga una columna de código contable con valores numéricos (no el nombre de la cuenta).
+                </p>
+              );
+            }
+            return (
+              <p>
+                El libro auxiliar está cargado y la columna de cuenta se identificó, pero no se encontró
+                ningún movimiento en cuentas que empiecen en "{listarQuery.data?.cuentaMayor || "24"}" en este
+                periodo — confirma la cuenta mayor arriba.
+              </p>
+            );
+          })()}
+        </div>
       ) : (
         <>
           <p className="text-xs text-muted-foreground">
