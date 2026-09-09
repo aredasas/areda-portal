@@ -267,7 +267,7 @@ export function resolverColumnasAuxiliarDian(headerRaw: any[]): ColsAuxiliarDian
   const debito = buscarColumna(headers, ["DEBITO", "DEBE"]);
   const credito = buscarColumna(headers, ["CREDITO", "HABER"]);
   const tipo = buscarColumna(headers, ["TIPO DE COMPROBANTE", "TIPO COMPROBANTE", "TIPO DOCUMENTO", "TIPO"]);
-  const cuenta = buscarColumna(headers, ["CODIGO CONTABLE", "CODIGO CUENTA", "COD CUENTA", "CUENTA CONTABLE", "NUMERO CUENTA", "CUENTA"]);
+  const cuenta = buscarColumna(headers, ["CODPUC", "CODIGO CONTABLE", "CODIGO CUENTA", "COD CUENTA", "CUENTA CONTABLE", "NUMERO CUENTA", "CUENTA"]);
   const fecha = buscarColumna(headers, ["FECHA"]);
   const anioCol = buscarColumna(headers, ["ANO", "AGNO", "YEAR", "VIGENCIA"]);
   const mesCol = buscarColumna(headers, ["MES", "MONTH"]);
