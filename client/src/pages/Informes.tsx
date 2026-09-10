@@ -1319,6 +1319,8 @@ function IvaGeneradoCard({ clienteId, anio, periodicidad, periodo }: {
 }) {
   const [cuenta19Local, setCuenta19Local] = useState("");
   const [cuenta5Local, setCuenta5Local] = useState("");
+  const [cuentaDevCompra19Local, setCuentaDevCompra19Local] = useState("");
+  const [cuentaDevCompra5Local, setCuentaDevCompra5Local] = useState("");
   const [cuentaMayorLocal, setCuentaMayorLocal] = useState("24");
   const [editandoCuentaMayor, setEditandoCuentaMayor] = useState(false);
   const [inicializado, setInicializado] = useState(false);
@@ -1327,6 +1329,8 @@ function IvaGeneradoCard({ clienteId, anio, periodicidad, periodo }: {
   if (!inicializado && listarQuery.data) {
     setCuenta19Local(listarQuery.data.cuentaGenerado19 || "");
     setCuenta5Local(listarQuery.data.cuentaGenerado5 || "");
+    setCuentaDevCompra19Local(listarQuery.data.cuentaDevolucionCompra19 || "");
+    setCuentaDevCompra5Local(listarQuery.data.cuentaDevolucionCompra5 || "");
     setCuentaMayorLocal(listarQuery.data.cuentaMayor || "24");
     setInicializado(true);
   }
@@ -1443,9 +1447,41 @@ function IvaGeneradoCard({ clienteId, anio, periodicidad, periodo }: {
               </Select>
             </div>
           </div>
+
+          <p className="text-xs text-muted-foreground pt-1">
+            Opcional — si el cliente maneja devoluciones en compra, elige también las cuentas donde se
+            registra el IVA generado por esas devoluciones (se revierte el descontable que se había tomado).
+          </p>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <Label className="text-xs">Cuenta IVA generado en devolución en compra 19%</Label>
+              <Select value={cuentaDevCompra19Local} onValueChange={setCuentaDevCompra19Local}>
+                <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Elegir cuenta..." /></SelectTrigger>
+                <SelectContent>
+                  {listarQuery.data.cuentas.map((c: any) => (
+                    <SelectItem key={c.cuenta} value={c.cuenta}>{c.cuenta} — {c.nombre} ({fmt(c.valor)})</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Cuenta IVA generado en devolución en compra 5%</Label>
+              <Select value={cuentaDevCompra5Local} onValueChange={setCuentaDevCompra5Local}>
+                <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Elegir cuenta..." /></SelectTrigger>
+                <SelectContent>
+                  {listarQuery.data.cuentas.map((c: any) => (
+                    <SelectItem key={c.cuenta} value={c.cuenta}>{c.cuenta} — {c.nombre} ({fmt(c.valor)})</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
           <Button
-            size="sm" disabled={guardarConfigMutation.isPending || (!cuenta19Local && !cuenta5Local)}
-            onClick={() => guardarConfigMutation.mutate({ clienteId, cuentaGenerado19: cuenta19Local || undefined, cuentaGenerado5: cuenta5Local || undefined })}
+            size="sm" disabled={guardarConfigMutation.isPending || (!cuenta19Local && !cuenta5Local && !cuentaDevCompra19Local && !cuentaDevCompra5Local)}
+            onClick={() => guardarConfigMutation.mutate({
+              clienteId, cuentaGenerado19: cuenta19Local || undefined, cuentaGenerado5: cuenta5Local || undefined,
+              cuentaDevolucionCompra19: cuentaDevCompra19Local || undefined, cuentaDevolucionCompra5: cuentaDevCompra5Local || undefined,
+            })}
           >
             {guardarConfigMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-2" /> : null}
             Guardar configuración
@@ -1484,6 +1520,23 @@ function IvaGeneradoCard({ clienteId, anio, periodicidad, periodo }: {
                   </div>
                 );
               })}
+              {(compararQuery.data.devolucionCompra19.cuenta || compararQuery.data.devolucionCompra5.cuenta) && (
+                <div className="border-t pt-2 space-y-1">
+                  <p className="text-xs font-medium text-muted-foreground">IVA generado en devoluciones en compra (referencia, sin base de comparación todavía)</p>
+                  {compararQuery.data.devolucionCompra19.cuenta && (
+                    <div className="flex justify-between text-xs">
+                      <span className="text-muted-foreground">19% — cuenta {compararQuery.data.devolucionCompra19.cuenta}</span>
+                      <span>{compararQuery.data.devolucionCompra19.real !== null ? fmt(compararQuery.data.devolucionCompra19.real) : "—"}</span>
+                    </div>
+                  )}
+                  {compararQuery.data.devolucionCompra5.cuenta && (
+                    <div className="flex justify-between text-xs">
+                      <span className="text-muted-foreground">5% — cuenta {compararQuery.data.devolucionCompra5.cuenta}</span>
+                      <span>{compararQuery.data.devolucionCompra5.real !== null ? fmt(compararQuery.data.devolucionCompra5.real) : "—"}</span>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </>
@@ -1497,12 +1550,16 @@ function IvaDescontableCard({ clienteId, anio, periodicidad, periodo }: {
 }) {
   const [cuenta19Local, setCuenta19Local] = useState("");
   const [cuenta5Local, setCuenta5Local] = useState("");
+  const [cuentaDevVenta19Local, setCuentaDevVenta19Local] = useState("");
+  const [cuentaDevVenta5Local, setCuentaDevVenta5Local] = useState("");
   const [inicializado, setInicializado] = useState(false);
 
   const listarQuery = trpc.informes.iva.ivaDescontable.listarCuentas.useQuery({ clienteId, anio, periodicidad, periodo });
   if (!inicializado && listarQuery.data) {
     setCuenta19Local(listarQuery.data.cuentaDescontable19 || "");
     setCuenta5Local(listarQuery.data.cuentaDescontable5 || "");
+    setCuentaDevVenta19Local(listarQuery.data.cuentaDevolucionVenta19 || "");
+    setCuentaDevVenta5Local(listarQuery.data.cuentaDevolucionVenta5 || "");
     setInicializado(true);
   }
 
@@ -1597,9 +1654,41 @@ function IvaDescontableCard({ clienteId, anio, periodicidad, periodo }: {
               </Select>
             </div>
           </div>
+
+          <p className="text-xs text-muted-foreground pt-1">
+            Opcional — si el cliente maneja devoluciones en venta, elige también las cuentas donde se
+            registra el IVA descontable por esas devoluciones (se revierte el generado que se había cobrado).
+          </p>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <Label className="text-xs">Cuenta IVA descontable en devolución en venta 19%</Label>
+              <Select value={cuentaDevVenta19Local} onValueChange={setCuentaDevVenta19Local}>
+                <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Elegir cuenta..." /></SelectTrigger>
+                <SelectContent>
+                  {listarQuery.data.cuentas.map((c: any) => (
+                    <SelectItem key={c.cuenta} value={c.cuenta}>{c.cuenta} — {c.nombre} ({fmt(c.valor)})</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Cuenta IVA descontable en devolución en venta 5%</Label>
+              <Select value={cuentaDevVenta5Local} onValueChange={setCuentaDevVenta5Local}>
+                <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Elegir cuenta..." /></SelectTrigger>
+                <SelectContent>
+                  {listarQuery.data.cuentas.map((c: any) => (
+                    <SelectItem key={c.cuenta} value={c.cuenta}>{c.cuenta} — {c.nombre} ({fmt(c.valor)})</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
           <Button
-            size="sm" disabled={guardarConfigMutation.isPending || (!cuenta19Local && !cuenta5Local)}
-            onClick={() => guardarConfigMutation.mutate({ clienteId, cuentaDescontable19: cuenta19Local || undefined, cuentaDescontable5: cuenta5Local || undefined })}
+            size="sm" disabled={guardarConfigMutation.isPending || (!cuenta19Local && !cuenta5Local && !cuentaDevVenta19Local && !cuentaDevVenta5Local)}
+            onClick={() => guardarConfigMutation.mutate({
+              clienteId, cuentaDescontable19: cuenta19Local || undefined, cuentaDescontable5: cuenta5Local || undefined,
+              cuentaDevolucionVenta19: cuentaDevVenta19Local || undefined, cuentaDevolucionVenta5: cuentaDevVenta5Local || undefined,
+            })}
           >
             {guardarConfigMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-2" /> : null}
             Guardar configuración
@@ -1638,6 +1727,23 @@ function IvaDescontableCard({ clienteId, anio, periodicidad, periodo }: {
                   </div>
                 );
               })}
+              {(compararQuery.data.devolucionVenta19.cuenta || compararQuery.data.devolucionVenta5.cuenta) && (
+                <div className="border-t pt-2 space-y-1">
+                  <p className="text-xs font-medium text-muted-foreground">IVA descontable en devoluciones en venta (referencia, sin base de comparación todavía)</p>
+                  {compararQuery.data.devolucionVenta19.cuenta && (
+                    <div className="flex justify-between text-xs">
+                      <span className="text-muted-foreground">19% — cuenta {compararQuery.data.devolucionVenta19.cuenta}</span>
+                      <span>{compararQuery.data.devolucionVenta19.real !== null ? fmt(compararQuery.data.devolucionVenta19.real) : "—"}</span>
+                    </div>
+                  )}
+                  {compararQuery.data.devolucionVenta5.cuenta && (
+                    <div className="flex justify-between text-xs">
+                      <span className="text-muted-foreground">5% — cuenta {compararQuery.data.devolucionVenta5.cuenta}</span>
+                      <span>{compararQuery.data.devolucionVenta5.real !== null ? fmt(compararQuery.data.devolucionVenta5.real) : "—"}</span>
+                    </div>
+                  )}
+                </div>
+              )}
               {compararQuery.data.pctFacturado !== null && (
                 <div className="border-t pt-2 space-y-1">
                   <p className="text-xs font-medium text-muted-foreground">Compras facturadas electrónicamente</p>

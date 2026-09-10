@@ -2109,7 +2109,9 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
             ]);
             const cuentaGenerado19 = config.find(c => c.tipoIva === "generado_19")?.cuenta || null;
             const cuentaGenerado5 = config.find(c => c.tipoIva === "generado_5")?.cuenta || null;
-            return { cuentas: diagnostico.cuentas, cuentaGenerado19, cuentaGenerado5, cuentaMayor, diagnostico };
+            const cuentaDevolucionCompra19 = config.find(c => c.tipoIva === "generado_devolucion_compra_19")?.cuenta || null;
+            const cuentaDevolucionCompra5 = config.find(c => c.tipoIva === "generado_devolucion_compra_5")?.cuenta || null;
+            return { cuentas: diagnostico.cuentas, cuentaGenerado19, cuentaGenerado5, cuentaDevolucionCompra19, cuentaDevolucionCompra5, cuentaMayor, diagnostico };
           }),
         guardarCuentaMayor: protectedProcedure
           .input(z.object({ clienteId: z.number(), cuenta: z.string().min(1) }))
@@ -2119,12 +2121,17 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
             return { success: true };
           }),
         guardarConfig: protectedProcedure
-          .input(z.object({ clienteId: z.number(), cuentaGenerado19: z.string().optional(), cuentaGenerado5: z.string().optional() }))
+          .input(z.object({
+            clienteId: z.number(), cuentaGenerado19: z.string().optional(), cuentaGenerado5: z.string().optional(),
+            cuentaDevolucionCompra19: z.string().optional(), cuentaDevolucionCompra5: z.string().optional(),
+          }))
           .mutation(async ({ input, ctx }) => {
             await assertClienteAccesibleInformes(ctx, input.clienteId);
             const configs: { tipoIva: informesIvaCuentas.TipoIva; cuenta: string }[] = [];
             if (input.cuentaGenerado19) configs.push({ tipoIva: "generado_19", cuenta: input.cuentaGenerado19 });
             if (input.cuentaGenerado5) configs.push({ tipoIva: "generado_5", cuenta: input.cuentaGenerado5 });
+            if (input.cuentaDevolucionCompra19) configs.push({ tipoIva: "generado_devolucion_compra_19", cuenta: input.cuentaDevolucionCompra19 });
+            if (input.cuentaDevolucionCompra5) configs.push({ tipoIva: "generado_devolucion_compra_5", cuenta: input.cuentaDevolucionCompra5 });
             await informesIvaCuentas.guardarConfigCuentasIva(input.clienteId, configs, ctx.user.id);
             return { success: true };
           }),
@@ -2145,16 +2152,26 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
             const config = await informesIvaCuentas.getConfigCuentasIva(input.clienteId);
             const cuenta19 = config.find(c => c.tipoIva === "generado_19")?.cuenta || null;
             const cuenta5 = config.find(c => c.tipoIva === "generado_5")?.cuenta || null;
+            const cuentaDevCompra19 = config.find(c => c.tipoIva === "generado_devolucion_compra_19")?.cuenta || null;
+            const cuentaDevCompra5 = config.find(c => c.tipoIva === "generado_devolucion_compra_5")?.cuenta || null;
             const meses = informesIva.mesesDelPeriodo(input.periodicidad, input.periodo);
 
             const esperado19 = totalPorClasificacion.gravado_19 * 0.19;
             const esperado5 = totalPorClasificacion.gravado_5 * 0.05;
             const real19 = cuenta19 ? await informesIvaCuentas.getSaldoCuentaEnPeriodo(input.clienteId, input.anio, meses, cuenta19) : null;
             const real5 = cuenta5 ? await informesIvaCuentas.getSaldoCuentaEnPeriodo(input.clienteId, input.anio, meses, cuenta5) : null;
+            // Las devoluciones en compra no tienen una base propia
+            // calculada todavía (no hay un paso previo que las separe) —
+            // por ahora solo se muestra el valor real de la cuenta, como
+            // referencia, sin comparar contra un esperado.
+            const devCompra19 = cuentaDevCompra19 ? await informesIvaCuentas.getSaldoCuentaEnPeriodo(input.clienteId, input.anio, meses, cuentaDevCompra19) : null;
+            const devCompra5 = cuentaDevCompra5 ? await informesIvaCuentas.getSaldoCuentaEnPeriodo(input.clienteId, input.anio, meses, cuentaDevCompra5) : null;
 
             return {
               tarifa19: { base: totalPorClasificacion.gravado_19, esperado: esperado19, cuenta: cuenta19, real: real19, diferencia: real19 !== null ? esperado19 - real19 : null },
               tarifa5: { base: totalPorClasificacion.gravado_5, esperado: esperado5, cuenta: cuenta5, real: real5, diferencia: real5 !== null ? esperado5 - real5 : null },
+              devolucionCompra19: { cuenta: cuentaDevCompra19, real: devCompra19 },
+              devolucionCompra5: { cuenta: cuentaDevCompra5, real: devCompra5 },
             };
           }),
       }),
@@ -2179,15 +2196,22 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
             ]);
             const cuentaDescontable19 = config.find(c => c.tipoIva === "descontable_19")?.cuenta || null;
             const cuentaDescontable5 = config.find(c => c.tipoIva === "descontable_5")?.cuenta || null;
-            return { cuentas: diagnostico.cuentas, cuentaDescontable19, cuentaDescontable5, cuentaMayor, diagnostico };
+            const cuentaDevolucionVenta19 = config.find(c => c.tipoIva === "descontable_devolucion_venta_19")?.cuenta || null;
+            const cuentaDevolucionVenta5 = config.find(c => c.tipoIva === "descontable_devolucion_venta_5")?.cuenta || null;
+            return { cuentas: diagnostico.cuentas, cuentaDescontable19, cuentaDescontable5, cuentaDevolucionVenta19, cuentaDevolucionVenta5, cuentaMayor, diagnostico };
           }),
         guardarConfig: protectedProcedure
-          .input(z.object({ clienteId: z.number(), cuentaDescontable19: z.string().optional(), cuentaDescontable5: z.string().optional() }))
+          .input(z.object({
+            clienteId: z.number(), cuentaDescontable19: z.string().optional(), cuentaDescontable5: z.string().optional(),
+            cuentaDevolucionVenta19: z.string().optional(), cuentaDevolucionVenta5: z.string().optional(),
+          }))
           .mutation(async ({ input, ctx }) => {
             await assertClienteAccesibleInformes(ctx, input.clienteId);
             const configs: { tipoIva: informesIvaCuentas.TipoIva; cuenta: string }[] = [];
             if (input.cuentaDescontable19) configs.push({ tipoIva: "descontable_19", cuenta: input.cuentaDescontable19 });
             if (input.cuentaDescontable5) configs.push({ tipoIva: "descontable_5", cuenta: input.cuentaDescontable5 });
+            if (input.cuentaDevolucionVenta19) configs.push({ tipoIva: "descontable_devolucion_venta_19", cuenta: input.cuentaDevolucionVenta19 });
+            if (input.cuentaDevolucionVenta5) configs.push({ tipoIva: "descontable_devolucion_venta_5", cuenta: input.cuentaDevolucionVenta5 });
             await informesIvaCuentas.guardarConfigCuentasIva(input.clienteId, configs, ctx.user.id);
             return { success: true };
           }),
@@ -2208,12 +2232,19 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
             const config = await informesIvaCuentas.getConfigCuentasIva(input.clienteId);
             const cuenta19 = config.find(c => c.tipoIva === "descontable_19")?.cuenta || null;
             const cuenta5 = config.find(c => c.tipoIva === "descontable_5")?.cuenta || null;
+            const cuentaDevVenta19 = config.find(c => c.tipoIva === "descontable_devolucion_venta_19")?.cuenta || null;
+            const cuentaDevVenta5 = config.find(c => c.tipoIva === "descontable_devolucion_venta_5")?.cuenta || null;
             const meses = informesIva.mesesDelPeriodo(input.periodicidad, input.periodo);
 
             const esperado19 = totalPorClasificacion.gravado_19 * 0.19;
             const esperado5 = totalPorClasificacion.gravado_5 * 0.05;
             const real19 = cuenta19 ? await informesIvaCuentas.getSaldoCuentaEnPeriodo(input.clienteId, input.anio, meses, cuenta19) : null;
             const real5 = cuenta5 ? await informesIvaCuentas.getSaldoCuentaEnPeriodo(input.clienteId, input.anio, meses, cuenta5) : null;
+            // Las devoluciones en venta no tienen una base propia
+            // calculada todavía — por ahora solo se muestra el valor real
+            // de la cuenta, como referencia, sin comparar contra un esperado.
+            const devVenta19 = cuentaDevVenta19 ? await informesIvaCuentas.getSaldoCuentaEnPeriodo(input.clienteId, input.anio, meses, cuentaDevVenta19) : null;
+            const devVenta5 = cuentaDevVenta5 ? await informesIvaCuentas.getSaldoCuentaEnPeriodo(input.clienteId, input.anio, meses, cuentaDevVenta5) : null;
 
             // Qué proporción de la base de compras (todas las tarifas)
             // está facturada electrónicamente — solo eso da derecho al
@@ -2225,6 +2256,8 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
             return {
               tarifa19: { base: totalPorClasificacion.gravado_19, esperado: esperado19, cuenta: cuenta19, real: real19, diferencia: real19 !== null ? esperado19 - real19 : null },
               tarifa5: { base: totalPorClasificacion.gravado_5, esperado: esperado5, cuenta: cuenta5, real: real5, diferencia: real5 !== null ? esperado5 - real5 : null },
+              devolucionVenta19: { cuenta: cuentaDevVenta19, real: devVenta19 },
+              devolucionVenta5: { cuenta: cuentaDevVenta5, real: devVenta5 },
               pctFacturado, totalContabilidad, totalContabilidadFacturado,
             };
           }),

@@ -701,7 +701,17 @@ export type InformeCompraTipoExcluido = typeof informesComprasTiposExcluidos.$in
 export const informesConfigCuentasIva = mysqlTable("informesConfigCuentasIva", {
   id: int("id").autoincrement().primaryKey(),
   clienteId: int("clienteId").notNull(),
-  tipoIva: mysqlEnum("tipoIva", ["generado_19", "generado_5", "descontable_19", "descontable_5", "transitorio", "cuenta_mayor"]).notNull(),
+  tipoIva: mysqlEnum("tipoIva", [
+    "generado_19", "generado_5", "descontable_19", "descontable_5", "transitorio", "cuenta_mayor",
+    // IVA generado en devoluciones EN COMPRA — al devolver mercancía a un
+    // proveedor, se revierte (como si fuera una venta) el IVA descontable
+    // que se había tomado por esa compra.
+    "generado_devolucion_compra_19", "generado_devolucion_compra_5",
+    // IVA descontable en devoluciones EN VENTA — al recibir de vuelta
+    // mercancía de un cliente, se revierte (como un descontable) el IVA
+    // generado que se había cobrado por esa venta.
+    "descontable_devolucion_venta_19", "descontable_devolucion_venta_5",
+  ]).notNull(),
   cuenta: varchar("cuenta", { length: 12 }).notNull(),
   actualizadoPorId: int("actualizadoPorId").notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),

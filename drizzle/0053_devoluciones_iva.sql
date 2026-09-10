@@ -1,0 +1,1 @@
+ALTER TABLE `informesConfigCuentasIva` MODIFY COLUMN `tipoIva` enum('generado_19','generado_5','descontable_19','descontable_5','transitorio','cuenta_mayor','generado_devolucion_compra_19','generado_devolucion_compra_5','descontable_devolucion_venta_19','descontable_devolucion_venta_5') NOT NULL;

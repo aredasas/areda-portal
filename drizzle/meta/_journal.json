@@ -372,6 +372,13 @@
       "when": 1788793178239,
       "tag": "0052_totales_por_tipo",
       "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "5",
+      "when": 1789082494761,
+      "tag": "0053_devoluciones_iva",
+      "breakpoints": true
     }
   ]
 }
