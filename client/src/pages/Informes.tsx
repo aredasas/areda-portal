@@ -1451,6 +1451,13 @@ function IvaGeneradoCard({ clienteId, anio, periodicidad, periodo }: {
             Guardar configuración
           </Button>
 
+          {compararQuery.isError && (
+            <p className="text-xs text-red-600 flex items-center gap-1.5 border-t pt-3">
+              <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+              {compararQuery.error?.message || "No se pudo calcular la comparación."}
+            </p>
+          )}
+
           {compararQuery.data && (
             <div className="border-t pt-3 space-y-3">
               <p className="text-xs font-medium text-muted-foreground">Comparación — tarifa × base vs. valor contable real</p>
@@ -1597,6 +1604,13 @@ function IvaDescontableCard({ clienteId, anio, periodicidad, periodo }: {
             {guardarConfigMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-2" /> : null}
             Guardar configuración
           </Button>
+
+          {compararQuery.isError && (
+            <p className="text-xs text-red-600 flex items-center gap-1.5 border-t pt-3">
+              <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+              {compararQuery.error?.message || "No se pudo calcular la comparación."}
+            </p>
+          )}
 
           {compararQuery.data && (
             <div className="border-t pt-3 space-y-3">
