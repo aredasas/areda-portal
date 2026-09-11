@@ -533,23 +533,24 @@ const PERIODOS_IVA_FRONTEND: Record<string, { codigo: number; nombre: string }[]
  * de cada paso de IVA se disparen TODAS a la vez al cargar la pestaña.
  * Una vez abierta, el contenido queda montado (no se pierde al volver
  * a cerrar), solo se oculta visualmente. */
-function SeccionIvaColapsable({ titulo, defaultOpen = false, children }: {
-  titulo: string; defaultOpen?: boolean; children: React.ReactNode;
+function SeccionIvaColapsable({ titulo, defaultOpen = false, variante = "principal", children }: {
+  titulo: string; defaultOpen?: boolean; variante?: "principal" | "sub"; children: React.ReactNode;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const [yaAbierto, setYaAbierto] = useState(defaultOpen);
+  const esSub = variante === "sub";
   return (
-    <div className="border rounded-md">
+    <div className={esSub ? "border rounded-md bg-muted/20" : "border rounded-md"}>
       <button
         type="button"
-        className="w-full flex items-center justify-between gap-2 p-3 text-left hover:bg-muted/50"
+        className={`w-full flex items-center justify-between gap-2 text-left hover:bg-muted/50 ${esSub ? "p-2" : "p-3"}`}
         onClick={() => { setOpen(o => !o); if (!yaAbierto) setYaAbierto(true); }}
       >
-        <span className="text-sm font-medium">{titulo}</span>
+        <span className={esSub ? "text-xs font-medium text-muted-foreground" : "text-sm font-medium"}>{titulo}</span>
         {open ? <ChevronUp className="w-4 h-4 shrink-0 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 shrink-0 text-muted-foreground" />}
       </button>
       {yaAbierto && (
-        <div className={open ? "p-3 pt-0 space-y-4" : "hidden"}>
+        <div className={open ? `${esSub ? "p-2" : "p-3"} pt-0 space-y-4` : "hidden"}>
           {children}
         </div>
       )}
@@ -650,10 +651,13 @@ function IvaTab({ clienteId, anio }: { clienteId: number; anio: number }) {
               </p>
             ) : conciliacionQuery.data ? (
               <div className="space-y-3">
-                <ClasificacionCuentasIvaCard clienteId={clienteId} anio={anio} periodicidad={periodicidad} periodo={periodo} />
-
                 <SeccionIvaColapsable titulo="1. Ingresos y su IVA generado">
-                  <IngresosIvaCard clienteId={clienteId} anio={anio} periodicidad={periodicidad} periodo={periodo} />
+                  <SeccionIvaColapsable titulo="Clasificación de ingresos" variante="sub">
+                    <IngresosIvaCard clienteId={clienteId} anio={anio} periodicidad={periodicidad} periodo={periodo} />
+                  </SeccionIvaColapsable>
+                  <SeccionIvaColapsable titulo="Clasificación de IVA" variante="sub">
+                    <ClasificacionCuentasIvaCard clienteId={clienteId} anio={anio} periodicidad={periodicidad} periodo={periodo} />
+                  </SeccionIvaColapsable>
                   <IvaGeneradoCard clienteId={clienteId} anio={anio} periodicidad={periodicidad} periodo={periodo} />
                 </SeccionIvaColapsable>
 
