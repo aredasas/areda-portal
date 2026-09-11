@@ -2113,8 +2113,14 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
       // 19% y al 5%, y cotejar que la tarifa aplicada sobre la base ya
       // clasificada en el paso de ingresos sea igual al valor contable
       // real de esa cuenta.
-      ivaGenerado: router({
-        listarCuentas: protectedProcedure
+      // Clasificación UNIFICADA de cuentas de IVA (24xx) — reemplaza los
+      // selectores de cuenta dispersos en cada paso: aquí se listan
+      // TODAS las cuentas del periodo de una sola vez (igual que en
+      // ingresos) y se clasifica cada una en su categoría — generado,
+      // descontable, transitorio, o devoluciones — permitiendo VARIAS
+      // cuentas por categoría (el sistema las suma).
+      clasificacionCuentas: router({
+        listar: protectedProcedure
           .input(z.object({
             clienteId: z.number(), anio: z.number(),
             periodicidad: z.enum(["bimestral", "cuatrimestral", "anual"]), periodo: z.number(),
@@ -2123,15 +2129,12 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
             await assertClienteAccesibleInformes(ctx, input.clienteId);
             const meses = informesIva.mesesDelPeriodo(input.periodicidad, input.periodo);
             const cuentaMayor = await informesIvaCuentas.getCuentaMayorIva(input.clienteId);
-            const [diagnostico, config] = await Promise.all([
+            const [diagnostico, clasificacionMapa] = await Promise.all([
               informesIvaCuentas.getCuentasPrefijoDelPeriodoConDiagnostico(input.clienteId, input.anio, meses, [cuentaMayor]),
-              informesIvaCuentas.getConfigCuentasIva(input.clienteId),
+              informesIvaCuentas.getClasificacionCuentasIva(input.clienteId),
             ]);
-            const cuentaGenerado19 = config.find(c => c.tipoIva === "generado_19")?.cuenta || null;
-            const cuentaGenerado5 = config.find(c => c.tipoIva === "generado_5")?.cuenta || null;
-            const cuentaDevolucionCompra19 = config.find(c => c.tipoIva === "generado_devolucion_compra_19")?.cuenta || null;
-            const cuentaDevolucionCompra5 = config.find(c => c.tipoIva === "generado_devolucion_compra_5")?.cuenta || null;
-            return { cuentas: diagnostico.cuentas, cuentaGenerado19, cuentaGenerado5, cuentaDevolucionCompra19, cuentaDevolucionCompra5, cuentaMayor, diagnostico };
+            const cuentas = diagnostico.cuentas.map(c => ({ ...c, categoria: clasificacionMapa.get(c.cuenta) || null }));
+            return { cuentas, cuentaMayor, diagnostico };
           }),
         guardarCuentaMayor: protectedProcedure
           .input(z.object({ clienteId: z.number(), cuenta: z.string().min(1) }))
@@ -2140,21 +2143,28 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
             await informesIvaCuentas.guardarCuentaMayorIva(input.clienteId, input.cuenta.trim(), ctx.user.id);
             return { success: true };
           }),
-        guardarConfig: protectedProcedure
+        guardarClasificacion: protectedProcedure
           .input(z.object({
-            clienteId: z.number(), cuentaGenerado19: z.string().optional(), cuentaGenerado5: z.string().optional(),
-            cuentaDevolucionCompra19: z.string().optional(), cuentaDevolucionCompra5: z.string().optional(),
+            clienteId: z.number(),
+            clasificaciones: z.array(z.object({
+              cuenta: z.string(),
+              categoria: z.enum([
+                "generado_19", "generado_5", "descontable_19", "descontable_5", "transitorio",
+                "generado_devolucion_compra_19", "generado_devolucion_compra_5",
+                "descontable_devolucion_venta_19", "descontable_devolucion_venta_5",
+              ]),
+            })),
           }))
           .mutation(async ({ input, ctx }) => {
             await assertClienteAccesibleInformes(ctx, input.clienteId);
-            const configs: { tipoIva: informesIvaCuentas.TipoIva; cuenta: string }[] = [];
-            if (input.cuentaGenerado19) configs.push({ tipoIva: "generado_19", cuenta: input.cuentaGenerado19 });
-            if (input.cuentaGenerado5) configs.push({ tipoIva: "generado_5", cuenta: input.cuentaGenerado5 });
-            if (input.cuentaDevolucionCompra19) configs.push({ tipoIva: "generado_devolucion_compra_19", cuenta: input.cuentaDevolucionCompra19 });
-            if (input.cuentaDevolucionCompra5) configs.push({ tipoIva: "generado_devolucion_compra_5", cuenta: input.cuentaDevolucionCompra5 });
-            await informesIvaCuentas.guardarConfigCuentasIva(input.clienteId, configs, ctx.user.id);
+            await informesIvaCuentas.guardarClasificacionCuentasIva(input.clienteId, input.clasificaciones, ctx.user.id);
             return { success: true };
           }),
+      }),
+      ivaGenerado: router({
+        // La lista de cuentas y su clasificación ahora viven en el paso
+        // unificado "clasificacionCuentas" — este endpoint solo calcula
+        // la comparación a partir de lo ya clasificado ahí.
         comparar: protectedProcedure
           .input(z.object({
             clienteId: z.number(), anio: z.number(),
@@ -2169,72 +2179,24 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
             if (!totalPorClasificacion) {
               throw new Error("Primero completa y guarda el Paso 2 (clasificación de ingresos) de este periodo.");
             }
-            const config = await informesIvaCuentas.getConfigCuentasIva(input.clienteId);
-            const cuenta19 = config.find(c => c.tipoIva === "generado_19")?.cuenta || null;
-            const cuenta5 = config.find(c => c.tipoIva === "generado_5")?.cuenta || null;
-            const cuentaDevCompra19 = config.find(c => c.tipoIva === "generado_devolucion_compra_19")?.cuenta || null;
-            const cuentaDevCompra5 = config.find(c => c.tipoIva === "generado_devolucion_compra_5")?.cuenta || null;
             const meses = informesIva.mesesDelPeriodo(input.periodicidad, input.periodo);
 
             const esperado19 = totalPorClasificacion.gravado_19 * 0.19;
             const esperado5 = totalPorClasificacion.gravado_5 * 0.05;
-            const real19 = cuenta19 ? await informesIvaCuentas.getSaldoCuentaEnPeriodo(input.clienteId, input.anio, meses, cuenta19) : null;
-            const real5 = cuenta5 ? await informesIvaCuentas.getSaldoCuentaEnPeriodo(input.clienteId, input.anio, meses, cuenta5) : null;
-            // Las devoluciones en compra no tienen una base propia
-            // calculada todavía (no hay un paso previo que las separe) —
-            // por ahora solo se muestra el valor real de la cuenta, como
-            // referencia, sin comparar contra un esperado.
-            const devCompra19 = cuentaDevCompra19 ? await informesIvaCuentas.getSaldoCuentaEnPeriodo(input.clienteId, input.anio, meses, cuentaDevCompra19) : null;
-            const devCompra5 = cuentaDevCompra5 ? await informesIvaCuentas.getSaldoCuentaEnPeriodo(input.clienteId, input.anio, meses, cuentaDevCompra5) : null;
+            const { saldo: real19, cuentas: cuentas19 } = await informesIvaCuentas.getSaldoSumadoPorCategoria(input.clienteId, input.anio, meses, "generado_19", "pasivo");
+            const { saldo: real5, cuentas: cuentas5 } = await informesIvaCuentas.getSaldoSumadoPorCategoria(input.clienteId, input.anio, meses, "generado_5", "pasivo");
+            const { saldo: devCompra19, cuentas: cuentasDevCompra19 } = await informesIvaCuentas.getSaldoSumadoPorCategoria(input.clienteId, input.anio, meses, "generado_devolucion_compra_19", "pasivo");
+            const { saldo: devCompra5, cuentas: cuentasDevCompra5 } = await informesIvaCuentas.getSaldoSumadoPorCategoria(input.clienteId, input.anio, meses, "generado_devolucion_compra_5", "pasivo");
 
             return {
-              tarifa19: { base: totalPorClasificacion.gravado_19, esperado: esperado19, cuenta: cuenta19, real: real19, diferencia: real19 !== null ? esperado19 - real19 : null },
-              tarifa5: { base: totalPorClasificacion.gravado_5, esperado: esperado5, cuenta: cuenta5, real: real5, diferencia: real5 !== null ? esperado5 - real5 : null },
-              devolucionCompra19: { cuenta: cuentaDevCompra19, real: devCompra19 },
-              devolucionCompra5: { cuenta: cuentaDevCompra5, real: devCompra5 },
+              tarifa19: { base: totalPorClasificacion.gravado_19, esperado: esperado19, cuentas: cuentas19, real: real19, diferencia: real19 !== null ? esperado19 - real19 : null },
+              tarifa5: { base: totalPorClasificacion.gravado_5, esperado: esperado5, cuentas: cuentas5, real: real5, diferencia: real5 !== null ? esperado5 - real5 : null },
+              devolucionCompra19: { cuentas: cuentasDevCompra19, real: devCompra19 },
+              devolucionCompra5: { cuentas: cuentasDevCompra5, real: devCompra5 },
             };
           }),
       }),
-      // Paso 5 — IVA descontable: mismo cotejo que el Paso 3, pero con la
-      // base gravada de COMPRAS (Paso 4) y las cuentas de IVA
-      // descontable — además, verifica qué proporción de esa base está
-      // facturada electrónicamente (solo lo facturado da derecho al
-      // descontable en la práctica).
       ivaDescontable: router({
-        listarCuentas: protectedProcedure
-          .input(z.object({
-            clienteId: z.number(), anio: z.number(),
-            periodicidad: z.enum(["bimestral", "cuatrimestral", "anual"]), periodo: z.number(),
-          }))
-          .query(async ({ input, ctx }) => {
-            await assertClienteAccesibleInformes(ctx, input.clienteId);
-            const meses = informesIva.mesesDelPeriodo(input.periodicidad, input.periodo);
-            const cuentaMayor = await informesIvaCuentas.getCuentaMayorIva(input.clienteId);
-            const [diagnostico, config] = await Promise.all([
-              informesIvaCuentas.getCuentasPrefijoDelPeriodoConDiagnostico(input.clienteId, input.anio, meses, [cuentaMayor]),
-              informesIvaCuentas.getConfigCuentasIva(input.clienteId),
-            ]);
-            const cuentaDescontable19 = config.find(c => c.tipoIva === "descontable_19")?.cuenta || null;
-            const cuentaDescontable5 = config.find(c => c.tipoIva === "descontable_5")?.cuenta || null;
-            const cuentaDevolucionVenta19 = config.find(c => c.tipoIva === "descontable_devolucion_venta_19")?.cuenta || null;
-            const cuentaDevolucionVenta5 = config.find(c => c.tipoIva === "descontable_devolucion_venta_5")?.cuenta || null;
-            return { cuentas: diagnostico.cuentas, cuentaDescontable19, cuentaDescontable5, cuentaDevolucionVenta19, cuentaDevolucionVenta5, cuentaMayor, diagnostico };
-          }),
-        guardarConfig: protectedProcedure
-          .input(z.object({
-            clienteId: z.number(), cuentaDescontable19: z.string().optional(), cuentaDescontable5: z.string().optional(),
-            cuentaDevolucionVenta19: z.string().optional(), cuentaDevolucionVenta5: z.string().optional(),
-          }))
-          .mutation(async ({ input, ctx }) => {
-            await assertClienteAccesibleInformes(ctx, input.clienteId);
-            const configs: { tipoIva: informesIvaCuentas.TipoIva; cuenta: string }[] = [];
-            if (input.cuentaDescontable19) configs.push({ tipoIva: "descontable_19", cuenta: input.cuentaDescontable19 });
-            if (input.cuentaDescontable5) configs.push({ tipoIva: "descontable_5", cuenta: input.cuentaDescontable5 });
-            if (input.cuentaDevolucionVenta19) configs.push({ tipoIva: "descontable_devolucion_venta_19", cuenta: input.cuentaDevolucionVenta19 });
-            if (input.cuentaDevolucionVenta5) configs.push({ tipoIva: "descontable_devolucion_venta_5", cuenta: input.cuentaDevolucionVenta5 });
-            await informesIvaCuentas.guardarConfigCuentasIva(input.clienteId, configs, ctx.user.id);
-            return { success: true };
-          }),
         comparar: protectedProcedure
           .input(z.object({
             clienteId: z.number(), anio: z.number(),
@@ -2249,26 +2211,14 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
             if (!totalPorClasificacion) {
               throw new Error("Primero completa y guarda el Paso 4 (clasificación de compras) de este periodo.");
             }
-            const config = await informesIvaCuentas.getConfigCuentasIva(input.clienteId);
-            const cuenta19 = config.find(c => c.tipoIva === "descontable_19")?.cuenta || null;
-            const cuenta5 = config.find(c => c.tipoIva === "descontable_5")?.cuenta || null;
-            const cuentaDevVenta19 = config.find(c => c.tipoIva === "descontable_devolucion_venta_19")?.cuenta || null;
-            const cuentaDevVenta5 = config.find(c => c.tipoIva === "descontable_devolucion_venta_5")?.cuenta || null;
             const meses = informesIva.mesesDelPeriodo(input.periodicidad, input.periodo);
 
             const esperado19 = totalPorClasificacion.gravado_19 * 0.19;
             const esperado5 = totalPorClasificacion.gravado_5 * 0.05;
-            // El IVA descontable se mueve por DÉBITO (como un activo que
-            // reduce el IVA neto por pagar), no por crédito como el
-            // generado — usar la convención equivocada invierte el
-            // signo del saldo real.
-            const real19 = cuenta19 ? await informesIvaCuentas.getSaldoCuentaEnPeriodo(input.clienteId, input.anio, meses, cuenta19, "activo_gasto") : null;
-            const real5 = cuenta5 ? await informesIvaCuentas.getSaldoCuentaEnPeriodo(input.clienteId, input.anio, meses, cuenta5, "activo_gasto") : null;
-            // Las devoluciones en venta no tienen una base propia
-            // calculada todavía — por ahora solo se muestra el valor real
-            // de la cuenta, como referencia, sin comparar contra un esperado.
-            const devVenta19 = cuentaDevVenta19 ? await informesIvaCuentas.getSaldoCuentaEnPeriodo(input.clienteId, input.anio, meses, cuentaDevVenta19, "activo_gasto") : null;
-            const devVenta5 = cuentaDevVenta5 ? await informesIvaCuentas.getSaldoCuentaEnPeriodo(input.clienteId, input.anio, meses, cuentaDevVenta5, "activo_gasto") : null;
+            const { saldo: real19, cuentas: cuentas19 } = await informesIvaCuentas.getSaldoSumadoPorCategoria(input.clienteId, input.anio, meses, "descontable_19", "activo_gasto");
+            const { saldo: real5, cuentas: cuentas5 } = await informesIvaCuentas.getSaldoSumadoPorCategoria(input.clienteId, input.anio, meses, "descontable_5", "activo_gasto");
+            const { saldo: devVenta19, cuentas: cuentasDevVenta19 } = await informesIvaCuentas.getSaldoSumadoPorCategoria(input.clienteId, input.anio, meses, "descontable_devolucion_venta_19", "activo_gasto");
+            const { saldo: devVenta5, cuentas: cuentasDevVenta5 } = await informesIvaCuentas.getSaldoSumadoPorCategoria(input.clienteId, input.anio, meses, "descontable_devolucion_venta_5", "activo_gasto");
 
             // Qué proporción de la base de compras (todas las tarifas)
             // está facturada electrónicamente — solo eso da derecho al
@@ -2278,48 +2228,15 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
             const pctFacturado = totalContabilidad > 0 ? (totalContabilidadFacturado / totalContabilidad) : null;
 
             return {
-              tarifa19: { base: totalPorClasificacion.gravado_19, esperado: esperado19, cuenta: cuenta19, real: real19, diferencia: real19 !== null ? esperado19 - real19 : null },
-              tarifa5: { base: totalPorClasificacion.gravado_5, esperado: esperado5, cuenta: cuenta5, real: real5, diferencia: real5 !== null ? esperado5 - real5 : null },
-              devolucionVenta19: { cuenta: cuentaDevVenta19, real: devVenta19 },
-              devolucionVenta5: { cuenta: cuentaDevVenta5, real: devVenta5 },
+              tarifa19: { base: totalPorClasificacion.gravado_19, esperado: esperado19, cuentas: cuentas19, real: real19, diferencia: real19 !== null ? esperado19 - real19 : null },
+              tarifa5: { base: totalPorClasificacion.gravado_5, esperado: esperado5, cuentas: cuentas5, real: real5, diferencia: real5 !== null ? esperado5 - real5 : null },
+              devolucionVenta19: { cuentas: cuentasDevVenta19, real: devVenta19 },
+              devolucionVenta5: { cuentas: cuentasDevVenta5, real: devVenta5 },
               pctFacturado, totalContabilidad, totalContabilidadFacturado,
             };
           }),
       }),
-      // Paso 6 — IVA transitorio: el IVA que acompaña los gastos y
-      // servicios (cuenta 5) vive en cuentas SEPARADAS del IVA
-      // descontable de compras (14/62). Según el Art. 490 E.T., solo se
-      // puede descontar en la proporción que representan los ingresos
-      // GRAVADOS (5%+19%) frente al total de ingresos relevantes
-      // (gravados + excluidos — los NO gravados no entran en la
-      // proporción); el resto del saldo transitorio se lleva al gasto
-      // como "IVA resultante de prorrateo".
       ivaTransitorio: router({
-        listarCuentas: protectedProcedure
-          .input(z.object({
-            clienteId: z.number(), anio: z.number(),
-            periodicidad: z.enum(["bimestral", "cuatrimestral", "anual"]), periodo: z.number(),
-          }))
-          .query(async ({ input, ctx }) => {
-            await assertClienteAccesibleInformes(ctx, input.clienteId);
-            const meses = informesIva.mesesDelPeriodo(input.periodicidad, input.periodo);
-            const cuentaMayor = await informesIvaCuentas.getCuentaMayorIva(input.clienteId);
-            const [diagnostico, cuentasTransitorio] = await Promise.all([
-              informesIvaCuentas.getCuentasPrefijoDelPeriodoConDiagnostico(input.clienteId, input.anio, meses, [cuentaMayor]),
-              informesIvaCuentas.getTransitorioCuentas(input.clienteId),
-            ]);
-            return { cuentas: diagnostico.cuentas, cuentasTransitorio, cuentaMayor, diagnostico };
-          }),
-        // Reemplaza la lista completa de cuentas de IVA transitorio — a
-        // diferencia de generado/descontable (una sola cuenta por
-        // tarifa), el transitorio suele repartirse en varias.
-        guardarConfig: protectedProcedure
-          .input(z.object({ clienteId: z.number(), cuentas: z.array(z.string()) }))
-          .mutation(async ({ input, ctx }) => {
-            await assertClienteAccesibleInformes(ctx, input.clienteId);
-            await informesIvaCuentas.guardarTransitorioCuentas(input.clienteId, input.cuentas, ctx.user.id);
-            return { success: true };
-          }),
         comparar: protectedProcedure
           .input(z.object({
             clienteId: z.number(), anio: z.number(),
@@ -2334,7 +2251,6 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
             if (!totalPorClasificacion) {
               throw new Error("Primero completa y guarda el Paso 2 (clasificación de ingresos) de este periodo.");
             }
-            const cuentas = await informesIvaCuentas.getTransitorioCuentas(input.clienteId);
             const meses = informesIva.mesesDelPeriodo(input.periodicidad, input.periodo);
 
             // Proporción del Art. 490 E.T. — solo gravado vs. (gravado +
@@ -2344,16 +2260,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
             const baseRelevante = baseGravada + baseExcluida;
             const proporcionDescontable = baseRelevante > 0 ? baseGravada / baseRelevante : null;
 
-            // El IVA transitorio se mueve por DÉBITO, igual que el
-            // descontable — misma corrección de signo. Se suma el saldo
-            // de TODAS las cuentas configuradas, una por una.
-            let saldoTransitorio: number | null = null;
-            if (cuentas.length > 0) {
-              saldoTransitorio = 0;
-              for (const cuenta of cuentas) {
-                saldoTransitorio += await informesIvaCuentas.getSaldoCuentaEnPeriodo(input.clienteId, input.anio, meses, cuenta, "activo_gasto");
-              }
-            }
+            const { saldo: saldoTransitorio, cuentas } = await informesIvaCuentas.getSaldoSumadoPorCategoria(input.clienteId, input.anio, meses, "transitorio", "activo_gasto");
             const montoDescontable = saldoTransitorio !== null && proporcionDescontable !== null ? saldoTransitorio * proporcionDescontable : null;
             const montoAGasto = saldoTransitorio !== null && montoDescontable !== null ? saldoTransitorio - montoDescontable : null;
 

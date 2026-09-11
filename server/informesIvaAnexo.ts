@@ -6,7 +6,7 @@ import { dibujarPiePaginaAreda } from "./rentaDb";
 
 // ==================== CÁLCULO (compartido entre Excel y PDF) ====================
 
-type LineaCuenta = { base: number; esperado: number; real: number | null; cuenta: string | null };
+type LineaCuenta = { base: number; esperado: number; real: number | null; cuentas: string[] };
 type DatosAnexoIva = {
   clienteNombre: string; anio: number; periodicidad: informesIva.Periodicidad; periodo: number;
   generado: { tarifa19: LineaCuenta; tarifa5: LineaCuenta; total: number };
@@ -40,43 +40,33 @@ async function calcularDatosAnexoIva(
   if (!totalIngresos) throw new Error("Falta completar y guardar el Paso 2 (clasificación de ingresos) antes de generar el Anexo.");
   if (!totalCompras) throw new Error("Falta completar y guardar el Paso 4 (clasificación de compras) antes de generar el Anexo — si esta empresa no tiene compras, márcalo en ese paso para poder continuar.");
 
-  const config = await informesIvaCuentas.getConfigCuentasIva(clienteId);
-  const cuentaDe = (tipo: informesIvaCuentas.TipoIva) => config.find(c => c.tipoIva === tipo)?.cuenta || null;
-  const saldoDe = async (cuenta: string | null, convencion: informesIvaCuentas.ConvencionSaldo = "pasivo") =>
-    cuenta ? informesIvaCuentas.getSaldoCuentaEnPeriodo(clienteId, anio, meses, cuenta, convencion) : null;
+  // La clasificación unificada de cuentas de IVA reemplaza el modelo
+  // anterior de "una cuenta por rol" — cada categoría puede sumar
+  // varias cuentas.
+  const saldoPor = (categoria: informesIvaCuentas.CategoriaIva, convencion: informesIvaCuentas.ConvencionSaldo) =>
+    informesIvaCuentas.getSaldoSumadoPorCategoria(clienteId, anio, meses, categoria, convencion);
 
-  const cuentaGen19 = cuentaDe("generado_19");
-  const cuentaGen5 = cuentaDe("generado_5");
+  const { saldo: realGen19, cuentas: cuentasGen19 } = await saldoPor("generado_19", "pasivo");
+  const { saldo: realGen5, cuentas: cuentasGen5 } = await saldoPor("generado_5", "pasivo");
   const esperadoGen19 = totalIngresos.gravado_19 * 0.19;
   const esperadoGen5 = totalIngresos.gravado_5 * 0.05;
-  const realGen19 = await saldoDe(cuentaGen19);
-  const realGen5 = await saldoDe(cuentaGen5);
   const totalDianEmitidoPorMes = await informesIva.getTotalDianEmitidoPorMes(clienteId, anio, meses);
   const totalDianEmitido = totalDianEmitidoPorMes.reduce((a, m) => a + (m.totalEmitidoDian ?? 0), 0);
   const totalFacturadoIngresos = estado.ingresos?.totalContabilidadFacturado ?? 0;
 
-  const cuentaDesc19 = cuentaDe("descontable_19");
-  const cuentaDesc5 = cuentaDe("descontable_5");
+  const { saldo: realDesc19, cuentas: cuentasDesc19 } = await saldoPor("descontable_19", "activo_gasto");
+  const { saldo: realDesc5, cuentas: cuentasDesc5 } = await saldoPor("descontable_5", "activo_gasto");
   const esperadoDesc19 = totalCompras.gravado_19 * 0.19;
   const esperadoDesc5 = totalCompras.gravado_5 * 0.05;
-  const realDesc19 = await saldoDe(cuentaDesc19, "activo_gasto");
-  const realDesc5 = await saldoDe(cuentaDesc5, "activo_gasto");
   const totalContabilidadCompras = estado.compras?.totalContabilidad ?? 0;
   const totalFacturadoCompras = estado.compras?.totalContabilidadFacturado ?? 0;
   const pctFacturadoCompras = totalContabilidadCompras > 0 ? totalFacturadoCompras / totalContabilidadCompras : null;
 
-  const cuentasTransitorio = await informesIvaCuentas.getTransitorioCuentas(clienteId);
+  const { saldo: saldoTransitorio, cuentas: cuentasTransitorio } = await saldoPor("transitorio", "activo_gasto");
   const baseGravadaTransitorio = totalIngresos.gravado_19 + totalIngresos.gravado_5;
   const baseExcluidaTransitorio = totalIngresos.excluido;
   const baseRelevanteTransitorio = baseGravadaTransitorio + baseExcluidaTransitorio;
   const proporcionTransitorio = baseRelevanteTransitorio > 0 ? baseGravadaTransitorio / baseRelevanteTransitorio : null;
-  let saldoTransitorio: number | null = null;
-  if (cuentasTransitorio.length > 0) {
-    saldoTransitorio = 0;
-    for (const cuenta of cuentasTransitorio) {
-      saldoTransitorio += await informesIvaCuentas.getSaldoCuentaEnPeriodo(clienteId, anio, meses, cuenta, "activo_gasto");
-    }
-  }
   const montoDescontableTransitorio = saldoTransitorio !== null && proporcionTransitorio !== null ? saldoTransitorio * proporcionTransitorio : null;
   const montoAGastoTransitorio = saldoTransitorio !== null && montoDescontableTransitorio !== null ? saldoTransitorio - montoDescontableTransitorio : null;
 
@@ -94,14 +84,14 @@ async function calcularDatosAnexoIva(
   return {
     clienteNombre, anio, periodicidad, periodo,
     generado: {
-      tarifa19: { base: totalIngresos.gravado_19, esperado: esperadoGen19, real: realGen19, cuenta: cuentaGen19 },
-      tarifa5: { base: totalIngresos.gravado_5, esperado: esperadoGen5, real: realGen5, cuenta: cuentaGen5 },
+      tarifa19: { base: totalIngresos.gravado_19, esperado: esperadoGen19, real: realGen19, cuentas: cuentasGen19 },
+      tarifa5: { base: totalIngresos.gravado_5, esperado: esperadoGen5, real: realGen5, cuentas: cuentasGen5 },
       total: totalIvaGenerado,
     },
     observacionDian: { totalFacturado: totalFacturadoIngresos, totalDianEmitido, diferencia: totalFacturadoIngresos - totalDianEmitido },
     descontableCompras: {
-      tarifa19: { base: totalCompras.gravado_19, esperado: esperadoDesc19, real: realDesc19, cuenta: cuentaDesc19 },
-      tarifa5: { base: totalCompras.gravado_5, esperado: esperadoDesc5, real: realDesc5, cuenta: cuentaDesc5 },
+      tarifa19: { base: totalCompras.gravado_19, esperado: esperadoDesc19, real: realDesc19, cuentas: cuentasDesc19 },
+      tarifa5: { base: totalCompras.gravado_5, esperado: esperadoDesc5, real: realDesc5, cuentas: cuentasDesc5 },
       total: totalIvaDescontableCompras,
     },
     observacionFacturado: { totalContabilidad: totalContabilidadCompras, totalFacturado: totalFacturadoCompras, pct: pctFacturadoCompras },
@@ -155,7 +145,7 @@ function encabezadoTabla(ws: ExcelJS.Worksheet, columnas: string[]) {
 
 function filaLineaExcel(ws: ExcelJS.Worksheet, tarifa: string, linea: LineaCuenta) {
   const diferencia = linea.real !== null ? linea.esperado - linea.real : null;
-  const estadoLinea = linea.cuenta ? estadoCuenta(diferencia, linea.esperado) : "sin_dato";
+  const estadoLinea = linea.cuentas.length > 0 ? estadoCuenta(diferencia, linea.esperado) : "sin_dato";
   const r = ws.addRow([tarifa, linea.base, linea.esperado, linea.real, ETIQUETA_ESTADO[estadoLinea]]);
   if (estadoLinea === "diferencia") r.eachCell(c => c.fill = ALERTA_FILL);
   if (estadoLinea === "cuadra") r.eachCell(c => c.fill = OK_FILL);
@@ -321,10 +311,10 @@ export async function generarAnexoIvaPdf(
   tituloAnexo("1. IVA GENERADO");
   for (const { tarifa, linea } of [{ tarifa: "19%", linea: d.generado.tarifa19 }, { tarifa: "5%", linea: d.generado.tarifa5 }]) {
     const diferencia = linea.real !== null ? linea.esperado - linea.real : null;
-    const estadoLinea = linea.cuenta ? estadoCuenta(diferencia, linea.esperado) : "sin_dato";
+    const estadoLinea = linea.cuentas.length > 0 ? estadoCuenta(diferencia, linea.esperado) : "sin_dato";
     filaTexto(`Base gravada ${tarifa}`, fmt(linea.base), { indent: 8 });
     filaTexto(`IVA calculado ${tarifa}`, fmt(linea.esperado), { indent: 8 });
-    filaTexto(`Valor real en cuenta${linea.cuenta ? ` (${linea.cuenta})` : ""}`, linea.real !== null ? fmt(linea.real) : "—", { indent: 8 });
+    filaTexto(`Valor real en cuentas${linea.cuentas.length > 0 ? ` (${linea.cuentas.join(", ")})` : ""}`, linea.real !== null ? fmt(linea.real) : "—", { indent: 8 });
     filaTexto(`Estado ${tarifa}`, ETIQUETA_ESTADO_PDF[estadoLinea], { indent: 8, color: estadoLinea === "diferencia" ? "#b91c1c" : estadoLinea === "cuadra" ? "#15803d" : "#555555" });
     doc.moveDown(0.15);
   }
@@ -341,10 +331,10 @@ export async function generarAnexoIvaPdf(
   tituloAnexo("2. IVA DESCONTABLE — COMPRAS");
   for (const { tarifa, linea } of [{ tarifa: "19%", linea: d.descontableCompras.tarifa19 }, { tarifa: "5%", linea: d.descontableCompras.tarifa5 }]) {
     const diferencia = linea.real !== null ? linea.esperado - linea.real : null;
-    const estadoLinea = linea.cuenta ? estadoCuenta(diferencia, linea.esperado) : "sin_dato";
+    const estadoLinea = linea.cuentas.length > 0 ? estadoCuenta(diferencia, linea.esperado) : "sin_dato";
     filaTexto(`Base gravada ${tarifa}`, fmt(linea.base), { indent: 8 });
     filaTexto(`IVA calculado ${tarifa}`, fmt(linea.esperado), { indent: 8 });
-    filaTexto(`Valor real en cuenta${linea.cuenta ? ` (${linea.cuenta})` : ""}`, linea.real !== null ? fmt(linea.real) : "—", { indent: 8 });
+    filaTexto(`Valor real en cuentas${linea.cuentas.length > 0 ? ` (${linea.cuentas.join(", ")})` : ""}`, linea.real !== null ? fmt(linea.real) : "—", { indent: 8 });
     filaTexto(`Estado ${tarifa}`, ETIQUETA_ESTADO_PDF[estadoLinea], { indent: 8, color: estadoLinea === "diferencia" ? "#b91c1c" : estadoLinea === "cuadra" ? "#15803d" : "#555555" });
     doc.moveDown(0.15);
   }

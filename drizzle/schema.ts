@@ -708,6 +708,31 @@ export const informesIvaTransitorioCuentas = mysqlTable("informesIvaTransitorioC
 }));
 export type InformeIvaTransitorioCuenta = typeof informesIvaTransitorioCuentas.$inferSelect;
 
+/** Clasificación, POR CLIENTE, de CADA cuenta de IVA (24xx) en su
+ * categoría correspondiente — generado 19%/5%, descontable 19%/5%,
+ * transitorio, y las devoluciones. A diferencia del modelo anterior
+ * (una sola cuenta configurada por rol), aquí CADA cuenta se clasifica
+ * individualmente, y VARIAS cuentas pueden compartir la misma
+ * categoría (el sistema suma todas las que compartan una) — igual
+ * criterio que ya se usa para clasificar las cuentas de ingreso.
+ * Reemplaza el uso de `informesConfigCuentasIva` para estos roles
+ * (esa tabla se sigue usando solo para "cuenta_mayor"). */
+export const informesClasificacionCuentasIva = mysqlTable("informesClasificacionCuentasIva", {
+  id: int("id").autoincrement().primaryKey(),
+  clienteId: int("clienteId").notNull(),
+  cuenta: varchar("cuenta", { length: 20 }).notNull(),
+  categoria: mysqlEnum("categoria", [
+    "generado_19", "generado_5", "descontable_19", "descontable_5", "transitorio",
+    "generado_devolucion_compra_19", "generado_devolucion_compra_5",
+    "descontable_devolucion_venta_19", "descontable_devolucion_venta_5",
+  ]).notNull(),
+  actualizadoPorId: int("actualizadoPorId").notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (table) => ({
+  clienteCuentaIdx: uniqueIndex("informesClasificacionCuentasIva_cliente_cuenta_idx").on(table.clienteId, table.cuenta),
+}));
+export type InformeClasificacionCuentaIva = typeof informesClasificacionCuentasIva.$inferSelect;
+
 /** Configuración, POR CLIENTE, de qué cuenta contable corresponde a cada
  * rol de IVA — generado 19%/5% (Fase 3), descontable 19%/5% (Fase 5), y
  * transitorio (Fase 6). En la mayoría de los casos es una sub-cuenta de

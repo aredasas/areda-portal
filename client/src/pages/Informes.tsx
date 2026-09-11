@@ -621,6 +621,7 @@ function IvaTab({ clienteId, anio }: { clienteId: number; anio: number }) {
             ) : conciliacionQuery.data ? (
               <div className="space-y-4">
                 <IngresosIvaCard clienteId={clienteId} anio={anio} periodicidad={periodicidad} periodo={periodo} />
+                <ClasificacionCuentasIvaCard clienteId={clienteId} anio={anio} periodicidad={periodicidad} periodo={periodo} />
                 <IvaGeneradoCard clienteId={clienteId} anio={anio} periodicidad={periodicidad} periodo={periodo} />
                 <ComprasIvaCard clienteId={clienteId} anio={anio} periodicidad={periodicidad} periodo={periodo} />
                 <IvaDescontableCard clienteId={clienteId} anio={anio} periodicidad={periodicidad} periodo={periodo} />
@@ -948,11 +949,194 @@ function IngresosIvaCard({ clienteId, anio, periodicidad, periodo }: {
   );
 }
 
-/** Paso 3 de la conciliación de IVA — confirma cuál cuenta contable
- * corresponde al IVA generado al 19% y al 5% (casi siempre sub-cuentas
- * de la 2408), y cotejar que la tarifa aplicada sobre la base ya
- * clasificada en el paso de ingresos sea igual al valor real de esa
- * cuenta. */
+/** Nombres legibles de cada categoría de IVA, usados en el selector de
+ * clasificación y en los resúmenes. */
+const NOMBRES_CATEGORIA_IVA: Record<string, string> = {
+  generado_19: "IVA generado 19%",
+  generado_5: "IVA generado 5%",
+  descontable_19: "IVA descontable 19%",
+  descontable_5: "IVA descontable 5%",
+  transitorio: "IVA transitorio",
+  generado_devolucion_compra_19: "Generado — devolución en compra 19%",
+  generado_devolucion_compra_5: "Generado — devolución en compra 5%",
+  descontable_devolucion_venta_19: "Descontable — devolución en venta 19%",
+  descontable_devolucion_venta_5: "Descontable — devolución en venta 5%",
+};
+
+/** Paso 3 · Clasificación de cuentas de IVA — reemplaza los selectores
+ * de cuenta que antes estaban dispersos en cada paso (generado,
+ * descontable, transitorio): aquí se listan TODAS las cuentas 24xx del
+ * periodo de una sola vez (igual que en ingresos) y se clasifica cada
+ * una en su categoría — permitiendo VARIAS cuentas por categoría, ya
+ * que en la práctica cada una puede tener más de una cuenta. */
+function ClasificacionCuentasIvaCard({ clienteId, anio, periodicidad, periodo }: {
+  clienteId: number; anio: number; periodicidad: "bimestral" | "cuatrimestral" | "anual"; periodo: number;
+}) {
+  const listarQuery = trpc.informes.iva.clasificacionCuentas.listar.useQuery({ clienteId, anio, periodicidad, periodo });
+  const utils = trpc.useUtils();
+  const [clasificacionLocal, setClasificacionLocal] = useState<Record<string, string>>({});
+  const [inicializado, setInicializado] = useState(false);
+  const [cuentaMayorLocal, setCuentaMayorLocal] = useState("24");
+  const [editandoCuentaMayor, setEditandoCuentaMayor] = useState(false);
+
+  if (!inicializado && listarQuery.data) {
+    const inicial: Record<string, string> = {};
+    for (const c of listarQuery.data.cuentas) if (c.categoria) inicial[c.cuenta] = c.categoria;
+    setClasificacionLocal(inicial);
+    setCuentaMayorLocal(listarQuery.data.cuentaMayor || "24");
+    setInicializado(true);
+  }
+
+  // Al guardar aquí, se invalidan las 3 comparaciones que dependen de
+  // esta clasificación, para que se recalculen solas sin recargar.
+  const refrescarComparaciones = () => {
+    utils.informes.iva.ivaGenerado.comparar.invalidate({ clienteId, anio, periodicidad, periodo });
+    utils.informes.iva.ivaDescontable.comparar.invalidate({ clienteId, anio, periodicidad, periodo });
+    utils.informes.iva.ivaTransitorio.comparar.invalidate({ clienteId, anio, periodicidad, periodo });
+  };
+
+  const guardarMutation = trpc.informes.iva.clasificacionCuentas.guardarClasificacion.useMutation({
+    onSuccess: () => { toast.success("Clasificación de cuentas de IVA guardada"); listarQuery.refetch(); refrescarComparaciones(); },
+    onError: (err) => toast.error(err.message || "No se pudo guardar"),
+  });
+
+  const guardarCuentaMayorMutation = trpc.informes.iva.clasificacionCuentas.guardarCuentaMayor.useMutation({
+    onSuccess: () => { toast.success("Cuenta mayor de IVA actualizada"); setEditandoCuentaMayor(false); listarQuery.refetch(); },
+    onError: (err) => toast.error(err.message || "No se pudo guardar"),
+  });
+
+  const fmt = (n: number) => `$${Math.round(n).toLocaleString("es-CO")}`;
+
+  if (listarQuery.isLoading) {
+    return (
+      <div className="flex items-center justify-center gap-2 py-6 text-sm text-muted-foreground">
+        <Loader2 className="w-5 h-5 animate-spin" /> Cargando cuentas del periodo, puede tardar unos segundos con archivos grandes...
+      </div>
+    );
+  }
+
+  return (
+    <div className="border rounded-md p-3 space-y-3">
+      <p className="text-xs font-medium text-muted-foreground">Paso 3 · Clasificación de cuentas de IVA</p>
+
+      <div className="flex items-center gap-2 text-xs">
+        <span className="text-muted-foreground">Cuenta mayor de IVA:</span>
+        {editandoCuentaMayor ? (
+          <>
+            <Input value={cuentaMayorLocal} onChange={(e) => setCuentaMayorLocal(e.target.value)} className="w-24 h-7 text-xs" />
+            <Button size="sm" className="h-7 text-xs" disabled={guardarCuentaMayorMutation.isPending} onClick={() => guardarCuentaMayorMutation.mutate({ clienteId, cuenta: cuentaMayorLocal })}>
+              Guardar
+            </Button>
+            <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => { setEditandoCuentaMayor(false); setCuentaMayorLocal(listarQuery.data?.cuentaMayor || "24"); }}>
+              Cancelar
+            </Button>
+          </>
+        ) : (
+          <>
+            <span className="font-medium">{listarQuery.data?.cuentaMayor || "24"}</span>
+            <Button size="sm" variant="link" className="h-7 text-xs p-0" onClick={() => setEditandoCuentaMayor(true)}>
+              {(listarQuery.data?.cuentaMayor || "24") === "24" ? "¿No es la 24? Cambiar" : "Editar"}
+            </Button>
+          </>
+        )}
+      </div>
+
+      {(!listarQuery.data || listarQuery.data.cuentas.length === 0) ? (
+        <div className="text-xs text-muted-foreground space-y-1">
+          {(() => {
+            const d = listarQuery.data?.diagnostico;
+            if (!d) return <p>Cargando diagnóstico...</p>;
+            if (d.mesesConArchivo === 0) {
+              return (
+                <p className="text-amber-700 flex items-center gap-1.5">
+                  <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                  No se encontró el libro auxiliar cargado para ningún mes de este periodo ({d.totalMeses} mes(es)) —
+                  ve a "Estado de Resultados" y confirma que esté cargado.
+                </p>
+              );
+            }
+            if (d.mesesConColumnaCuentaConfiable === 0) {
+              return (
+                <p className="text-amber-700 flex items-center gap-1.5">
+                  <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                  El libro auxiliar está cargado para {d.mesesConArchivo} de {d.totalMeses} mes(es), pero no se
+                  pudo identificar con confianza la columna de código de cuenta en el archivo.
+                </p>
+              );
+            }
+            return (
+              <p>
+                No se encontró movimiento en cuentas que empiecen en "{listarQuery.data?.cuentaMayor || "24"}" en
+                este periodo — confirma la cuenta mayor arriba.
+              </p>
+            );
+          })()}
+        </div>
+      ) : (
+        <>
+          <p className="text-xs text-muted-foreground">
+            Clasifica cada cuenta en su categoría de IVA — si una categoría tiene varias cuentas (es
+            frecuente, sobre todo en el transitorio), clasifícalas todas con la misma opción; el sistema
+            las suma. Se guarda por cliente, para los siguientes periodos también.
+          </p>
+          <div className="space-y-1.5">
+            {listarQuery.data.cuentas.map((c: any) => (
+              <div key={c.cuenta} className="flex items-center justify-between gap-2 text-sm border-b pb-1.5 last:border-b-0">
+                <div className="flex-1 min-w-0">
+                  <span className="font-medium">{c.cuenta}</span> <span className="text-muted-foreground truncate">{c.nombre}</span>
+                </div>
+                <span className="shrink-0 w-32 text-right text-xs">{fmt(c.valor)}</span>
+                <Select
+                  value={clasificacionLocal[c.cuenta] || "__sin_clasificar__"}
+                  onValueChange={(v) => setClasificacionLocal(prev => {
+                    const copia = { ...prev };
+                    if (v === "__sin_clasificar__") delete copia[c.cuenta];
+                    else copia[c.cuenta] = v;
+                    return copia;
+                  })}
+                >
+                  <SelectTrigger className="w-56 shrink-0 h-8 text-xs"><SelectValue placeholder="Clasificar..." /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__sin_clasificar__">Sin clasificar</SelectItem>
+                    {Object.entries(NOMBRES_CATEGORIA_IVA).map(([valor, nombre]) => (
+                      <SelectItem key={valor} value={valor}>{nombre}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            ))}
+          </div>
+
+          <Button
+            size="sm" disabled={guardarMutation.isPending}
+            onClick={() => guardarMutation.mutate({
+              clienteId,
+              clasificaciones: Object.entries(clasificacionLocal).map(([cuenta, categoria]) => ({ cuenta, categoria: categoria as any })),
+            })}
+          >
+            {guardarMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-2" /> : null}
+            Guardar clasificación
+          </Button>
+
+          <div className="border-t pt-2 space-y-1">
+            <p className="text-xs font-medium text-muted-foreground">Resumen por categoría</p>
+            {Object.entries(NOMBRES_CATEGORIA_IVA).map(([categoria, nombre]) => {
+              const cuentasDeCategoria = listarQuery.data!.cuentas.filter((c: any) => (clasificacionLocal[c.cuenta] || null) === categoria);
+              if (cuentasDeCategoria.length === 0) return null;
+              return (
+                <div key={categoria} className="flex items-center justify-between text-xs">
+                  <span className="text-muted-foreground">{nombre} ({cuentasDeCategoria.length} cuenta(s))</span>
+                  <span>{fmt(cuentasDeCategoria.reduce((a: number, c: any) => a + c.valor, 0))}</span>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function ComprasIvaCard({ clienteId, anio, periodicidad, periodo }: {
   clienteId: number; anio: number; periodicidad: "bimestral" | "cuatrimestral" | "anual"; periodo: number;
 }) {
@@ -1365,241 +1549,74 @@ function ComprasIvaCard({ clienteId, anio, periodicidad, periodo }: {
 function IvaGeneradoCard({ clienteId, anio, periodicidad, periodo }: {
   clienteId: number; anio: number; periodicidad: "bimestral" | "cuatrimestral" | "anual"; periodo: number;
 }) {
-  const [cuenta19Local, setCuenta19Local] = useState("");
-  const [cuenta5Local, setCuenta5Local] = useState("");
-  const [cuentaDevCompra19Local, setCuentaDevCompra19Local] = useState("");
-  const [cuentaDevCompra5Local, setCuentaDevCompra5Local] = useState("");
-  const [cuentaMayorLocal, setCuentaMayorLocal] = useState("24");
-  const [editandoCuentaMayor, setEditandoCuentaMayor] = useState(false);
-  const [inicializado, setInicializado] = useState(false);
-
-  const listarQuery = trpc.informes.iva.ivaGenerado.listarCuentas.useQuery({ clienteId, anio, periodicidad, periodo });
-  if (!inicializado && listarQuery.data) {
-    setCuenta19Local(listarQuery.data.cuentaGenerado19 || "");
-    setCuenta5Local(listarQuery.data.cuentaGenerado5 || "");
-    setCuentaDevCompra19Local(listarQuery.data.cuentaDevolucionCompra19 || "");
-    setCuentaDevCompra5Local(listarQuery.data.cuentaDevolucionCompra5 || "");
-    setCuentaMayorLocal(listarQuery.data.cuentaMayor || "24");
-    setInicializado(true);
-  }
-
-  const guardarConfigMutation = trpc.informes.iva.ivaGenerado.guardarConfig.useMutation({
-    onSuccess: () => { toast.success("Configuración de cuentas de IVA generado guardada"); listarQuery.refetch(); compararQuery.refetch(); },
-    onError: (err) => toast.error(err.message || "No se pudo guardar"),
-  });
-
-  const guardarCuentaMayorMutation = trpc.informes.iva.ivaGenerado.guardarCuentaMayor.useMutation({
-    onSuccess: () => { toast.success("Cuenta mayor de IVA actualizada"); setEditandoCuentaMayor(false); listarQuery.refetch(); },
-    onError: (err) => toast.error(err.message || "No se pudo guardar"),
-  });
-
-  // Habilitada según lo que ya está SELECCIONADO en pantalla (no lo que
-  // trajo la carga inicial) — así la comparación aparece de inmediato la
-  // primera vez que se configura una cuenta, sin depender de que
-  // `listarQuery` se haya refrescado.
-  const compararQuery = trpc.informes.iva.ivaGenerado.comparar.useQuery(
-    { clienteId, anio, periodicidad, periodo },
-    { enabled: !!(cuenta19Local || cuenta5Local) },
-  );
-
+  const compararQuery = trpc.informes.iva.ivaGenerado.comparar.useQuery({ clienteId, anio, periodicidad, periodo });
   const fmt = (n: number) => `$${Math.round(n).toLocaleString("es-CO")}`;
-
-  if (listarQuery.isLoading) {
-    return (
-      <div className="flex items-center justify-center gap-2 py-6 text-sm text-muted-foreground">
-        <Loader2 className="w-5 h-5 animate-spin" /> Cargando información del periodo, puede tardar unos segundos con archivos grandes...
-      </div>
-    );
-  }
 
   return (
     <div className="border rounded-md p-3 space-y-3">
-      <p className="text-xs font-medium text-muted-foreground">Paso 3 · IVA generado</p>
+      <p className="text-xs font-medium text-muted-foreground">IVA generado (resultado)</p>
+      <p className="text-xs text-muted-foreground">
+        Se calcula a partir de las cuentas que hayas marcado como "IVA generado" en la clasificación de
+        cuentas de IVA de arriba.
+      </p>
 
-      <div className="flex items-center gap-2 text-xs">
-        <span className="text-muted-foreground">Cuenta mayor de IVA:</span>
-        {editandoCuentaMayor ? (
-          <>
-            <Input value={cuentaMayorLocal} onChange={(e) => setCuentaMayorLocal(e.target.value)} className="w-24 h-7 text-xs" />
-            <Button size="sm" className="h-7 text-xs" disabled={guardarCuentaMayorMutation.isPending} onClick={() => guardarCuentaMayorMutation.mutate({ clienteId, cuenta: cuentaMayorLocal })}>
-              Guardar
-            </Button>
-            <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => { setEditandoCuentaMayor(false); setCuentaMayorLocal(listarQuery.data?.cuentaMayor || "24"); }}>
-              Cancelar
-            </Button>
-          </>
-        ) : (
-          <>
-            <span className="font-medium">{listarQuery.data?.cuentaMayor || "24"}</span>
-            <Button size="sm" variant="link" className="h-7 text-xs p-0" onClick={() => setEditandoCuentaMayor(true)}>
-              {(listarQuery.data?.cuentaMayor || "24") === "24" ? "¿No es la 24? Cambiar" : "Editar"}
-            </Button>
-          </>
-        )}
-      </div>
+      {compararQuery.isFetching && (
+        <p className="text-xs text-muted-foreground flex items-center gap-1.5">
+          <Loader2 className="w-3.5 h-3.5 animate-spin" /> Calculando la comparación, puede tardar unos segundos con archivos grandes...
+        </p>
+      )}
 
-      {(!listarQuery.data || listarQuery.data.cuentas.length === 0) ? (
-        <div className="text-xs text-muted-foreground space-y-1">
-          {(() => {
-            const d = listarQuery.data?.diagnostico;
-            if (!d) return <p>Cargando diagnóstico...</p>;
-            if (d.mesesConArchivo === 0) {
-              return (
-                <p className="text-amber-700 flex items-center gap-1.5">
-                  <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                  No se encontró el libro auxiliar cargado para ningún mes de este periodo ({d.totalMeses} mes(es)) —
-                  ve a "Estado de Resultados" y confirma que esté cargado.
-                </p>
-              );
+      {compararQuery.isError && (
+        <p className="text-xs text-red-600 flex items-center gap-1.5">
+          <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+          {compararQuery.error?.message || "No se pudo calcular la comparación."}
+        </p>
+      )}
+
+      {compararQuery.data && !compararQuery.isFetching && (
+        <div className="space-y-3">
+          <p className="text-xs font-medium text-muted-foreground">Comparación — tarifa × base vs. valor contable real</p>
+          {(["tarifa19", "tarifa5"] as const).map((clave) => {
+            const t = compararQuery.data[clave];
+            const tarifa = clave === "tarifa19" ? "19%" : "5%";
+            if (t.cuentas.length === 0) {
+              return <p key={clave} className="text-xs text-muted-foreground">IVA {tarifa}: sin cuentas clasificadas todavía.</p>;
             }
-            if (d.mesesConColumnaCuentaConfiable === 0) {
-              return (
-                <p className="text-amber-700 flex items-center gap-1.5">
-                  <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                  El libro auxiliar está cargado para {d.mesesConArchivo} de {d.totalMeses} mes(es), pero no se
-                  pudo identificar con confianza la columna de código de cuenta en el archivo — revisa que
-                  tenga una columna de código contable con valores numéricos (no el nombre de la cuenta).
-                </p>
-              );
-            }
+            const cuadra = t.diferencia !== null && Math.abs(t.diferencia) <= Math.max(5, Math.abs(t.esperado) * 0.001);
             return (
-              <p>
-                El libro auxiliar está cargado y la columna de cuenta se identificó, pero no se encontró
-                ningún movimiento en cuentas que empiecen en "{listarQuery.data?.cuentaMayor || "24"}" en este
-                periodo — confirma la cuenta mayor arriba.
-              </p>
+              <div key={clave} className="text-sm space-y-1 border-b pb-2 last:border-b-0">
+                <p className="font-medium">IVA generado {tarifa} — {t.cuentas.length} cuenta(s): {t.cuentas.join(", ")}</p>
+                <div className="flex justify-between text-xs"><span className="text-muted-foreground">Base gravada</span><span>{fmt(t.base)}</span></div>
+                <div className="flex justify-between text-xs"><span className="text-muted-foreground">IVA esperado (tarifa × base)</span><span>{fmt(t.esperado)}</span></div>
+                <div className="flex justify-between text-xs"><span className="text-muted-foreground">Valor real en las cuentas</span><span>{t.real !== null ? fmt(t.real) : "—"}</span></div>
+                {t.diferencia !== null && (
+                  cuadra ? (
+                    <p className="text-xs text-green-700 flex items-center gap-1.5"><CheckCircle2 className="w-3.5 h-3.5 shrink-0" /> Cuadra</p>
+                  ) : (
+                    <p className="text-xs text-red-600 flex items-center gap-1.5"><AlertCircle className="w-3.5 h-3.5 shrink-0" /> Diferencia de {fmt(t.diferencia)}</p>
+                  )
+                )}
+              </div>
             );
-          })()}
-        </div>
-      ) : (
-        <>
-          <p className="text-xs text-muted-foreground">
-            Elige, de las cuentas 24xx con movimiento en el periodo, cuál es la de IVA generado al 19% y cuál
-            la del 5%. Se guarda por cliente, para los siguientes periodos también.
-          </p>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1">
-              <Label className="text-xs">Cuenta IVA generado 19%</Label>
-              <Select value={cuenta19Local} onValueChange={setCuenta19Local}>
-                <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Elegir cuenta..." /></SelectTrigger>
-                <SelectContent>
-                  {listarQuery.data.cuentas.map((c: any) => (
-                    <SelectItem key={c.cuenta} value={c.cuenta}>{c.cuenta} — {c.nombre} ({fmt(c.valor)})</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1">
-              <Label className="text-xs">Cuenta IVA generado 5%</Label>
-              <Select value={cuenta5Local} onValueChange={setCuenta5Local}>
-                <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Elegir cuenta..." /></SelectTrigger>
-                <SelectContent>
-                  {listarQuery.data.cuentas.map((c: any) => (
-                    <SelectItem key={c.cuenta} value={c.cuenta}>{c.cuenta} — {c.nombre} ({fmt(c.valor)})</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-
-          <p className="text-xs text-muted-foreground pt-1">
-            Opcional — si el cliente maneja devoluciones en compra, elige también las cuentas donde se
-            registra el IVA generado por esas devoluciones (se revierte el descontable que se había tomado).
-          </p>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1">
-              <Label className="text-xs">Cuenta IVA generado en devolución en compra 19%</Label>
-              <Select value={cuentaDevCompra19Local} onValueChange={setCuentaDevCompra19Local}>
-                <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Elegir cuenta..." /></SelectTrigger>
-                <SelectContent>
-                  {listarQuery.data.cuentas.map((c: any) => (
-                    <SelectItem key={c.cuenta} value={c.cuenta}>{c.cuenta} — {c.nombre} ({fmt(c.valor)})</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1">
-              <Label className="text-xs">Cuenta IVA generado en devolución en compra 5%</Label>
-              <Select value={cuentaDevCompra5Local} onValueChange={setCuentaDevCompra5Local}>
-                <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Elegir cuenta..." /></SelectTrigger>
-                <SelectContent>
-                  {listarQuery.data.cuentas.map((c: any) => (
-                    <SelectItem key={c.cuenta} value={c.cuenta}>{c.cuenta} — {c.nombre} ({fmt(c.valor)})</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-          <Button
-            size="sm" disabled={guardarConfigMutation.isPending || (!cuenta19Local && !cuenta5Local && !cuentaDevCompra19Local && !cuentaDevCompra5Local)}
-            onClick={() => guardarConfigMutation.mutate({
-              clienteId, cuentaGenerado19: cuenta19Local || undefined, cuentaGenerado5: cuenta5Local || undefined,
-              cuentaDevolucionCompra19: cuentaDevCompra19Local || undefined, cuentaDevolucionCompra5: cuentaDevCompra5Local || undefined,
-            })}
-          >
-            {guardarConfigMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-2" /> : null}
-            Guardar configuración
-          </Button>
-
-          {compararQuery.isFetching && (
-            <p className="text-xs text-muted-foreground flex items-center gap-1.5 border-t pt-3">
-              <Loader2 className="w-3.5 h-3.5 animate-spin" /> Calculando la comparación, puede tardar unos segundos con archivos grandes...
-            </p>
-          )}
-
-          {compararQuery.isError && (
-            <p className="text-xs text-red-600 flex items-center gap-1.5 border-t pt-3">
-              <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-              {compararQuery.error?.message || "No se pudo calcular la comparación."}
-            </p>
-          )}
-
-          {compararQuery.data && !compararQuery.isFetching && (
-            <div className="border-t pt-3 space-y-3">
-              <p className="text-xs font-medium text-muted-foreground">Comparación — tarifa × base vs. valor contable real</p>
-              {(["tarifa19", "tarifa5"] as const).map((clave) => {
-                const t = compararQuery.data[clave];
-                const tarifa = clave === "tarifa19" ? "19%" : "5%";
-                if (!t.cuenta) {
-                  return <p key={clave} className="text-xs text-muted-foreground">IVA {tarifa}: sin cuenta configurada todavía.</p>;
-                }
-                const cuadra = t.diferencia !== null && Math.abs(t.diferencia) <= Math.max(5, Math.abs(t.esperado) * 0.001);
-                return (
-                  <div key={clave} className="text-sm space-y-1 border-b pb-2 last:border-b-0">
-                    <p className="font-medium">IVA generado {tarifa} — cuenta {t.cuenta}</p>
-                    <div className="flex justify-between text-xs"><span className="text-muted-foreground">Base gravada</span><span>{fmt(t.base)}</span></div>
-                    <div className="flex justify-between text-xs"><span className="text-muted-foreground">IVA esperado (tarifa × base)</span><span>{fmt(t.esperado)}</span></div>
-                    <div className="flex justify-between text-xs"><span className="text-muted-foreground">Valor real en la cuenta</span><span>{t.real !== null ? fmt(t.real) : "—"}</span></div>
-                    {t.diferencia !== null && (
-                      cuadra ? (
-                        <p className="text-xs text-green-700 flex items-center gap-1.5"><CheckCircle2 className="w-3.5 h-3.5 shrink-0" /> Cuadra</p>
-                      ) : (
-                        <p className="text-xs text-red-600 flex items-center gap-1.5"><AlertCircle className="w-3.5 h-3.5 shrink-0" /> Diferencia de {fmt(t.diferencia)}</p>
-                      )
-                    )}
-                  </div>
-                );
-              })}
-              {(compararQuery.data.devolucionCompra19.cuenta || compararQuery.data.devolucionCompra5.cuenta) && (
-                <div className="border-t pt-2 space-y-1">
-                  <p className="text-xs font-medium text-muted-foreground">IVA generado en devoluciones en compra (referencia, sin base de comparación todavía)</p>
-                  {compararQuery.data.devolucionCompra19.cuenta && (
-                    <div className="flex justify-between text-xs">
-                      <span className="text-muted-foreground">19% — cuenta {compararQuery.data.devolucionCompra19.cuenta}</span>
-                      <span>{compararQuery.data.devolucionCompra19.real !== null ? fmt(compararQuery.data.devolucionCompra19.real) : "—"}</span>
-                    </div>
-                  )}
-                  {compararQuery.data.devolucionCompra5.cuenta && (
-                    <div className="flex justify-between text-xs">
-                      <span className="text-muted-foreground">5% — cuenta {compararQuery.data.devolucionCompra5.cuenta}</span>
-                      <span>{compararQuery.data.devolucionCompra5.real !== null ? fmt(compararQuery.data.devolucionCompra5.real) : "—"}</span>
-                    </div>
-                  )}
+          })}
+          {(compararQuery.data.devolucionCompra19.cuentas.length > 0 || compararQuery.data.devolucionCompra5.cuentas.length > 0) && (
+            <div className="border-t pt-2 space-y-1">
+              <p className="text-xs font-medium text-muted-foreground">IVA generado en devoluciones en compra (referencia, sin base de comparación todavía)</p>
+              {compararQuery.data.devolucionCompra19.cuentas.length > 0 && (
+                <div className="flex justify-between text-xs">
+                  <span className="text-muted-foreground">19% — {compararQuery.data.devolucionCompra19.cuentas.join(", ")}</span>
+                  <span>{compararQuery.data.devolucionCompra19.real !== null ? fmt(compararQuery.data.devolucionCompra19.real) : "—"}</span>
+                </div>
+              )}
+              {compararQuery.data.devolucionCompra5.cuentas.length > 0 && (
+                <div className="flex justify-between text-xs">
+                  <span className="text-muted-foreground">5% — {compararQuery.data.devolucionCompra5.cuentas.join(", ")}</span>
+                  <span>{compararQuery.data.devolucionCompra5.real !== null ? fmt(compararQuery.data.devolucionCompra5.real) : "—"}</span>
                 </div>
               )}
             </div>
           )}
-        </>
+        </div>
       )}
     </div>
   );
@@ -1608,238 +1625,99 @@ function IvaGeneradoCard({ clienteId, anio, periodicidad, periodo }: {
 function IvaDescontableCard({ clienteId, anio, periodicidad, periodo }: {
   clienteId: number; anio: number; periodicidad: "bimestral" | "cuatrimestral" | "anual"; periodo: number;
 }) {
-  const [cuenta19Local, setCuenta19Local] = useState("");
-  const [cuenta5Local, setCuenta5Local] = useState("");
-  const [cuentaDevVenta19Local, setCuentaDevVenta19Local] = useState("");
-  const [cuentaDevVenta5Local, setCuentaDevVenta5Local] = useState("");
-  const [inicializado, setInicializado] = useState(false);
-
-  const listarQuery = trpc.informes.iva.ivaDescontable.listarCuentas.useQuery({ clienteId, anio, periodicidad, periodo });
-  if (!inicializado && listarQuery.data) {
-    setCuenta19Local(listarQuery.data.cuentaDescontable19 || "");
-    setCuenta5Local(listarQuery.data.cuentaDescontable5 || "");
-    setCuentaDevVenta19Local(listarQuery.data.cuentaDevolucionVenta19 || "");
-    setCuentaDevVenta5Local(listarQuery.data.cuentaDevolucionVenta5 || "");
-    setInicializado(true);
-  }
-
-  const guardarConfigMutation = trpc.informes.iva.ivaDescontable.guardarConfig.useMutation({
-    onSuccess: () => { toast.success("Configuración de cuentas de IVA descontable guardada"); listarQuery.refetch(); compararQuery.refetch(); },
-    onError: (err: any) => toast.error(err.message || "No se pudo guardar"),
-  });
-
-  // Habilitada según lo que ya está SELECCIONADO en pantalla (no lo que
-  // trajo la carga inicial) — así la comparación aparece de inmediato la
-  // primera vez que se configura una cuenta, sin depender de que
-  // `listarQuery` se haya refrescado.
-  const compararQuery = trpc.informes.iva.ivaDescontable.comparar.useQuery(
-    { clienteId, anio, periodicidad, periodo },
-    { enabled: !!(cuenta19Local || cuenta5Local) },
-  );
-
+  const compararQuery = trpc.informes.iva.ivaDescontable.comparar.useQuery({ clienteId, anio, periodicidad, periodo });
   const fmt = (n: number) => `$${Math.round(n).toLocaleString("es-CO")}`;
-
-  if (listarQuery.isLoading) {
-    return (
-      <div className="flex items-center justify-center gap-2 py-6 text-sm text-muted-foreground">
-        <Loader2 className="w-5 h-5 animate-spin" /> Cargando información del periodo, puede tardar unos segundos con archivos grandes...
-      </div>
-    );
-  }
 
   return (
     <div className="border rounded-md p-3 space-y-3">
-      <p className="text-xs font-medium text-muted-foreground">Paso 5 · IVA descontable</p>
+      <p className="text-xs font-medium text-muted-foreground">IVA descontable (resultado)</p>
+      <p className="text-xs text-muted-foreground">
+        Se calcula a partir de las cuentas que hayas marcado como "IVA descontable" en la clasificación de
+        cuentas de IVA de arriba.
+      </p>
 
-      <div className="flex items-center gap-2 text-xs">
-        <span className="text-muted-foreground">Cuenta mayor de IVA:</span>
-        <span className="font-medium">{listarQuery.data?.cuentaMayor || "24"}</span>
-        <span className="text-muted-foreground">(se edita desde el Paso 3)</span>
-      </div>
+      {compararQuery.isFetching && (
+        <p className="text-xs text-muted-foreground flex items-center gap-1.5">
+          <Loader2 className="w-3.5 h-3.5 animate-spin" /> Calculando la comparación, puede tardar unos segundos con archivos grandes...
+        </p>
+      )}
 
-      {(!listarQuery.data || listarQuery.data.cuentas.length === 0) ? (
-        <div className="text-xs text-muted-foreground space-y-1">
-          {(() => {
-            const d = listarQuery.data?.diagnostico;
-            if (!d) return <p>Cargando diagnóstico...</p>;
-            if (d.mesesConArchivo === 0) {
-              return (
-                <p className="text-amber-700 flex items-center gap-1.5">
-                  <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                  No se encontró el libro auxiliar cargado para ningún mes de este periodo ({d.totalMeses} mes(es)) —
-                  ve a "Estado de Resultados" y confirma que esté cargado.
-                </p>
-              );
+      {compararQuery.isError && (
+        <p className="text-xs text-red-600 flex items-center gap-1.5">
+          <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+          {compararQuery.error?.message || "No se pudo calcular la comparación."}
+        </p>
+      )}
+
+      {compararQuery.data && !compararQuery.isFetching && (
+        <div className="space-y-3">
+          <p className="text-xs font-medium text-muted-foreground">Comparación — tarifa × base vs. valor contable real</p>
+          {(["tarifa19", "tarifa5"] as const).map((clave) => {
+            const t = compararQuery.data[clave];
+            const tarifa = clave === "tarifa19" ? "19%" : "5%";
+            if (t.cuentas.length === 0) {
+              return <p key={clave} className="text-xs text-muted-foreground">IVA {tarifa}: sin cuentas clasificadas todavía.</p>;
             }
-            if (d.mesesConColumnaCuentaConfiable === 0) {
-              return (
-                <p className="text-amber-700 flex items-center gap-1.5">
-                  <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                  El libro auxiliar está cargado para {d.mesesConArchivo} de {d.totalMeses} mes(es), pero no se
-                  pudo identificar con confianza la columna de código de cuenta en el archivo — revisa que
-                  tenga una columna de código contable con valores numéricos (no el nombre de la cuenta).
-                </p>
-              );
-            }
+            const cuadra = t.diferencia !== null && Math.abs(t.diferencia) <= Math.max(5, Math.abs(t.esperado) * 0.001);
             return (
-              <p>
-                El libro auxiliar está cargado y la columna de cuenta se identificó, pero no se encontró
-                ningún movimiento en cuentas que empiecen en "{listarQuery.data?.cuentaMayor || "24"}" en este
-                periodo — confirma la cuenta mayor arriba.
-              </p>
+              <div key={clave} className="text-sm space-y-1 border-b pb-2 last:border-b-0">
+                <p className="font-medium">IVA descontable {tarifa} — {t.cuentas.length} cuenta(s): {t.cuentas.join(", ")}</p>
+                <div className="flex justify-between text-xs"><span className="text-muted-foreground">Base gravada</span><span>{fmt(t.base)}</span></div>
+                <div className="flex justify-between text-xs"><span className="text-muted-foreground">IVA esperado (tarifa × base)</span><span>{fmt(t.esperado)}</span></div>
+                <div className="flex justify-between text-xs"><span className="text-muted-foreground">Valor real en las cuentas</span><span>{t.real !== null ? fmt(t.real) : "—"}</span></div>
+                {t.diferencia !== null && (
+                  cuadra ? (
+                    <p className="text-xs text-green-700 flex items-center gap-1.5"><CheckCircle2 className="w-3.5 h-3.5 shrink-0" /> Cuadra</p>
+                  ) : (
+                    <p className="text-xs text-red-600 flex items-center gap-1.5"><AlertCircle className="w-3.5 h-3.5 shrink-0" /> Diferencia de {fmt(t.diferencia)}</p>
+                  )
+                )}
+              </div>
             );
-          })()}
+          })}
+          {(compararQuery.data.devolucionVenta19.cuentas.length > 0 || compararQuery.data.devolucionVenta5.cuentas.length > 0) && (
+            <div className="border-t pt-2 space-y-1">
+              <p className="text-xs font-medium text-muted-foreground">IVA descontable en devoluciones en venta (referencia, sin base de comparación todavía)</p>
+              {compararQuery.data.devolucionVenta19.cuentas.length > 0 && (
+                <div className="flex justify-between text-xs">
+                  <span className="text-muted-foreground">19% — {compararQuery.data.devolucionVenta19.cuentas.join(", ")}</span>
+                  <span>{compararQuery.data.devolucionVenta19.real !== null ? fmt(compararQuery.data.devolucionVenta19.real) : "—"}</span>
+                </div>
+              )}
+              {compararQuery.data.devolucionVenta5.cuentas.length > 0 && (
+                <div className="flex justify-between text-xs">
+                  <span className="text-muted-foreground">5% — {compararQuery.data.devolucionVenta5.cuentas.join(", ")}</span>
+                  <span>{compararQuery.data.devolucionVenta5.real !== null ? fmt(compararQuery.data.devolucionVenta5.real) : "—"}</span>
+                </div>
+              )}
+            </div>
+          )}
+          {compararQuery.data.pctFacturado !== null && (
+            <div className="border-t pt-2 space-y-1">
+              <p className="text-xs font-medium text-muted-foreground">Compras facturadas electrónicamente</p>
+              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Total compras (todas las tarifas)</span><span>{fmt(compararQuery.data.totalContabilidad)}</span></div>
+              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Facturado electrónicamente</span><span>{fmt(compararQuery.data.totalContabilidadFacturado)} ({Math.round(compararQuery.data.pctFacturado * 100)}%)</span></div>
+              {compararQuery.data.pctFacturado < 0.95 && (
+                <p className="text-xs text-amber-700 flex items-center gap-1.5">
+                  <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                  Una parte importante de las compras no está marcada como facturada — en la práctica,
+                  solo lo facturado da derecho al IVA descontable. Revisa el Paso 4 si esto no es lo
+                  esperado.
+                </p>
+              )}
+            </div>
+          )}
         </div>
-      ) : (
-        <>
-          <p className="text-xs text-muted-foreground">
-            Elige, de las cuentas 24xx con movimiento en el periodo, cuál es la de IVA descontable al 19% y cuál
-            la del 5%. Se guarda por cliente, para los siguientes periodos también.
-          </p>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1">
-              <Label className="text-xs">Cuenta IVA descontable 19%</Label>
-              <Select value={cuenta19Local} onValueChange={setCuenta19Local}>
-                <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Elegir cuenta..." /></SelectTrigger>
-                <SelectContent>
-                  {listarQuery.data.cuentas.map((c: any) => (
-                    <SelectItem key={c.cuenta} value={c.cuenta}>{c.cuenta} — {c.nombre} ({fmt(c.valor)})</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1">
-              <Label className="text-xs">Cuenta IVA descontable 5%</Label>
-              <Select value={cuenta5Local} onValueChange={setCuenta5Local}>
-                <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Elegir cuenta..." /></SelectTrigger>
-                <SelectContent>
-                  {listarQuery.data.cuentas.map((c: any) => (
-                    <SelectItem key={c.cuenta} value={c.cuenta}>{c.cuenta} — {c.nombre} ({fmt(c.valor)})</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-
-          <p className="text-xs text-muted-foreground pt-1">
-            Opcional — si el cliente maneja devoluciones en venta, elige también las cuentas donde se
-            registra el IVA descontable por esas devoluciones (se revierte el generado que se había cobrado).
-          </p>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1">
-              <Label className="text-xs">Cuenta IVA descontable en devolución en venta 19%</Label>
-              <Select value={cuentaDevVenta19Local} onValueChange={setCuentaDevVenta19Local}>
-                <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Elegir cuenta..." /></SelectTrigger>
-                <SelectContent>
-                  {listarQuery.data.cuentas.map((c: any) => (
-                    <SelectItem key={c.cuenta} value={c.cuenta}>{c.cuenta} — {c.nombre} ({fmt(c.valor)})</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1">
-              <Label className="text-xs">Cuenta IVA descontable en devolución en venta 5%</Label>
-              <Select value={cuentaDevVenta5Local} onValueChange={setCuentaDevVenta5Local}>
-                <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Elegir cuenta..." /></SelectTrigger>
-                <SelectContent>
-                  {listarQuery.data.cuentas.map((c: any) => (
-                    <SelectItem key={c.cuenta} value={c.cuenta}>{c.cuenta} — {c.nombre} ({fmt(c.valor)})</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-          <Button
-            size="sm" disabled={guardarConfigMutation.isPending || (!cuenta19Local && !cuenta5Local && !cuentaDevVenta19Local && !cuentaDevVenta5Local)}
-            onClick={() => guardarConfigMutation.mutate({
-              clienteId, cuentaDescontable19: cuenta19Local || undefined, cuentaDescontable5: cuenta5Local || undefined,
-              cuentaDevolucionVenta19: cuentaDevVenta19Local || undefined, cuentaDevolucionVenta5: cuentaDevVenta5Local || undefined,
-            })}
-          >
-            {guardarConfigMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-2" /> : null}
-            Guardar configuración
-          </Button>
-
-          {compararQuery.isFetching && (
-            <p className="text-xs text-muted-foreground flex items-center gap-1.5 border-t pt-3">
-              <Loader2 className="w-3.5 h-3.5 animate-spin" /> Calculando la comparación, puede tardar unos segundos con archivos grandes...
-            </p>
-          )}
-
-          {compararQuery.isError && (
-            <p className="text-xs text-red-600 flex items-center gap-1.5 border-t pt-3">
-              <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-              {compararQuery.error?.message || "No se pudo calcular la comparación."}
-            </p>
-          )}
-
-          {compararQuery.data && !compararQuery.isFetching && (
-            <div className="border-t pt-3 space-y-3">
-              <p className="text-xs font-medium text-muted-foreground">Comparación — tarifa × base vs. valor contable real</p>
-              {(["tarifa19", "tarifa5"] as const).map((clave) => {
-                const t = compararQuery.data[clave];
-                const tarifa = clave === "tarifa19" ? "19%" : "5%";
-                if (!t.cuenta) {
-                  return <p key={clave} className="text-xs text-muted-foreground">IVA {tarifa}: sin cuenta configurada todavía.</p>;
-                }
-                const cuadra = t.diferencia !== null && Math.abs(t.diferencia) <= Math.max(5, Math.abs(t.esperado) * 0.001);
-                return (
-                  <div key={clave} className="text-sm space-y-1 border-b pb-2 last:border-b-0">
-                    <p className="font-medium">IVA descontable {tarifa} — cuenta {t.cuenta}</p>
-                    <div className="flex justify-between text-xs"><span className="text-muted-foreground">Base gravada</span><span>{fmt(t.base)}</span></div>
-                    <div className="flex justify-between text-xs"><span className="text-muted-foreground">IVA esperado (tarifa × base)</span><span>{fmt(t.esperado)}</span></div>
-                    <div className="flex justify-between text-xs"><span className="text-muted-foreground">Valor real en la cuenta</span><span>{t.real !== null ? fmt(t.real) : "—"}</span></div>
-                    {t.diferencia !== null && (
-                      cuadra ? (
-                        <p className="text-xs text-green-700 flex items-center gap-1.5"><CheckCircle2 className="w-3.5 h-3.5 shrink-0" /> Cuadra</p>
-                      ) : (
-                        <p className="text-xs text-red-600 flex items-center gap-1.5"><AlertCircle className="w-3.5 h-3.5 shrink-0" /> Diferencia de {fmt(t.diferencia)}</p>
-                      )
-                    )}
-                  </div>
-                );
-              })}
-              {(compararQuery.data.devolucionVenta19.cuenta || compararQuery.data.devolucionVenta5.cuenta) && (
-                <div className="border-t pt-2 space-y-1">
-                  <p className="text-xs font-medium text-muted-foreground">IVA descontable en devoluciones en venta (referencia, sin base de comparación todavía)</p>
-                  {compararQuery.data.devolucionVenta19.cuenta && (
-                    <div className="flex justify-between text-xs">
-                      <span className="text-muted-foreground">19% — cuenta {compararQuery.data.devolucionVenta19.cuenta}</span>
-                      <span>{compararQuery.data.devolucionVenta19.real !== null ? fmt(compararQuery.data.devolucionVenta19.real) : "—"}</span>
-                    </div>
-                  )}
-                  {compararQuery.data.devolucionVenta5.cuenta && (
-                    <div className="flex justify-between text-xs">
-                      <span className="text-muted-foreground">5% — cuenta {compararQuery.data.devolucionVenta5.cuenta}</span>
-                      <span>{compararQuery.data.devolucionVenta5.real !== null ? fmt(compararQuery.data.devolucionVenta5.real) : "—"}</span>
-                    </div>
-                  )}
-                </div>
-              )}
-              {compararQuery.data.pctFacturado !== null && (
-                <div className="border-t pt-2 space-y-1">
-                  <p className="text-xs font-medium text-muted-foreground">Compras facturadas electrónicamente</p>
-                  <div className="flex justify-between text-xs"><span className="text-muted-foreground">Total compras (todas las tarifas)</span><span>{fmt(compararQuery.data.totalContabilidad)}</span></div>
-                  <div className="flex justify-between text-xs"><span className="text-muted-foreground">Facturado electrónicamente</span><span>{fmt(compararQuery.data.totalContabilidadFacturado)} ({Math.round(compararQuery.data.pctFacturado * 100)}%)</span></div>
-                  {compararQuery.data.pctFacturado < 0.95 && (
-                    <p className="text-xs text-amber-700 flex items-center gap-1.5">
-                      <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                      Una parte importante de las compras no está marcada como facturada — en la práctica,
-                      solo lo facturado da derecho al IVA descontable. Revisa el Paso 4 si esto no es lo
-                      esperado.
-                    </p>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-        </>
       )}
     </div>
   );
 }
 
-
+/** Paso 6 de la conciliación de IVA — el IVA transitorio (que acompaña
+ * gastos/servicios de la cuenta 5, en cuentas SEPARADAS del IVA
+ * descontable de compras) solo se puede descontar en la misma
+ * proporción que representan los ingresos gravados frente al total de
+ * ingresos relevantes (Art. 490 E.T.) — el resto va al gasto. */
 /** Paso 6 de la conciliación de IVA — el IVA transitorio (que acompaña
  * gastos/servicios de la cuenta 5, en cuentas SEPARADAS del IVA
  * descontable de compras) solo se puede descontar en la misma
@@ -1848,134 +1726,43 @@ function IvaDescontableCard({ clienteId, anio, periodicidad, periodo }: {
 function IvaTransitorioCard({ clienteId, anio, periodicidad, periodo }: {
   clienteId: number; anio: number; periodicidad: "bimestral" | "cuatrimestral" | "anual"; periodo: number;
 }) {
-  const [cuentasLocal, setCuentasLocal] = useState<string[]>([]);
-  const [inicializado, setInicializado] = useState(false);
-
-  const listarQuery = trpc.informes.iva.ivaTransitorio.listarCuentas.useQuery({ clienteId, anio, periodicidad, periodo });
-  if (!inicializado && listarQuery.data) {
-    setCuentasLocal(listarQuery.data.cuentasTransitorio || []);
-    setInicializado(true);
-  }
-
-  const guardarConfigMutation = trpc.informes.iva.ivaTransitorio.guardarConfig.useMutation({
-    onSuccess: () => { toast.success("Cuentas de IVA transitorio guardadas"); listarQuery.refetch(); compararQuery.refetch(); },
-    onError: (err: any) => toast.error(err.message || "No se pudo guardar"),
-  });
-
-  // Habilitada según lo ya seleccionado en pantalla, no lo que trajo la
-  // carga inicial — mismo criterio que Pasos 3 y 5, para que la
-  // comparación aparezca de inmediato al elegir alguna cuenta.
-  const compararQuery = trpc.informes.iva.ivaTransitorio.comparar.useQuery(
-    { clienteId, anio, periodicidad, periodo },
-    { enabled: cuentasLocal.length > 0 },
-  );
-
+  const compararQuery = trpc.informes.iva.ivaTransitorio.comparar.useQuery({ clienteId, anio, periodicidad, periodo });
   const fmt = (n: number) => `$${Math.round(n).toLocaleString("es-CO")}`;
-  const toggleCuenta = (cuenta: string) => {
-    setCuentasLocal(prev => prev.includes(cuenta) ? prev.filter(c => c !== cuenta) : [...prev, cuenta]);
-  };
-
-  if (listarQuery.isLoading) {
-    return (
-      <div className="flex items-center justify-center gap-2 py-6 text-sm text-muted-foreground">
-        <Loader2 className="w-5 h-5 animate-spin" /> Cargando cuentas del periodo...
-      </div>
-    );
-  }
 
   return (
     <div className="border rounded-md p-3 space-y-3">
-      <p className="text-xs font-medium text-muted-foreground">Paso 6 · IVA transitorio (Art. 490 E.T.)</p>
+      <p className="text-xs font-medium text-muted-foreground">IVA transitorio (Art. 490 E.T.) — resultado</p>
+      <p className="text-xs text-muted-foreground">
+        Se calcula a partir de las cuentas que hayas marcado como "IVA transitorio" en la clasificación de
+        cuentas de IVA de arriba.
+      </p>
 
-      <div className="flex items-center gap-2 text-xs">
-        <span className="text-muted-foreground">Cuenta mayor de IVA:</span>
-        <span className="font-medium">{listarQuery.data?.cuentaMayor || "24"}</span>
-        <span className="text-muted-foreground">(se edita desde el Paso 3)</span>
-      </div>
+      {compararQuery.isFetching && (
+        <p className="text-xs text-muted-foreground flex items-center gap-1.5">
+          <Loader2 className="w-3.5 h-3.5 animate-spin" /> Calculando el prorrateo, puede tardar unos segundos con archivos grandes...
+        </p>
+      )}
 
-      {(!listarQuery.data || listarQuery.data.cuentas.length === 0) ? (
-        <div className="text-xs text-muted-foreground space-y-1">
-          {(() => {
-            const d = listarQuery.data?.diagnostico;
-            if (!d) return <p>Cargando diagnóstico...</p>;
-            if (d.mesesConArchivo === 0) {
-              return (
-                <p className="text-amber-700 flex items-center gap-1.5">
-                  <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                  No se encontró el libro auxiliar cargado para ningún mes de este periodo ({d.totalMeses} mes(es)) —
-                  ve a "Estado de Resultados" y confirma que esté cargado.
-                </p>
-              );
-            }
-            if (d.mesesConColumnaCuentaConfiable === 0) {
-              return (
-                <p className="text-amber-700 flex items-center gap-1.5">
-                  <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                  El libro auxiliar está cargado para {d.mesesConArchivo} de {d.totalMeses} mes(es), pero no se
-                  pudo identificar con confianza la columna de código de cuenta en el archivo.
-                </p>
-              );
-            }
-            return (
-              <p>
-                No se encontró movimiento en cuentas que empiecen en "{listarQuery.data?.cuentaMayor || "24"}" en
-                este periodo — confirma la cuenta mayor en el Paso 3.
-              </p>
-            );
-          })()}
-        </div>
-      ) : (
-        <>
-          <p className="text-xs text-muted-foreground">
-            Marca, de las cuentas 24xx con movimiento en el periodo, TODAS las que juntas conforman el IVA
-            transitorio de este cliente (suele repartirse en varias cuentas, no solo una). Se suman todas.
-            Se guarda por cliente, para los siguientes periodos también.
-          </p>
-          <div className="flex flex-wrap gap-1">
-            {listarQuery.data.cuentas.map((c: any) => {
-              const marcada = cuentasLocal.includes(c.cuenta);
-              return (
-                <button
-                  key={c.cuenta} type="button" onClick={() => toggleCuenta(c.cuenta)}
-                  className={`text-xs px-2 py-1 rounded-md border ${marcada ? "bg-orange-600 text-white border-orange-600" : "bg-white text-muted-foreground border-input hover:bg-muted"}`}
-                  title={`${c.nombre} — ${fmt(c.valor)}`}
-                >
-                  {c.cuenta}
-                </button>
-              );
-            })}
+      {compararQuery.isError && (
+        <p className="text-xs text-red-600 flex items-center gap-1.5">
+          <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+          {compararQuery.error?.message || "No se pudo calcular el prorrateo."}
+        </p>
+      )}
+
+      {compararQuery.data && !compararQuery.isFetching && (
+        <div className="space-y-2">
+          <p className="text-xs font-medium text-muted-foreground">Prorrateo (Art. 490 E.T.)</p>
+          <div className="flex justify-between text-xs"><span className="text-muted-foreground">Ingresos gravados (5%+19%)</span><span>{fmt(compararQuery.data.baseGravada)}</span></div>
+          <div className="flex justify-between text-xs"><span className="text-muted-foreground">Ingresos excluidos</span><span>{fmt(compararQuery.data.baseExcluida)}</span></div>
+          <div className="flex justify-between text-xs">
+            <span className="text-muted-foreground">Proporción descontable</span>
+            <span>{compararQuery.data.proporcionDescontable !== null ? `${(compararQuery.data.proporcionDescontable * 100).toFixed(1)}%` : "—"}</span>
           </div>
-          <p className="text-xs text-muted-foreground">En naranja = incluida en el IVA transitorio.</p>
-          <Button
-            size="sm" disabled={guardarConfigMutation.isPending || cuentasLocal.length === 0}
-            onClick={() => guardarConfigMutation.mutate({ clienteId, cuentas: cuentasLocal })}
-          >
-            {guardarConfigMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-2" /> : null}
-            Guardar configuración
-          </Button>
-
-          {compararQuery.isFetching && (
-            <p className="text-xs text-muted-foreground flex items-center gap-1.5 border-t pt-3">
-              <Loader2 className="w-3.5 h-3.5 animate-spin" /> Calculando el prorrateo, puede tardar unos segundos con archivos grandes...
-            </p>
-          )}
-
-          {compararQuery.isError && (
-            <p className="text-xs text-red-600 flex items-center gap-1.5 border-t pt-3">
-              <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-              {compararQuery.error?.message || "No se pudo calcular el prorrateo."}
-            </p>
-          )}
-
-          {compararQuery.data && !compararQuery.isFetching && (
-            <div className="border-t pt-3 space-y-2">
-              <p className="text-xs font-medium text-muted-foreground">Prorrateo (Art. 490 E.T.)</p>
-              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Ingresos gravados (5%+19%)</span><span>{fmt(compararQuery.data.baseGravada)}</span></div>
-              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Ingresos excluidos</span><span>{fmt(compararQuery.data.baseExcluida)}</span></div>
-              <div className="flex justify-between text-xs">
-                <span className="text-muted-foreground">Proporción descontable</span>
-                <span>{compararQuery.data.proporcionDescontable !== null ? `${(compararQuery.data.proporcionDescontable * 100).toFixed(1)}%` : "—"}</span>
-              </div>
+          {compararQuery.data.cuentas.length === 0 ? (
+            <p className="text-xs text-muted-foreground">Sin cuentas de IVA transitorio clasificadas todavía.</p>
+          ) : (
+            <>
               <div className="flex justify-between text-xs"><span className="text-muted-foreground">Saldo IVA transitorio ({compararQuery.data.cuentas.length} cuenta(s): {compararQuery.data.cuentas.join(", ")})</span><span>{compararQuery.data.saldoTransitorio !== null ? fmt(compararQuery.data.saldoTransitorio) : "—"}</span></div>
               <div className="flex justify-between text-sm font-medium border-t pt-1">
                 <span>Se descuenta en la declaración de IVA</span>
@@ -1985,16 +1772,16 @@ function IvaTransitorioCard({ clienteId, anio, periodicidad, periodo }: {
                 <span>Va al gasto (IVA resultante de prorrateo)</span>
                 <span>{compararQuery.data.montoAGasto !== null ? fmt(compararQuery.data.montoAGasto) : "—"}</span>
               </div>
-              {compararQuery.data.proporcionDescontable === null && (
-                <p className="text-xs text-amber-700 flex items-center gap-1.5">
-                  <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                  No hay ingresos gravados ni excluidos registrados en el Paso 2 — revisa la clasificación de
-                  ingresos antes de continuar.
-                </p>
-              )}
-            </div>
+            </>
           )}
-        </>
+          {compararQuery.data.proporcionDescontable === null && (
+            <p className="text-xs text-amber-700 flex items-center gap-1.5">
+              <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+              No hay ingresos gravados ni excluidos registrados en el Paso 2 — revisa la clasificación de
+              ingresos antes de continuar.
+            </p>
+          )}
+        </div>
       )}
     </div>
   );

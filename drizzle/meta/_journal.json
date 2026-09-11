@@ -386,6 +386,13 @@
       "when": 1789092889290,
       "tag": "0054_iva_transitorio_cuentas",
       "breakpoints": true
+    },
+    {
+      "idx": 55,
+      "version": "5",
+      "when": 1789098154710,
+      "tag": "0055_clasificacion_cuentas_iva",
+      "breakpoints": true
     }
   ]
 }

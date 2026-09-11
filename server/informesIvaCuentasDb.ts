@@ -1,7 +1,7 @@
 import { and, eq, inArray } from "drizzle-orm";
 import { leerFilasXlsxRobusto } from "./xlsxRobusto";
 import { getDb } from "./db";
-import { informesConfigCuentasIva, informesCuentasCliente, informesCuentasPuc, informesComprasTiposExcluidos, informesIvaTransitorioCuentas, type InformeConfigCuentaIva } from "../drizzle/schema";
+import { informesConfigCuentasIva, informesCuentasCliente, informesCuentasPuc, informesComprasTiposExcluidos, informesIvaTransitorioCuentas, informesClasificacionCuentasIva, type InformeConfigCuentaIva } from "../drizzle/schema";
 import { getCargaConArchivo, normalizarCuentaPUC } from "./informesDb";
 import { storageGetBuffer } from "./storage";
 import { resolverColumnasAuxiliarDian, type ColsAuxiliarDian } from "./informesDianDb";
@@ -10,6 +10,12 @@ export type TipoIva =
   | "generado_19" | "generado_5" | "descontable_19" | "descontable_5" | "transitorio" | "cuenta_mayor"
   | "generado_devolucion_compra_19" | "generado_devolucion_compra_5"
   | "descontable_devolucion_venta_19" | "descontable_devolucion_venta_5";
+
+/** Igual que `TipoIva`, pero sin "cuenta_mayor" — esa sigue siendo un
+ * valor único (no una cuenta específica clasificable), mientras que
+ * estas 9 categorías son las que se le asignan a cada cuenta 24xx en
+ * la clasificación unificada. */
+export type CategoriaIva = Exclude<TipoIva, "cuenta_mayor">;
 
 const CUENTA_MAYOR_IVA_DEFECTO = "24";
 
@@ -366,4 +372,68 @@ export async function guardarTransitorioCuentas(clienteId: number, cuentas: stri
     if (!cuenta.trim()) continue;
     await db.insert(informesIvaTransitorioCuentas).values({ clienteId, cuenta: cuenta.trim(), actualizadoPorId: userId });
   }
+}
+
+/** Clasificación unificada de cuentas de IVA (24xx) — reemplaza el
+ * modelo anterior de "una sola cuenta por rol": ahora cada cuenta se
+ * clasifica individualmente en una de las 9 categorías, y VARIAS
+ * cuentas pueden compartir la misma (el sistema suma todas). Devuelve
+ * un mapa cuenta→categoría.
+ *
+ * Respaldo automático: si esta tabla todavía está vacía para el
+ * cliente (nunca se ha usado la clasificación unificada), se arma el
+ * mapa a partir de la configuración VIEJA (`informesConfigCuentasIva`
+ * con una cuenta por rol, y `informesIvaTransitorioCuentas`) — así no
+ * se pierde lo que el cliente ya tenía configurado en Fases 3/5/6. Esto
+ * solo se ve en pantalla hasta que se guarde por primera vez con el
+ * modelo nuevo; no persiste nada automáticamente. */
+export async function getClasificacionCuentasIva(clienteId: number): Promise<Map<string, CategoriaIva>> {
+  const db = await getDb();
+  if (!db) return new Map();
+  const filas = await db.select().from(informesClasificacionCuentasIva).where(eq(informesClasificacionCuentasIva.clienteId, clienteId));
+  if (filas.length > 0) return new Map(filas.map(f => [f.cuenta, f.categoria as CategoriaIva]));
+
+  const mapa = new Map<string, CategoriaIva>();
+  const configVieja = await db.select().from(informesConfigCuentasIva).where(eq(informesConfigCuentasIva.clienteId, clienteId));
+  for (const c of configVieja) {
+    if (c.tipoIva === "cuenta_mayor") continue;
+    mapa.set(c.cuenta, c.tipoIva as CategoriaIva);
+  }
+  const transitorioViejo = await db.select().from(informesIvaTransitorioCuentas).where(eq(informesIvaTransitorioCuentas.clienteId, clienteId));
+  for (const t of transitorioViejo) {
+    if (!mapa.has(t.cuenta)) mapa.set(t.cuenta, "transitorio");
+  }
+  return mapa;
+}
+
+/** Reemplaza la clasificación completa de cuentas de IVA de este
+ * cliente — cada cuenta con su categoría (o se omite si quedó "sin
+ * clasificar"). */
+export async function guardarClasificacionCuentasIva(
+  clienteId: number, clasificaciones: { cuenta: string; categoria: CategoriaIva }[], userId: number,
+): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.delete(informesClasificacionCuentasIva).where(eq(informesClasificacionCuentasIva.clienteId, clienteId));
+  for (const c of clasificaciones) {
+    if (!c.cuenta.trim()) continue;
+    await db.insert(informesClasificacionCuentasIva).values({ clienteId, cuenta: c.cuenta.trim(), categoria: c.categoria, actualizadoPorId: userId });
+  }
+}
+
+/** Suma el saldo real de TODAS las cuentas clasificadas bajo una
+ * categoría — usado por las comparaciones de generado/descontable/
+ * transitorio, que ya no dependen de una sola cuenta configurada sino
+ * de cuantas se hayan marcado con esa categoría. */
+export async function getSaldoSumadoPorCategoria(
+  clienteId: number, anio: number, meses: number[], categoria: CategoriaIva, convencion: ConvencionSaldo,
+): Promise<{ saldo: number | null; cuentas: string[] }> {
+  const mapa = await getClasificacionCuentasIva(clienteId);
+  const cuentas = Array.from(mapa.entries()).filter(([, cat]) => cat === categoria).map(([cuenta]) => cuenta);
+  if (cuentas.length === 0) return { saldo: null, cuentas: [] };
+  let saldo = 0;
+  for (const cuenta of cuentas) {
+    saldo += await getSaldoCuentaEnPeriodo(clienteId, anio, meses, cuenta, convencion);
+  }
+  return { saldo, cuentas };
 }
