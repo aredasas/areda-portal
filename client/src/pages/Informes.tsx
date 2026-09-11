@@ -985,18 +985,52 @@ function ComprasIvaCard({ clienteId, anio, periodicidad, periodo }: {
     onError: (err) => toast.error(err.message || "No se pudo guardar la división"),
   });
 
+  const marcarSinComprasMutation = trpc.informes.iva.compras.marcarSinCompras.useMutation({
+    onSuccess: (_data, variables) => {
+      toast.success(variables.marcar ? "Marcado: esta empresa no tiene compras — puedes continuar al Paso 5" : "Desmarcado — vuelve a clasificar las cuentas normalmente");
+      listarQuery.refetch();
+    },
+    onError: (err) => toast.error(err.message || "No se pudo guardar"),
+  });
+
   const fmt = (n: number) => `$${Math.round(n).toLocaleString("es-CO")}`;
   const toggleExcluido = (tipo: string) => {
     setExcluidosLocal(prev => prev.includes(tipo) ? prev.filter(t => t !== tipo) : [...prev, tipo]);
   };
 
   if (listarQuery.isLoading) return <div className="flex justify-center py-6"><Loader2 className="w-5 h-5 animate-spin" /></div>;
+
+  if (listarQuery.data?.sinCompras) {
+    return (
+      <div className="border rounded-md p-3 space-y-2">
+        <p className="text-sm text-green-700 flex items-center gap-1.5"><CheckCircle2 className="w-4 h-4 shrink-0" /> Marcado: esta empresa no tiene compras en las cuentas 14/62 para este periodo.</p>
+        <p className="text-xs text-muted-foreground">
+          Puedes continuar al Paso 5 — ahí puedes configurar el IVA descontable por devoluciones en venta si
+          aplica, que no depende de tener compras.
+        </p>
+        <Button size="sm" variant="outline" disabled={marcarSinComprasMutation.isPending} onClick={() => marcarSinComprasMutation.mutate({ clienteId, anio, periodicidad, periodo, marcar: false })}>
+          {marcarSinComprasMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-2" /> : null}
+          Esta empresa sí tiene compras — desmarcar
+        </Button>
+      </div>
+    );
+  }
   if (!listarQuery.data || listarQuery.data.cuentas.length === 0) {
     return (
-      <p className="text-xs text-muted-foreground border rounded-md p-3">
-        No se encontraron cuentas de compras (cuenta 14 o 62) con movimiento en los meses de este periodo —
-        confirma que el libro auxiliar de esos meses esté cargado correctamente.
-      </p>
+      <div className="border rounded-md p-3 space-y-2">
+        <p className="text-xs text-muted-foreground">
+          No se encontraron cuentas de compras (cuenta 14 o 62) con movimiento en los meses de este periodo —
+          confirma que el libro auxiliar de esos meses esté cargado correctamente.
+        </p>
+        <p className="text-xs text-muted-foreground">
+          Si esta empresa (ej. de servicios) realmente no tiene compras gravables, márcalo para poder
+          continuar al Paso 5 sin quedar detenido aquí.
+        </p>
+        <Button size="sm" variant="outline" disabled={marcarSinComprasMutation.isPending} onClick={() => marcarSinComprasMutation.mutate({ clienteId, anio, periodicidad, periodo, marcar: true })}>
+          {marcarSinComprasMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-2" /> : null}
+          Esta empresa no tiene compras (cuentas 14 y 62)
+        </Button>
+      </div>
     );
   }
 

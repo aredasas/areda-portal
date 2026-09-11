@@ -2025,11 +2025,30 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           .query(async ({ input, ctx }) => {
             await assertClienteAccesibleInformes(ctx, input.clienteId);
             const meses = informesIva.mesesDelPeriodo(input.periodicidad, input.periodo);
-            const [cuentas, totalDianPorMes] = await Promise.all([
+            const [cuentas, totalDianPorMes, expediente] = await Promise.all([
               informesIva.getCuentasComprasDelPeriodo(input.clienteId, input.anio, meses, input.periodicidad, input.periodo),
               informesIva.getTotalDianRecibidoComprasPorMes(input.clienteId, input.anio, meses),
+              informesIva.getConciliacionIva(input.clienteId, input.anio, input.periodicidad, input.periodo),
             ]);
-            return { cuentas, totalDianPorMes };
+            let sinCompras = false;
+            try {
+              const estado = expediente?.estadoJson ? JSON.parse(expediente.estadoJson) : {};
+              sinCompras = !!estado.compras?.sinCompras;
+            } catch { /* estado inválido — se asume false */ }
+            return { cuentas, totalDianPorMes, sinCompras };
+          }),
+        // Para empresas que no tienen compras gravables en las cuentas
+        // 14/62 (ej. algunas de servicios) — sin esto, el Paso 4 se
+        // quedaba sin nada que guardar, bloqueando el paso al Paso 5.
+        marcarSinCompras: protectedProcedure
+          .input(z.object({
+            clienteId: z.number(), anio: z.number(),
+            periodicidad: z.enum(["bimestral", "cuatrimestral", "anual"]), periodo: z.number(),
+            marcar: z.boolean(),
+          }))
+          .mutation(async ({ input, ctx }) => {
+            await assertClienteAccesibleInformes(ctx, input.clienteId);
+            return informesIva.guardarSinCompras(input.clienteId, input.anio, input.periodicidad, input.periodo, input.marcar);
           }),
         // Tipos de comprobante que tuvieron movimiento en las cuentas
         // 14/62 del periodo, y cuáles ya están marcados como asiento

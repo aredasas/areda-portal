@@ -508,7 +508,31 @@ export async function computarResumenCompras(
     }
   }
   const totalDian = totalDianPorMes.reduce((a, m) => a + (m.total ?? 0), 0);
-  const resumen = { cuentas, totalPorClasificacion, totalContabilidad, totalContabilidadFacturado, totalDianPorMes, totalDian };
+  const resumen = { cuentas, totalPorClasificacion, totalContabilidad, totalContabilidadFacturado, totalDianPorMes, totalDian, sinCompras: false };
+  await guardarPasoCompras(clienteId, anio, periodicidad, periodo, resumen);
+  return resumen;
+}
+
+/** Marca (o quita la marca de) "esta empresa no tiene compras en las
+ * cuentas 14/62" — algunas empresas de servicios no compran nada
+ * gravable pero SÍ pueden tener IVA descontable por devoluciones en
+ * venta (Paso 5) — sin este check, el Paso 4 se quedaba "vacío" sin
+ * forma de continuar, bloqueando el flujo. Al marcarlo, se guarda un
+ * Paso 4 con todo en cero (pero con un resultado real, no ausente),
+ * para que el Paso 5 pueda avanzar igual. Al desmarcarlo, se vuelve a
+ * calcular el resumen normal a partir de las cuentas del periodo. */
+export async function guardarSinCompras(
+  clienteId: number, anio: number, periodicidad: Periodicidad, periodo: number, marcar: boolean,
+) {
+  if (!marcar) return computarResumenCompras(clienteId, anio, periodicidad, periodo);
+  const meses = mesesDelPeriodo(periodicidad, periodo);
+  const totalDianPorMes = await getTotalDianRecibidoComprasPorMes(clienteId, anio, meses);
+  const resumen = {
+    cuentas: [], totalPorClasificacion: { gravado_19: 0, gravado_5: 0, excluido: 0, no_gravado: 0 },
+    totalContabilidad: 0, totalContabilidadFacturado: 0, totalDianPorMes,
+    totalDian: totalDianPorMes.reduce((a, m) => a + (m.total ?? 0), 0),
+    sinCompras: true,
+  };
   await guardarPasoCompras(clienteId, anio, periodicidad, periodo, resumen);
   return resumen;
 }
