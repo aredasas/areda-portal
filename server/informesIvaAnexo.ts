@@ -51,20 +51,47 @@ async function calcularDatosAnexoIva(
   const saldoPor = (categoria: informesIvaCuentas.CategoriaIva, convencion: informesIvaCuentas.ConvencionSaldo) =>
     informesIvaCuentas.getSaldoSumadoPorCategoria(clienteId, anio, meses, categoria, convencion);
 
-  const { saldo: realGen19, cuentas: cuentasGen19 } = await saldoPor("generado_19", "pasivo");
-  const { saldo: realGen5, cuentas: cuentasGen5 } = await saldoPor("generado_5", "pasivo");
-  const { saldo: devCompra19, cuentas: cuentasDevCompra19 } = await saldoPor("generado_devolucion_compra_19", "pasivo");
-  const { saldo: devCompra5, cuentas: cuentasDevCompra5 } = await saldoPor("generado_devolucion_compra_5", "pasivo");
+  // Todas estas llamadas son independientes entre sí y cada una puede
+  // leer el libro auxiliar de varios meses — lanzarlas en paralelo (en
+  // vez de una detrás de otra) es lo que evita que el tiempo total se
+  // acumule y la pantalla del Anexo se quede cargando indefinidamente.
+  // Como `leerFilasXlsxRobusto` ya cachea la PROMESA por archivo, pedir
+  // el mismo mes desde varias de estas llamadas en paralelo tampoco
+  // duplica la lectura — la primera dispara la lectura real y las demás
+  // esperan esa misma promesa.
+  const [
+    { saldo: realGen19, cuentas: cuentasGen19 },
+    { saldo: realGen5, cuentas: cuentasGen5 },
+    { saldo: devCompra19, cuentas: cuentasDevCompra19 },
+    { saldo: devCompra5, cuentas: cuentasDevCompra5 },
+    { saldo: realDesc19, cuentas: cuentasDesc19 },
+    { saldo: realDesc5, cuentas: cuentasDesc5 },
+    { saldo: devVenta19, cuentas: cuentasDevVenta19 },
+    { saldo: devVenta5, cuentas: cuentasDevVenta5 },
+    { saldo: saldoTransitorio, cuentas: cuentasTransitorio },
+    totalDianEmitidoPorMes,
+    ivaDianVentasPorMes,
+    ivaDianComprasPorMes,
+  ] = await Promise.all([
+    saldoPor("generado_19", "pasivo"),
+    saldoPor("generado_5", "pasivo"),
+    saldoPor("generado_devolucion_compra_19", "pasivo"),
+    saldoPor("generado_devolucion_compra_5", "pasivo"),
+    saldoPor("descontable_19", "activo_gasto"),
+    saldoPor("descontable_5", "activo_gasto"),
+    saldoPor("descontable_devolucion_venta_19", "activo_gasto"),
+    saldoPor("descontable_devolucion_venta_5", "activo_gasto"),
+    saldoPor("transitorio", "activo_gasto"),
+    informesIva.getTotalDianEmitidoPorMes(clienteId, anio, meses),
+    informesIva.getTotalIvaDianVentasPorMes(clienteId, anio, meses),
+    informesIva.getTotalIvaDianComprasPorMes(clienteId, anio, meses),
+  ]);
+
   const esperadoGen19 = totalIngresos.gravado_19 * 0.19;
   const esperadoGen5 = totalIngresos.gravado_5 * 0.05;
-  const totalDianEmitidoPorMes = await informesIva.getTotalDianEmitidoPorMes(clienteId, anio, meses);
   const totalDianEmitido = totalDianEmitidoPorMes.reduce((a, m) => a + (m.totalEmitidoDian ?? 0), 0);
   const totalFacturadoIngresos = estado.ingresos?.totalContabilidadFacturado ?? 0;
 
-  const { saldo: realDesc19, cuentas: cuentasDesc19 } = await saldoPor("descontable_19", "activo_gasto");
-  const { saldo: realDesc5, cuentas: cuentasDesc5 } = await saldoPor("descontable_5", "activo_gasto");
-  const { saldo: devVenta19, cuentas: cuentasDevVenta19 } = await saldoPor("descontable_devolucion_venta_19", "activo_gasto");
-  const { saldo: devVenta5, cuentas: cuentasDevVenta5 } = await saldoPor("descontable_devolucion_venta_5", "activo_gasto");
   const esperadoDesc19 = totalCompras.gravado_19 * 0.19;
   const esperadoDesc5 = totalCompras.gravado_5 * 0.05;
   const totalContabilidadCompras = estado.compras?.totalContabilidad ?? 0;
@@ -74,14 +101,12 @@ async function calcularDatosAnexoIva(
   // El IVA que la DIAN reporta — el archivo no discrimina el IVA por
   // tarifa dentro de cada documento, así que solo se compara el TOTAL
   // (19%+5% juntos) contra lo que la DIAN reporta.
-  const ivaDianVentasPorMes = await informesIva.getTotalIvaDianVentasPorMes(clienteId, anio, meses);
   const haySinDatoVentas = ivaDianVentasPorMes.some(m => m.valor === null);
   const ivaDianVentas: ComparacionIvaDian = {
     esperado: esperadoGen19 + esperadoGen5,
     real: haySinDatoVentas ? null : ivaDianVentasPorMes.reduce((a, m) => a + (m.valor ?? 0), 0),
     haySinDato: haySinDatoVentas,
   };
-  const ivaDianComprasPorMes = await informesIva.getTotalIvaDianComprasPorMes(clienteId, anio, meses);
   const haySinDatoCompras = ivaDianComprasPorMes.some(m => m.valor === null);
   const ivaDianCompras: ComparacionIvaDian = {
     esperado: esperadoDesc19 + esperadoDesc5,
@@ -89,7 +114,6 @@ async function calcularDatosAnexoIva(
     haySinDato: haySinDatoCompras,
   };
 
-  const { saldo: saldoTransitorio, cuentas: cuentasTransitorio } = await saldoPor("transitorio", "activo_gasto");
   const baseGravadaTransitorio = totalIngresos.gravado_19 + totalIngresos.gravado_5;
   const baseExcluidaTransitorio = totalIngresos.excluido;
   const baseRelevanteTransitorio = baseGravadaTransitorio + baseExcluidaTransitorio;

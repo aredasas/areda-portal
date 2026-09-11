@@ -136,18 +136,23 @@ export type TipoComprobanteConValor = { tipo: string; cantidad: number; valor: n
 export async function getTiposComprobantePorPrefijoDelPeriodo(
   clienteId: number, anio: number, meses: number[], prefijos: string[], convencion: ConvencionSaldo,
 ): Promise<TipoComprobanteConValor[]> {
-  const porTipo = new Map<string, { cantidad: number; valor: number }>();
-  for (const mes of meses) {
+  // Cada mes en paralelo (archivo independiente) — cada uno devuelve su
+  // propio resultado parcial y se combinan DESPUÉS, para no compartir
+  // un Map mutable entre ejecuciones concurrentes.
+  const resultadosPorMes = await Promise.all(meses.map(async (mes) => {
     const carga = await getCargaConArchivo(clienteId, anio, mes);
-    if (!carga?.fileKey) continue;
+    if (!carga?.fileKey) return [];
     const buffer = await storageGetBuffer(carga.fileKey);
     const saldosDelMes = await sumarSaldosPorCuentaYTipo(buffer, prefijos, convencion, carga.fileKey);
-    for (const { tipo, valor } of Array.from(saldosDelMes.values())) {
-      if (!porTipo.has(tipo)) porTipo.set(tipo, { cantidad: 0, valor: 0 });
-      const entrada = porTipo.get(tipo)!;
-      entrada.cantidad++;
-      entrada.valor += valor;
-    }
+    return Array.from(saldosDelMes.values());
+  }));
+
+  const porTipo = new Map<string, { cantidad: number; valor: number }>();
+  for (const { tipo, valor } of resultadosPorMes.flat()) {
+    if (!porTipo.has(tipo)) porTipo.set(tipo, { cantidad: 0, valor: 0 });
+    const entrada = porTipo.get(tipo)!;
+    entrada.cantidad++;
+    entrada.valor += valor;
   }
   return Array.from(porTipo.entries())
     .map(([tipo, d]) => ({ tipo, cantidad: d.cantidad, valor: d.valor }))
@@ -163,16 +168,18 @@ export async function getCuentasPrefijoConFiltroDelPeriodo(
   clienteId: number, anio: number, meses: number[], prefijos: string[], tiposExcluidos: string[], convencion: ConvencionSaldo,
 ): Promise<CuentaIvaResumen[]> {
   const excluidosSet = new Set(tiposExcluidos.map(t => t.trim()));
-  const totalPorCuenta = new Map<string, number>();
-  for (const mes of meses) {
+  const resultadosPorMes = await Promise.all(meses.map(async (mes) => {
     const carga = await getCargaConArchivo(clienteId, anio, mes);
-    if (!carga?.fileKey) continue;
+    if (!carga?.fileKey) return [];
     const buffer = await storageGetBuffer(carga.fileKey);
     const saldosDelMes = await sumarSaldosPorCuentaYTipo(buffer, prefijos, convencion, carga.fileKey);
-    for (const { cuenta, tipo, valor } of Array.from(saldosDelMes.values())) {
-      if (excluidosSet.has(tipo)) continue;
-      totalPorCuenta.set(cuenta, (totalPorCuenta.get(cuenta) || 0) + valor);
-    }
+    return Array.from(saldosDelMes.values());
+  }));
+
+  const totalPorCuenta = new Map<string, number>();
+  for (const { cuenta, tipo, valor } of resultadosPorMes.flat()) {
+    if (excluidosSet.has(tipo)) continue;
+    totalPorCuenta.set(cuenta, (totalPorCuenta.get(cuenta) || 0) + valor);
   }
   if (totalPorCuenta.size === 0) return [];
 
@@ -220,17 +227,25 @@ export type DiagnosticoCuentasPeriodo = {
 export async function getCuentasPrefijoDelPeriodoConDiagnostico(
   clienteId: number, anio: number, meses: number[], prefijos: string[] = ["24"],
 ): Promise<DiagnosticoCuentasPeriodo> {
+  const resultadosPorMes = await Promise.all(meses.map(async (mes) => {
+    const carga = await getCargaConArchivo(clienteId, anio, mes);
+    if (!carga?.fileKey) return null;
+    const buffer = await storageGetBuffer(carga.fileKey);
+    const [saldosDelMes, columnaConfiable] = await Promise.all([
+      sumarSaldosPorCuenta(buffer, prefijos, "pasivo", carga.fileKey),
+      columnaCuentaDelArchivoEsConfiable(buffer, carga.fileKey),
+    ]);
+    return { saldosDelMes, columnaConfiable };
+  }));
+
   const totalPorCuenta = new Map<string, number>();
   let mesesConArchivo = 0;
   let mesesConColumnaCuentaConfiable = 0;
-  for (const mes of meses) {
-    const carga = await getCargaConArchivo(clienteId, anio, mes);
-    if (!carga?.fileKey) continue;
+  for (const resultado of resultadosPorMes) {
+    if (!resultado) continue;
     mesesConArchivo++;
-    const buffer = await storageGetBuffer(carga.fileKey);
-    const saldosDelMes = await sumarSaldosPorCuenta(buffer, prefijos, "pasivo", carga.fileKey);
-    if (await columnaCuentaDelArchivoEsConfiable(buffer, carga.fileKey)) mesesConColumnaCuentaConfiable++;
-    for (const [cuenta, valor] of Array.from(saldosDelMes.entries())) {
+    if (resultado.columnaConfiable) mesesConColumnaCuentaConfiable++;
+    for (const [cuenta, valor] of Array.from(resultado.saldosDelMes.entries())) {
       totalPorCuenta.set(cuenta, (totalPorCuenta.get(cuenta) || 0) + valor);
     }
   }
@@ -291,15 +306,20 @@ export async function getCuentasPrefijoDelPeriodo(
  * (esperado - (-real) = esperado + real), mostrando una "diferencia"
  * enorme y falsa aunque en realidad sí cuadre. */
 export async function getSaldoCuentaEnPeriodo(clienteId: number, anio: number, meses: number[], cuenta: string, convencion: ConvencionSaldo = "pasivo"): Promise<number> {
-  let total = 0;
-  for (const mes of meses) {
+  // Un mes por mes en serie sumaba el tiempo de lectura de CADA archivo
+  // — con un periodo de varios meses esto era buena parte de por qué
+  // el Anexo se quedaba cargando. Cada mes es un archivo independiente
+  // (fileKey distinto), así que lanzarlos en paralelo sí ahorra tiempo
+  // real de espera, no solo evita relecturas (eso ya lo cubre el
+  // caché de `leerFilasXlsxRobusto`).
+  const totalesPorMes = await Promise.all(meses.map(async (mes) => {
     const carga = await getCargaConArchivo(clienteId, anio, mes);
-    if (!carga?.fileKey) continue;
+    if (!carga?.fileKey) return 0;
     const buffer = await storageGetBuffer(carga.fileKey);
     const saldosDelMes = await sumarSaldosPorCuenta(buffer, [cuenta], convencion, carga.fileKey);
-    total += saldosDelMes.get(cuenta) || 0;
-  }
-  return total;
+    return saldosDelMes.get(cuenta) || 0;
+  }));
+  return totalesPorMes.reduce((a, v) => a + v, 0);
 }
 
 export async function getConfigCuentasIva(clienteId: number): Promise<InformeConfigCuentaIva[]> {
@@ -431,10 +451,8 @@ export async function getSaldoSumadoPorCategoria(
   const mapa = await getClasificacionCuentasIva(clienteId);
   const cuentas = Array.from(mapa.entries()).filter(([, cat]) => cat === categoria).map(([cuenta]) => cuenta);
   if (cuentas.length === 0) return { saldo: null, cuentas: [] };
-  let saldo = 0;
-  for (const cuenta of cuentas) {
-    saldo += await getSaldoCuentaEnPeriodo(clienteId, anio, meses, cuenta, convencion);
-  }
+  const saldosPorCuenta = await Promise.all(cuentas.map(cuenta => getSaldoCuentaEnPeriodo(clienteId, anio, meses, cuenta, convencion)));
+  const saldo = saldosPorCuenta.reduce((a, v) => a + v, 0);
   return { saldo, cuentas };
 }
 

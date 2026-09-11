@@ -527,6 +527,36 @@ const PERIODOS_IVA_FRONTEND: Record<string, { codigo: number; nombre: string }[]
  * compone ya tenga libro auxiliar cargado y comparación DIAN generada,
  * antes de poder avanzar a clasificar ingresos, IVA generado, compras,
  * etc. (próximas entregas). */
+/** Sección plegable que NO monta su contenido hasta que el usuario la
+ * abre por primera vez — a diferencia de un colapsable normal (que solo
+ * oculta con CSS pero deja todo montado), esto evita que las consultas
+ * de cada paso de IVA se disparen TODAS a la vez al cargar la pestaña.
+ * Una vez abierta, el contenido queda montado (no se pierde al volver
+ * a cerrar), solo se oculta visualmente. */
+function SeccionIvaColapsable({ titulo, defaultOpen = false, children }: {
+  titulo: string; defaultOpen?: boolean; children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  const [yaAbierto, setYaAbierto] = useState(defaultOpen);
+  return (
+    <div className="border rounded-md">
+      <button
+        type="button"
+        className="w-full flex items-center justify-between gap-2 p-3 text-left hover:bg-muted/50"
+        onClick={() => { setOpen(o => !o); if (!yaAbierto) setYaAbierto(true); }}
+      >
+        <span className="text-sm font-medium">{titulo}</span>
+        {open ? <ChevronUp className="w-4 h-4 shrink-0 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 shrink-0 text-muted-foreground" />}
+      </button>
+      {yaAbierto && (
+        <div className={open ? "p-3 pt-0 space-y-4" : "hidden"}>
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function IvaTab({ clienteId, anio }: { clienteId: number; anio: number }) {
   const [periodicidad, setPeriodicidad] = useState<"bimestral" | "cuatrimestral" | "anual">("bimestral");
   const [periodo, setPeriodo] = useState(1);
@@ -619,13 +649,23 @@ function IvaTab({ clienteId, anio }: { clienteId: number; anio: number }) {
                 continuar.
               </p>
             ) : conciliacionQuery.data ? (
-              <div className="space-y-4">
-                <IngresosIvaCard clienteId={clienteId} anio={anio} periodicidad={periodicidad} periodo={periodo} />
+              <div className="space-y-3">
                 <ClasificacionCuentasIvaCard clienteId={clienteId} anio={anio} periodicidad={periodicidad} periodo={periodo} />
-                <IvaGeneradoCard clienteId={clienteId} anio={anio} periodicidad={periodicidad} periodo={periodo} />
-                <ComprasIvaCard clienteId={clienteId} anio={anio} periodicidad={periodicidad} periodo={periodo} />
-                <IvaDescontableCard clienteId={clienteId} anio={anio} periodicidad={periodicidad} periodo={periodo} />
-                <IvaTransitorioCard clienteId={clienteId} anio={anio} periodicidad={periodicidad} periodo={periodo} />
+
+                <SeccionIvaColapsable titulo="1. Ingresos y su IVA generado" defaultOpen>
+                  <IngresosIvaCard clienteId={clienteId} anio={anio} periodicidad={periodicidad} periodo={periodo} />
+                  <IvaGeneradoCard clienteId={clienteId} anio={anio} periodicidad={periodicidad} periodo={periodo} />
+                </SeccionIvaColapsable>
+
+                <SeccionIvaColapsable titulo="2. Compras y su IVA descontable">
+                  <ComprasIvaCard clienteId={clienteId} anio={anio} periodicidad={periodicidad} periodo={periodo} />
+                  <IvaDescontableCard clienteId={clienteId} anio={anio} periodicidad={periodicidad} periodo={periodo} />
+                </SeccionIvaColapsable>
+
+                <SeccionIvaColapsable titulo="3. IVA transitorio y su cálculo de prorrateo">
+                  <IvaTransitorioCard clienteId={clienteId} anio={anio} periodicidad={periodicidad} periodo={periodo} />
+                </SeccionIvaColapsable>
+
                 <AnexoIvaCard clienteId={clienteId} anio={anio} periodicidad={periodicidad} periodo={periodo} />
               </div>
             ) : (
@@ -1616,6 +1656,16 @@ function IvaGeneradoCard({ clienteId, anio, periodicidad, periodo }: {
               )}
               <div className="flex justify-between text-xs"><span className="text-muted-foreground">Valor total en cuentas (19%+5%)</span><span>{fmt((compararQuery.data.devolucionCompra19.real ?? 0) + (compararQuery.data.devolucionCompra5.real ?? 0))}</span></div>
               <div className="flex justify-between text-xs"><span className="text-muted-foreground">IVA según la DIAN (documentos "Devolución en compra")</span><span>{compararQuery.data.hayMesesSinIvaDianDevCompra ? "sin dato — regenera la comparación DIAN" : (compararQuery.data.totalIvaDianDevCompra !== null ? fmt(compararQuery.data.totalIvaDianDevCompra) : "sin documentos clasificados así")}</span></div>
+              {!compararQuery.data.hayMesesSinIvaDianDevCompra && compararQuery.data.totalIvaDianDevCompra !== null && (() => {
+                const valorCuentas = (compararQuery.data.devolucionCompra19.real ?? 0) + (compararQuery.data.devolucionCompra5.real ?? 0);
+                const diferencia = valorCuentas - compararQuery.data.totalIvaDianDevCompra!;
+                const cuadra = Math.abs(diferencia) <= Math.max(5, Math.abs(compararQuery.data.totalIvaDianDevCompra!) * 0.001);
+                return cuadra ? (
+                  <p className="text-xs text-green-700 flex items-center gap-1.5"><CheckCircle2 className="w-3.5 h-3.5 shrink-0" /> Cuadra con la DIAN</p>
+                ) : (
+                  <p className="text-xs text-red-600 flex items-center gap-1.5"><AlertCircle className="w-3.5 h-3.5 shrink-0" /> Diferencia de {fmt(diferencia)} contra la DIAN</p>
+                );
+              })()}
             </div>
           )}
 
@@ -1714,6 +1764,16 @@ function IvaDescontableCard({ clienteId, anio, periodicidad, periodo }: {
               )}
               <div className="flex justify-between text-xs"><span className="text-muted-foreground">Valor total en cuentas (19%+5%)</span><span>{fmt((compararQuery.data.devolucionVenta19.real ?? 0) + (compararQuery.data.devolucionVenta5.real ?? 0))}</span></div>
               <div className="flex justify-between text-xs"><span className="text-muted-foreground">IVA según la DIAN (documentos "Devolución en venta")</span><span>{compararQuery.data.hayMesesSinIvaDianDevVenta ? "sin dato — regenera la comparación DIAN" : (compararQuery.data.totalIvaDianDevVenta !== null ? fmt(compararQuery.data.totalIvaDianDevVenta) : "sin documentos clasificados así")}</span></div>
+              {!compararQuery.data.hayMesesSinIvaDianDevVenta && compararQuery.data.totalIvaDianDevVenta !== null && (() => {
+                const valorCuentas = (compararQuery.data.devolucionVenta19.real ?? 0) + (compararQuery.data.devolucionVenta5.real ?? 0);
+                const diferencia = valorCuentas - compararQuery.data.totalIvaDianDevVenta!;
+                const cuadra = Math.abs(diferencia) <= Math.max(5, Math.abs(compararQuery.data.totalIvaDianDevVenta!) * 0.001);
+                return cuadra ? (
+                  <p className="text-xs text-green-700 flex items-center gap-1.5"><CheckCircle2 className="w-3.5 h-3.5 shrink-0" /> Cuadra con la DIAN</p>
+                ) : (
+                  <p className="text-xs text-red-600 flex items-center gap-1.5"><AlertCircle className="w-3.5 h-3.5 shrink-0" /> Diferencia de {fmt(diferencia)} contra la DIAN</p>
+                );
+              })()}
             </div>
           )}
           {compararQuery.data.pctFacturado !== null && (
