@@ -759,6 +759,7 @@ function ColapsableCard({ titulo, extra, children, defaultOpen = true }: {
 function DeclaracionAnteriorCard({ rentaClienteId, soloLectura }: { rentaClienteId: number; soloLectura?: boolean }) {
   const utils = trpc.useUtils();
   const query = trpc.renta.declaracionAnterior.get.useQuery({ rentaClienteId });
+  const [primeraDeclaracion, setPrimeraDeclaracion] = useState(false);
   const [patrimonio, setPatrimonio] = useState("");
   const [impuestoNeto, setImpuestoNeto] = useState("");
   const [saldoAFavor, setSaldoAFavor] = useState("");
@@ -767,6 +768,7 @@ function DeclaracionAnteriorCard({ rentaClienteId, soloLectura }: { rentaCliente
 
   useEffect(() => {
     if (query.data && !editado) {
+      setPrimeraDeclaracion(!!query.data.primeraDeclaracion);
       setPatrimonio(query.data.patrimonioLiquidoAnioAnterior != null ? String(query.data.patrimonioLiquidoAnioAnterior) : "");
       setImpuestoNeto(query.data.impuestoNetoAnioAnterior != null ? String(query.data.impuestoNetoAnioAnterior) : "");
       setSaldoAFavor(query.data.saldoAFavorAnterior != null ? String(query.data.saldoAFavorAnterior) : "");
@@ -782,6 +784,7 @@ function DeclaracionAnteriorCard({ rentaClienteId, soloLectura }: { rentaCliente
   const handleGuardar = () => {
     guardarMutation.mutate({
       rentaClienteId,
+      primeraDeclaracion,
       patrimonioLiquidoAnioAnterior: patrimonio ? Number(patrimonio) : undefined,
       impuestoNetoAnioAnterior: impuestoNeto ? Number(impuestoNeto) : undefined,
       saldoAFavorAnterior: saldoAFavor ? Number(saldoAFavor) : undefined,
@@ -804,6 +807,20 @@ function DeclaracionAnteriorCard({ rentaClienteId, soloLectura }: { rentaCliente
       <p className="text-sm text-muted-foreground">
         El impuesto neto de renta del año anterior es necesario para calcular el nuevo anticipo de renta.
       </p>
+      <label className="flex items-center gap-2 text-sm">
+        <input
+          type="checkbox" checked={primeraDeclaracion} disabled={soloLectura}
+          onChange={(e) => { setPrimeraDeclaracion(e.target.checked); setEditado(true); }}
+        />
+        Es la primera vez que esta persona declara renta
+      </label>
+      {primeraDeclaracion && (
+        <p className="text-xs text-muted-foreground">
+          Al no haber una declaración anterior, no hay patrimonio líquido con el cual comparar — la
+          comparación patrimonial (Arts. 236-239 E.T.) no se calcula para este año, sin importar lo que
+          se cargue abajo.
+        </p>
+      )}
       <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
         <div className="space-y-1.5">
           <Label className="text-xs">Patrimonio líquido año anterior</Label>
@@ -2157,6 +2174,13 @@ function ResumenPendiente210Card({ rentaClienteId }: { rentaClienteId: number })
           <p className="text-xs text-muted-foreground">
             Resumen de seguimiento — para el documento formal, usa "Generar borrador" más abajo.
           </p>
+
+          {!r.comparacionPatrimonial && r.primeraDeclaracion && (
+            <div className="border rounded-md p-3 text-xs text-muted-foreground">
+              Primera declaración de esta persona — no hay patrimonio líquido anterior con el cual
+              comparar, así que la comparación patrimonial (Arts. 236-239 E.T.) no aplica para este año.
+            </div>
+          )}
 
           {r.comparacionPatrimonial && (
             <div className={`border rounded-md p-3 ${r.comparacionPatrimonial.excedente > 0 ? "border-amber-300 bg-amber-50/50" : ""}`}>

@@ -2917,6 +2917,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
       guardar: protectedProcedure
         .input(z.object({
           rentaClienteId: z.number(),
+          primeraDeclaracion: z.boolean().optional(),
           patrimonioLiquidoAnioAnterior: z.number().optional(),
           impuestoNetoAnioAnterior: z.number().optional(),
           saldoAFavorAnterior: z.number().optional(),

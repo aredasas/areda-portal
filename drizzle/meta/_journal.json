@@ -393,6 +393,13 @@
       "when": 1789098154710,
       "tag": "0055_clasificacion_cuentas_iva",
       "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "5",
+      "when": 1789149178467,
+      "tag": "0056_primera_declaracion",
+      "breakpoints": true
     }
   ]
 }

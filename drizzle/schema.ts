@@ -927,6 +927,12 @@ export type InsertRentaExogenaItem = typeof rentaExogenaItems.$inferInsert;
 export const rentaDeclaracionAnterior = mysqlTable("rentaDeclaracionAnterior", {
   id: int("id").autoincrement().primaryKey(),
   rentaClienteId: int("rentaClienteId").notNull(),
+  /** Marca que esta es la PRIMERA declaración de renta de esta persona
+   * — cuando está marcado, no existe un patrimonio líquido del año
+   * anterior con el cual comparar (Arts. 236-239 E.T.), así que la
+   * comparación patrimonial no se calcula y no genera la alerta de
+   * incremento patrimonial sin justificar. */
+  primeraDeclaracion: boolean("primeraDeclaracion").default(false).notNull(),
   patrimonioLiquidoAnioAnterior: double("patrimonioLiquidoAnioAnterior"),
   impuestoNetoAnioAnterior: double("impuestoNetoAnioAnterior"),
   saldoAFavorAnterior: double("saldoAFavorAnterior"),

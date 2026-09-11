@@ -354,6 +354,12 @@ export type DatosLiquidacion = {
    * exentas, estos NO reducen la renta líquida gravable: se restan
    * DIRECTAMENTE del impuesto de renta ya calculado, peso a peso. */
   descuentosTributarios: { concepto: string; valor: number; comentario?: string | null }[];
+  /** Marca que esta es la PRIMERA declaración de renta de esta persona
+   * — cuando está en true, no hay patrimonio líquido anterior con el
+   * cual comparar, así que la comparación patrimonial (Arts. 236-239
+   * E.T.) no se calcula, sin importar qué traiga
+   * `patrimonioLiquidoAnioAnterior`. */
+  primeraDeclaracion?: boolean;
   patrimonioLiquidoAnioAnterior: number | null;
   impuestoNetoAnioAnterior: number | null;
   saldoAFavorAnterior: number | null;
@@ -498,6 +504,7 @@ export type ResultadoLiquidacion = {
    * base. impuestoNetoDespuesDescuentos nunca baja de 0. */
   totalDescuentosTributarios: number;
   impuestoNetoDespuesDescuentos: number;
+  primeraDeclaracion: boolean;
   patrimonioLiquidoAnioAnterior: number | null;
   impuestoNetoAnioAnterior: number | null;
   saldoAFavorAnterior: number | null;
@@ -748,9 +755,12 @@ export function armarLiquidacion(datos: DatosLiquidacion): ResultadoLiquidacion 
 
   // Renta por comparación patrimonial (Arts. 236-239 E.T.) — siempre
   // visible cuando se conoce el patrimonio líquido del año anterior, no
-  // solo cuando hay excedente sin justificar.
+  // solo cuando hay excedente sin justificar. Si es la PRIMERA
+  // declaración de esta persona, no existe un patrimonio anterior real
+  // con el cual comparar — no se calcula en absoluto, sin importar qué
+  // traiga `patrimonioLiquidoAnioAnterior`.
   let comparacionPatrimonial: ResultadoLiquidacion["comparacionPatrimonial"] = null;
-  if (datos.patrimonioLiquidoAnioAnterior != null) {
+  if (!datos.primeraDeclaracion && datos.patrimonioLiquidoAnioAnterior != null) {
     const totalRentasExentasCP = Object.values(datos.cedulas).reduce(
       (a, c) => a + c.rentaExenta.reduce((s, it) => s + calcularValorLimitado(it.valor, it.tipoDeduccion, sumaItems(c.ingresoBruto)), 0), 0,
     );
@@ -774,6 +784,7 @@ export function armarLiquidacion(datos: DatosLiquidacion): ResultadoLiquidacion 
     rentaLiquidaGravableTotal, impuestoRenta, totalRetenciones,
     totalDescuentosTributarios, impuestoNetoDespuesDescuentos,
     patrimonioLiquidoAnioAnterior: datos.patrimonioLiquidoAnioAnterior ?? null,
+    primeraDeclaracion: !!datos.primeraDeclaracion,
     impuestoNetoAnioAnterior: datos.impuestoNetoAnioAnterior ?? null,
     saldoAFavorAnterior: datos.saldoAFavorAnterior ?? null,
     anticipoAnioActual: datos.anticipoAnioActual ?? null,

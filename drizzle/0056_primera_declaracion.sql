@@ -1,0 +1,1 @@
+ALTER TABLE `rentaDeclaracionAnterior` ADD `primeraDeclaracion` boolean DEFAULT false NOT NULL;

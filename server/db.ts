@@ -2466,6 +2466,7 @@ export async function getDatosLiquidacion(rentaClienteId: number) {
     pasivos: pasivos.map(p => ({ concepto: p.concepto, valor: p.valor, comentario: p.comentario })),
     cedulas,
     descuentosTributarios: descuentosTributarios.map(d => ({ concepto: d.concepto, valor: d.valor, comentario: d.comentario })),
+    primeraDeclaracion: declaracionAnterior?.primeraDeclaracion ?? false,
     patrimonioLiquidoAnioAnterior: declaracionAnterior?.patrimonioLiquidoAnioAnterior ?? null,
     impuestoNetoAnioAnterior: declaracionAnterior?.impuestoNetoAnioAnterior ?? null,
     saldoAFavorAnterior: declaracionAnterior?.saldoAFavorAnterior ?? null,
