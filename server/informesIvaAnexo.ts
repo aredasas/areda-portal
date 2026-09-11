@@ -62,7 +62,11 @@ export async function generarAnexoIva(
 
   const config = await informesIvaCuentas.getConfigCuentasIva(clienteId);
   const cuentaDe = (tipo: informesIvaCuentas.TipoIva) => config.find(c => c.tipoIva === tipo)?.cuenta || null;
-  const saldoDe = async (cuenta: string | null) => cuenta ? informesIvaCuentas.getSaldoCuentaEnPeriodo(clienteId, anio, meses, cuenta) : null;
+  // El IVA generado se mueve por CRÉDITO ("pasivo"); el descontable y el
+  // transitorio se mueven por DÉBITO ("activo_gasto") — usar la
+  // convención equivocada invierte el signo del saldo real.
+  const saldoDe = async (cuenta: string | null, convencion: informesIvaCuentas.ConvencionSaldo = "pasivo") =>
+    cuenta ? informesIvaCuentas.getSaldoCuentaEnPeriodo(clienteId, anio, meses, cuenta, convencion) : null;
 
   // ==================== IVA GENERADO (Paso 3) ====================
   const cuentaGen19 = cuentaDe("generado_19");
@@ -80,19 +84,25 @@ export async function generarAnexoIva(
   const cuentaDesc5 = cuentaDe("descontable_5");
   const esperadoDesc19 = totalCompras.gravado_19 * 0.19;
   const esperadoDesc5 = totalCompras.gravado_5 * 0.05;
-  const realDesc19 = await saldoDe(cuentaDesc19);
-  const realDesc5 = await saldoDe(cuentaDesc5);
+  const realDesc19 = await saldoDe(cuentaDesc19, "activo_gasto");
+  const realDesc5 = await saldoDe(cuentaDesc5, "activo_gasto");
   const totalContabilidadCompras = estado.compras?.totalContabilidad ?? 0;
   const totalFacturadoCompras = estado.compras?.totalContabilidadFacturado ?? 0;
   const pctFacturadoCompras = totalContabilidadCompras > 0 ? totalFacturadoCompras / totalContabilidadCompras : null;
 
   // ==================== IVA TRANSITORIO Y PRORRATEO (Paso 6) ====================
-  const cuentaTransitorio = cuentaDe("transitorio");
+  const cuentasTransitorio = await informesIvaCuentas.getTransitorioCuentas(clienteId);
   const baseGravadaTransitorio = totalIngresos.gravado_19 + totalIngresos.gravado_5;
   const baseExcluidaTransitorio = totalIngresos.excluido;
   const baseRelevanteTransitorio = baseGravadaTransitorio + baseExcluidaTransitorio;
   const proporcionTransitorio = baseRelevanteTransitorio > 0 ? baseGravadaTransitorio / baseRelevanteTransitorio : null;
-  const saldoTransitorio = await saldoDe(cuentaTransitorio);
+  let saldoTransitorio: number | null = null;
+  if (cuentasTransitorio.length > 0) {
+    saldoTransitorio = 0;
+    for (const cuenta of cuentasTransitorio) {
+      saldoTransitorio += await informesIvaCuentas.getSaldoCuentaEnPeriodo(clienteId, anio, meses, cuenta, "activo_gasto");
+    }
+  }
   const montoDescontableTransitorio = saldoTransitorio !== null && proporcionTransitorio !== null ? saldoTransitorio * proporcionTransitorio : null;
   const montoAGastoTransitorio = saldoTransitorio !== null && montoDescontableTransitorio !== null ? saldoTransitorio - montoDescontableTransitorio : null;
 
@@ -174,7 +184,7 @@ export async function generarAnexoIva(
   ws.addRow(["Ingresos gravados (5%+19%)", baseGravadaTransitorio]);
   ws.addRow(["Ingresos excluidos", baseExcluidaTransitorio]);
   ws.addRow(["Proporción descontable", proporcionTransitorio !== null ? `${(proporcionTransitorio * 100).toFixed(1)}%` : "—"]);
-  ws.addRow(["Saldo IVA transitorio (cuenta)", saldoTransitorio, cuentaTransitorio || "sin cuenta configurada"]);
+  ws.addRow(["Saldo IVA transitorio", saldoTransitorio, cuentasTransitorio.length > 0 ? cuentasTransitorio.join(", ") : "sin cuentas configuradas"]);
   const rDescTransitorio = ws.addRow(["Total IVA descontable transitorio (prorrateado)", "", totalIvaDescontableTransitorio]);
   rDescTransitorio.font = FONT_BOLD as any;
   ws.addRow(["Va al gasto (IVA resultante de prorrateo)", "", montoAGastoTransitorio ?? 0]);

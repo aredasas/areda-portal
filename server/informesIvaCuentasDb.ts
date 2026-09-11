@@ -1,7 +1,7 @@
 import { and, eq, inArray } from "drizzle-orm";
 import { leerFilasXlsxRobusto } from "./xlsxRobusto";
 import { getDb } from "./db";
-import { informesConfigCuentasIva, informesCuentasCliente, informesCuentasPuc, informesComprasTiposExcluidos, type InformeConfigCuentaIva } from "../drizzle/schema";
+import { informesConfigCuentasIva, informesCuentasCliente, informesCuentasPuc, informesComprasTiposExcluidos, informesIvaTransitorioCuentas, type InformeConfigCuentaIva } from "../drizzle/schema";
 import { getCargaConArchivo, normalizarCuentaPUC } from "./informesDb";
 import { storageGetBuffer } from "./storage";
 import { resolverColumnasAuxiliarDian, type ColsAuxiliarDian } from "./informesDianDb";
@@ -273,13 +273,24 @@ export async function getCuentasPrefijoDelPeriodo(
 /** Suma el saldo de una cuenta ESPECIFICA (codigo exacto) a traves de
  * todos los meses del periodo — usado para leer el valor real de la
  * cuenta que el cliente ya configuro como "IVA generado 19%", etc. */
-export async function getSaldoCuentaEnPeriodo(clienteId: number, anio: number, meses: number[], cuenta: string): Promise<number> {
+/** Suma el saldo de una cuenta ESPECIFICA (codigo exacto) a traves de
+ * todos los meses del periodo — usado para leer el valor real de la
+ * cuenta que el cliente ya configuro como "IVA generado 19%", etc.
+ * `convencion` importa mucho aquí: el IVA generado se mueve por
+ * CRÉDITO (como cualquier pasivo — "pasivo", el default), pero el IVA
+ * descontable y el transitorio se mueven por DÉBITO (como un activo
+ * que reduce el IVA neto por pagar) — usar la convención equivocada
+ * da el saldo con el signo invertido, y una diferencia esperado-real
+ * que debería dar cerca de cero termina SUMÁNDOSE en vez de restarse
+ * (esperado - (-real) = esperado + real), mostrando una "diferencia"
+ * enorme y falsa aunque en realidad sí cuadre. */
+export async function getSaldoCuentaEnPeriodo(clienteId: number, anio: number, meses: number[], cuenta: string, convencion: ConvencionSaldo = "pasivo"): Promise<number> {
   let total = 0;
   for (const mes of meses) {
     const carga = await getCargaConArchivo(clienteId, anio, mes);
     if (!carga?.fileKey) continue;
     const buffer = await storageGetBuffer(carga.fileKey);
-    const saldosDelMes = await sumarSaldosPorCuenta(buffer, [cuenta], "pasivo", carga.fileKey);
+    const saldosDelMes = await sumarSaldosPorCuenta(buffer, [cuenta], convencion, carga.fileKey);
     total += saldosDelMes.get(cuenta) || 0;
   }
   return total;
@@ -325,5 +336,34 @@ export async function guardarComprasTiposExcluidos(clienteId: number, tipos: str
   for (const tipo of tipos) {
     if (!tipo.trim()) continue;
     await db.insert(informesComprasTiposExcluidos).values({ clienteId, tipoComprobante: tipo.trim(), actualizadoPorId: userId });
+  }
+}
+
+/** Las cuentas que, JUNTAS, conforman el IVA transitorio de este
+ * cliente — a diferencia de generado/descontable, el transitorio suele
+ * repartirse en varias cuentas (por centro de costo, tipo de gasto,
+ * etc.), así que se permite configurar una lista en vez de una sola.
+ * Si el cliente ya había configurado UNA cuenta con el campo viejo
+ * (antes de permitir varias), se usa esa como punto de partida — no se
+ * pierde lo que ya tenía configurado. */
+export async function getTransitorioCuentas(clienteId: number): Promise<string[]> {
+  const db = await getDb();
+  if (!db) return [];
+  const filas = await db.select().from(informesIvaTransitorioCuentas).where(eq(informesIvaTransitorioCuentas.clienteId, clienteId));
+  if (filas.length > 0) return filas.map(f => f.cuenta);
+  const legacy = await db.select().from(informesConfigCuentasIva)
+    .where(and(eq(informesConfigCuentasIva.clienteId, clienteId), eq(informesConfigCuentasIva.tipoIva, "transitorio"))).limit(1);
+  return legacy[0]?.cuenta ? [legacy[0].cuenta] : [];
+}
+
+/** Reemplaza la lista completa de cuentas de IVA transitorio de este
+ * cliente. */
+export async function guardarTransitorioCuentas(clienteId: number, cuentas: string[], userId: number): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.delete(informesIvaTransitorioCuentas).where(eq(informesIvaTransitorioCuentas.clienteId, clienteId));
+  for (const cuenta of cuentas) {
+    if (!cuenta.trim()) continue;
+    await db.insert(informesIvaTransitorioCuentas).values({ clienteId, cuenta: cuenta.trim(), actualizadoPorId: userId });
   }
 }

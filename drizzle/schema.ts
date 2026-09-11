@@ -692,6 +692,22 @@ export const informesComprasTiposExcluidos = mysqlTable("informesComprasTiposExc
 }));
 export type InformeCompraTipoExcluido = typeof informesComprasTiposExcluidos.$inferSelect;
 
+/** Lista de cuentas que, JUNTAS, conforman el IVA transitorio de este
+ * cliente — a diferencia de generado/descontable (una sola cuenta por
+ * tarifa), el transitorio suele repartirse en VARIAS cuentas (ej. por
+ * centro de costo o tipo de gasto), así que se permite configurar
+ * cualquier cantidad. El saldo final es la suma de todas. */
+export const informesIvaTransitorioCuentas = mysqlTable("informesIvaTransitorioCuentas", {
+  id: int("id").autoincrement().primaryKey(),
+  clienteId: int("clienteId").notNull(),
+  cuenta: varchar("cuenta", { length: 20 }).notNull(),
+  actualizadoPorId: int("actualizadoPorId").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (table) => ({
+  clienteCuentaIdx: uniqueIndex("informesIvaTransitorioCuentas_cliente_cuenta_idx").on(table.clienteId, table.cuenta),
+}));
+export type InformeIvaTransitorioCuenta = typeof informesIvaTransitorioCuentas.$inferSelect;
+
 /** Configuración, POR CLIENTE, de qué cuenta contable corresponde a cada
  * rol de IVA — generado 19%/5% (Fase 3), descontable 19%/5% (Fase 5), y
  * transitorio (Fase 6). En la mayoría de los casos es una sub-cuenta de

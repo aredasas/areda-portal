@@ -685,7 +685,13 @@ function IngresosIvaCard({ clienteId, anio, periodicidad, periodo }: {
 
   const fmt = (n: number) => `$${Math.round(n).toLocaleString("es-CO")}`;
 
-  if (listarQuery.isLoading) return <div className="flex justify-center py-6"><Loader2 className="w-5 h-5 animate-spin" /></div>;
+  if (listarQuery.isLoading) {
+    return (
+      <div className="flex items-center justify-center gap-2 py-6 text-sm text-muted-foreground">
+        <Loader2 className="w-5 h-5 animate-spin" /> Cargando información del periodo, puede tardar unos segundos con archivos grandes...
+      </div>
+    );
+  }
   if (!listarQuery.data || listarQuery.data.cuentas.length === 0) {
     return (
       <p className="text-xs text-muted-foreground border rounded-md p-3">
@@ -1000,7 +1006,13 @@ function ComprasIvaCard({ clienteId, anio, periodicidad, periodo }: {
     setExcluidosLocal(prev => prev.includes(tipo) ? prev.filter(t => t !== tipo) : [...prev, tipo]);
   };
 
-  if (listarQuery.isLoading) return <div className="flex justify-center py-6"><Loader2 className="w-5 h-5 animate-spin" /></div>;
+  if (listarQuery.isLoading) {
+    return (
+      <div className="flex items-center justify-center gap-2 py-6 text-sm text-muted-foreground">
+        <Loader2 className="w-5 h-5 animate-spin" /> Cargando información del periodo, puede tardar unos segundos con archivos grandes...
+      </div>
+    );
+  }
 
   if (listarQuery.data?.sinCompras) {
     return (
@@ -1392,7 +1404,13 @@ function IvaGeneradoCard({ clienteId, anio, periodicidad, periodo }: {
 
   const fmt = (n: number) => `$${Math.round(n).toLocaleString("es-CO")}`;
 
-  if (listarQuery.isLoading) return <div className="flex justify-center py-6"><Loader2 className="w-5 h-5 animate-spin" /></div>;
+  if (listarQuery.isLoading) {
+    return (
+      <div className="flex items-center justify-center gap-2 py-6 text-sm text-muted-foreground">
+        <Loader2 className="w-5 h-5 animate-spin" /> Cargando información del periodo, puede tardar unos segundos con archivos grandes...
+      </div>
+    );
+  }
 
   return (
     <div className="border rounded-md p-3 space-y-3">
@@ -1523,6 +1541,12 @@ function IvaGeneradoCard({ clienteId, anio, periodicidad, periodo }: {
             Guardar configuración
           </Button>
 
+          {compararQuery.isFetching && (
+            <p className="text-xs text-muted-foreground flex items-center gap-1.5 border-t pt-3">
+              <Loader2 className="w-3.5 h-3.5 animate-spin" /> Calculando la comparación, puede tardar unos segundos con archivos grandes...
+            </p>
+          )}
+
           {compararQuery.isError && (
             <p className="text-xs text-red-600 flex items-center gap-1.5 border-t pt-3">
               <AlertCircle className="w-3.5 h-3.5 shrink-0" />
@@ -1530,7 +1554,7 @@ function IvaGeneradoCard({ clienteId, anio, periodicidad, periodo }: {
             </p>
           )}
 
-          {compararQuery.data && (
+          {compararQuery.data && !compararQuery.isFetching && (
             <div className="border-t pt-3 space-y-3">
               <p className="text-xs font-medium text-muted-foreground">Comparación — tarifa × base vs. valor contable real</p>
               {(["tarifa19", "tarifa5"] as const).map((clave) => {
@@ -1615,7 +1639,13 @@ function IvaDescontableCard({ clienteId, anio, periodicidad, periodo }: {
 
   const fmt = (n: number) => `$${Math.round(n).toLocaleString("es-CO")}`;
 
-  if (listarQuery.isLoading) return <div className="flex justify-center py-6"><Loader2 className="w-5 h-5 animate-spin" /></div>;
+  if (listarQuery.isLoading) {
+    return (
+      <div className="flex items-center justify-center gap-2 py-6 text-sm text-muted-foreground">
+        <Loader2 className="w-5 h-5 animate-spin" /> Cargando información del periodo, puede tardar unos segundos con archivos grandes...
+      </div>
+    );
+  }
 
   return (
     <div className="border rounded-md p-3 space-y-3">
@@ -1730,6 +1760,12 @@ function IvaDescontableCard({ clienteId, anio, periodicidad, periodo }: {
             Guardar configuración
           </Button>
 
+          {compararQuery.isFetching && (
+            <p className="text-xs text-muted-foreground flex items-center gap-1.5 border-t pt-3">
+              <Loader2 className="w-3.5 h-3.5 animate-spin" /> Calculando la comparación, puede tardar unos segundos con archivos grandes...
+            </p>
+          )}
+
           {compararQuery.isError && (
             <p className="text-xs text-red-600 flex items-center gap-1.5 border-t pt-3">
               <AlertCircle className="w-3.5 h-3.5 shrink-0" />
@@ -1737,7 +1773,7 @@ function IvaDescontableCard({ clienteId, anio, periodicidad, periodo }: {
             </p>
           )}
 
-          {compararQuery.data && (
+          {compararQuery.data && !compararQuery.isFetching && (
             <div className="border-t pt-3 space-y-3">
               <p className="text-xs font-medium text-muted-foreground">Comparación — tarifa × base vs. valor contable real</p>
               {(["tarifa19", "tarifa5"] as const).map((clave) => {
@@ -1812,31 +1848,40 @@ function IvaDescontableCard({ clienteId, anio, periodicidad, periodo }: {
 function IvaTransitorioCard({ clienteId, anio, periodicidad, periodo }: {
   clienteId: number; anio: number; periodicidad: "bimestral" | "cuatrimestral" | "anual"; periodo: number;
 }) {
-  const [cuentaLocal, setCuentaLocal] = useState("");
+  const [cuentasLocal, setCuentasLocal] = useState<string[]>([]);
   const [inicializado, setInicializado] = useState(false);
 
   const listarQuery = trpc.informes.iva.ivaTransitorio.listarCuentas.useQuery({ clienteId, anio, periodicidad, periodo });
   if (!inicializado && listarQuery.data) {
-    setCuentaLocal(listarQuery.data.cuentaTransitorio || "");
+    setCuentasLocal(listarQuery.data.cuentasTransitorio || []);
     setInicializado(true);
   }
 
   const guardarConfigMutation = trpc.informes.iva.ivaTransitorio.guardarConfig.useMutation({
-    onSuccess: () => { toast.success("Cuenta de IVA transitorio guardada"); listarQuery.refetch(); compararQuery.refetch(); },
+    onSuccess: () => { toast.success("Cuentas de IVA transitorio guardadas"); listarQuery.refetch(); compararQuery.refetch(); },
     onError: (err: any) => toast.error(err.message || "No se pudo guardar"),
   });
 
   // Habilitada según lo ya seleccionado en pantalla, no lo que trajo la
   // carga inicial — mismo criterio que Pasos 3 y 5, para que la
-  // comparación aparezca de inmediato al elegir la cuenta.
+  // comparación aparezca de inmediato al elegir alguna cuenta.
   const compararQuery = trpc.informes.iva.ivaTransitorio.comparar.useQuery(
     { clienteId, anio, periodicidad, periodo },
-    { enabled: !!cuentaLocal },
+    { enabled: cuentasLocal.length > 0 },
   );
 
   const fmt = (n: number) => `$${Math.round(n).toLocaleString("es-CO")}`;
+  const toggleCuenta = (cuenta: string) => {
+    setCuentasLocal(prev => prev.includes(cuenta) ? prev.filter(c => c !== cuenta) : [...prev, cuenta]);
+  };
 
-  if (listarQuery.isLoading) return <div className="flex justify-center py-6"><Loader2 className="w-5 h-5 animate-spin" /></div>;
+  if (listarQuery.isLoading) {
+    return (
+      <div className="flex items-center justify-center gap-2 py-6 text-sm text-muted-foreground">
+        <Loader2 className="w-5 h-5 animate-spin" /> Cargando cuentas del periodo...
+      </div>
+    );
+  }
 
   return (
     <div className="border rounded-md p-3 space-y-3">
@@ -1882,28 +1927,38 @@ function IvaTransitorioCard({ clienteId, anio, periodicidad, periodo }: {
       ) : (
         <>
           <p className="text-xs text-muted-foreground">
-            Elige, de las cuentas 24xx con movimiento en el periodo, cuál es la de IVA transitorio (el que
-            acompaña los gastos y servicios de la cuenta 5). Se guarda por cliente, para los siguientes
-            periodos también.
+            Marca, de las cuentas 24xx con movimiento en el periodo, TODAS las que juntas conforman el IVA
+            transitorio de este cliente (suele repartirse en varias cuentas, no solo una). Se suman todas.
+            Se guarda por cliente, para los siguientes periodos también.
           </p>
-          <div className="space-y-1">
-            <Label className="text-xs">Cuenta IVA transitorio</Label>
-            <Select value={cuentaLocal} onValueChange={setCuentaLocal}>
-              <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Elegir cuenta..." /></SelectTrigger>
-              <SelectContent>
-                {listarQuery.data.cuentas.map((c: any) => (
-                  <SelectItem key={c.cuenta} value={c.cuenta}>{c.cuenta} — {c.nombre} ({fmt(c.valor)})</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+          <div className="flex flex-wrap gap-1">
+            {listarQuery.data.cuentas.map((c: any) => {
+              const marcada = cuentasLocal.includes(c.cuenta);
+              return (
+                <button
+                  key={c.cuenta} type="button" onClick={() => toggleCuenta(c.cuenta)}
+                  className={`text-xs px-2 py-1 rounded-md border ${marcada ? "bg-orange-600 text-white border-orange-600" : "bg-white text-muted-foreground border-input hover:bg-muted"}`}
+                  title={`${c.nombre} — ${fmt(c.valor)}`}
+                >
+                  {c.cuenta}
+                </button>
+              );
+            })}
           </div>
+          <p className="text-xs text-muted-foreground">En naranja = incluida en el IVA transitorio.</p>
           <Button
-            size="sm" disabled={guardarConfigMutation.isPending || !cuentaLocal}
-            onClick={() => guardarConfigMutation.mutate({ clienteId, cuentaTransitorio: cuentaLocal })}
+            size="sm" disabled={guardarConfigMutation.isPending || cuentasLocal.length === 0}
+            onClick={() => guardarConfigMutation.mutate({ clienteId, cuentas: cuentasLocal })}
           >
             {guardarConfigMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-2" /> : null}
             Guardar configuración
           </Button>
+
+          {compararQuery.isFetching && (
+            <p className="text-xs text-muted-foreground flex items-center gap-1.5 border-t pt-3">
+              <Loader2 className="w-3.5 h-3.5 animate-spin" /> Calculando el prorrateo, puede tardar unos segundos con archivos grandes...
+            </p>
+          )}
 
           {compararQuery.isError && (
             <p className="text-xs text-red-600 flex items-center gap-1.5 border-t pt-3">
@@ -1912,7 +1967,7 @@ function IvaTransitorioCard({ clienteId, anio, periodicidad, periodo }: {
             </p>
           )}
 
-          {compararQuery.data && (
+          {compararQuery.data && !compararQuery.isFetching && (
             <div className="border-t pt-3 space-y-2">
               <p className="text-xs font-medium text-muted-foreground">Prorrateo (Art. 490 E.T.)</p>
               <div className="flex justify-between text-xs"><span className="text-muted-foreground">Ingresos gravados (5%+19%)</span><span>{fmt(compararQuery.data.baseGravada)}</span></div>
@@ -1921,7 +1976,7 @@ function IvaTransitorioCard({ clienteId, anio, periodicidad, periodo }: {
                 <span className="text-muted-foreground">Proporción descontable</span>
                 <span>{compararQuery.data.proporcionDescontable !== null ? `${(compararQuery.data.proporcionDescontable * 100).toFixed(1)}%` : "—"}</span>
               </div>
-              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Saldo IVA transitorio (cuenta {compararQuery.data.cuenta})</span><span>{compararQuery.data.saldoTransitorio !== null ? fmt(compararQuery.data.saldoTransitorio) : "—"}</span></div>
+              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Saldo IVA transitorio ({compararQuery.data.cuentas.length} cuenta(s): {compararQuery.data.cuentas.join(", ")})</span><span>{compararQuery.data.saldoTransitorio !== null ? fmt(compararQuery.data.saldoTransitorio) : "—"}</span></div>
               <div className="flex justify-between text-sm font-medium border-t pt-1">
                 <span>Se descuenta en la declaración de IVA</span>
                 <span>{compararQuery.data.montoDescontable !== null ? fmt(compararQuery.data.montoDescontable) : "—"}</span>
@@ -2011,8 +2066,13 @@ function AnexoIvaCard({ clienteId, anio, periodicidad, periodo }: {
       <div className="border-t pt-3">
         <Button size="sm" disabled={generarAnexoMutation.isPending} onClick={() => generarAnexoMutation.mutate({ clienteId, anio, periodicidad, periodo })}>
           {generarAnexoMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-2" /> : <FileBarChart className="w-3.5 h-3.5 mr-2" />}
-          Generar Anexo
+          {generarAnexoMutation.isPending ? "Generando..." : "Generar Anexo"}
         </Button>
+        {generarAnexoMutation.isPending && (
+          <p className="text-xs text-muted-foreground mt-1 flex items-center gap-1.5">
+            <Loader2 className="w-3.5 h-3.5 animate-spin" /> Procesando el Anexo, puede tardar unos segundos con archivos grandes...
+          </p>
+        )}
         <p className="text-xs text-muted-foreground mt-1">
           Reúne el IVA generado, el descontable de compras, el transitorio con su prorrateo, y estos datos
           adicionales, en un solo Excel — es una primera versión para irse ajustando.
