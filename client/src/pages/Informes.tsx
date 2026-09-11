@@ -652,7 +652,7 @@ function IvaTab({ clienteId, anio }: { clienteId: number; anio: number }) {
               <div className="space-y-3">
                 <ClasificacionCuentasIvaCard clienteId={clienteId} anio={anio} periodicidad={periodicidad} periodo={periodo} />
 
-                <SeccionIvaColapsable titulo="1. Ingresos y su IVA generado" defaultOpen>
+                <SeccionIvaColapsable titulo="1. Ingresos y su IVA generado">
                   <IngresosIvaCard clienteId={clienteId} anio={anio} periodicidad={periodicidad} periodo={periodo} />
                   <IvaGeneradoCard clienteId={clienteId} anio={anio} periodicidad={periodicidad} periodo={periodo} />
                 </SeccionIvaColapsable>
@@ -665,6 +665,11 @@ function IvaTab({ clienteId, anio }: { clienteId: number; anio: number }) {
                 <SeccionIvaColapsable titulo="3. IVA transitorio y su cálculo de prorrateo">
                   <IvaTransitorioCard clienteId={clienteId} anio={anio} periodicidad={periodicidad} periodo={periodo} />
                 </SeccionIvaColapsable>
+
+                <div className="border rounded-md p-3 space-y-2">
+                  <p className="text-xs font-medium text-muted-foreground">Resumen general — cómo va quedando el IVA</p>
+                  <ResumenClasificacionIvaCard clienteId={clienteId} anio={anio} periodicidad={periodicidad} periodo={periodo} />
+                </div>
 
                 <AnexoIvaCard clienteId={clienteId} anio={anio} periodicidad={periodicidad} periodo={periodo} />
               </div>
@@ -1157,22 +1162,51 @@ function ClasificacionCuentasIvaCard({ clienteId, anio, periodicidad, periodo }:
             {guardarMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-2" /> : null}
             Guardar clasificación
           </Button>
-
-          <div className="border-t pt-2 space-y-1">
-            <p className="text-xs font-medium text-muted-foreground">Resumen por categoría</p>
-            {Object.entries(NOMBRES_CATEGORIA_IVA).map(([categoria, nombre]) => {
-              const cuentasDeCategoria = listarQuery.data!.cuentas.filter((c: any) => (clasificacionLocal[c.cuenta] || null) === categoria);
-              if (cuentasDeCategoria.length === 0) return null;
-              return (
-                <div key={categoria} className="flex items-center justify-between text-xs">
-                  <span className="text-muted-foreground">{nombre} ({cuentasDeCategoria.length} cuenta(s))</span>
-                  <span>{fmt(cuentasDeCategoria.reduce((a: number, c: any) => a + c.valor, 0))}</span>
-                </div>
-              );
-            })}
-          </div>
         </>
       )}
+    </div>
+  );
+}
+
+/** Resumen general — muestra cómo va quedando el IVA a medida que se
+ * completa cada sección, basado en la clasificación ya GUARDADA (no en
+ * cambios sin guardar que el usuario esté editando arriba). Se coloca
+ * al final, después de las 3 secciones de conciliación, junto al
+ * Anexo. */
+function ResumenClasificacionIvaCard({ clienteId, anio, periodicidad, periodo }: {
+  clienteId: number; anio: number; periodicidad: "bimestral" | "cuatrimestral" | "anual"; periodo: number;
+}) {
+  const listarQuery = trpc.informes.iva.clasificacionCuentas.listar.useQuery({ clienteId, anio, periodicidad, periodo });
+  const fmt = (n: number) => `$${Math.round(n).toLocaleString("es-CO")}`;
+
+  if (listarQuery.isLoading) {
+    return (
+      <div className="flex items-center justify-center gap-2 py-4 text-sm text-muted-foreground">
+        <Loader2 className="w-4 h-4 animate-spin" /> Cargando resumen...
+      </div>
+    );
+  }
+
+  const cuentas = listarQuery.data?.cuentas || [];
+  const categoriasConDatos = Object.entries(NOMBRES_CATEGORIA_IVA).filter(([categoria]) =>
+    cuentas.some((c: any) => c.categoria === categoria),
+  );
+
+  if (categoriasConDatos.length === 0) {
+    return <p className="text-xs text-muted-foreground">Aún no hay cuentas de IVA clasificadas — completa el Paso 3 arriba.</p>;
+  }
+
+  return (
+    <div className="space-y-1">
+      {categoriasConDatos.map(([categoria, nombre]) => {
+        const cuentasDeCategoria = cuentas.filter((c: any) => c.categoria === categoria);
+        return (
+          <div key={categoria} className="flex items-center justify-between text-xs">
+            <span className="text-muted-foreground">{nombre} ({cuentasDeCategoria.length} cuenta(s))</span>
+            <span>{fmt(cuentasDeCategoria.reduce((a: number, c: any) => a + c.valor, 0))}</span>
+          </div>
+        );
+      })}
     </div>
   );
 }
