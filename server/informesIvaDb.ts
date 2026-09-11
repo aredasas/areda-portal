@@ -537,6 +537,26 @@ export async function guardarSinCompras(
   return resumen;
 }
 
+/** Guarda los 2 valores que el Formulario 300 necesita pero que no se
+ * calculan de ningún archivo — los digita el contador directamente:
+ * el saldo a favor que quedó del periodo anterior, y las retenciones
+ * en la fuente a título de IVA que le practicaron a la empresa en este
+ * periodo. Se guardan en el mismo expediente del periodo, junto a los
+ * demás pasos. */
+export async function guardarDatosAdicionalesIva(
+  clienteId: number, anio: number, periodicidad: Periodicidad, periodo: number,
+  datos: { saldoFavorAnterior: number; retencionesFuente: number },
+): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  const existente = await getConciliacionIva(clienteId, anio, periodicidad, periodo);
+  if (!existente) throw new Error("No existe el expediente de esta conciliación — inicia el periodo primero.");
+  let estado: Record<string, unknown> = {};
+  try { estado = existente.estadoJson ? JSON.parse(existente.estadoJson) : {}; } catch { estado = {}; }
+  estado.datosAdicionales = datos;
+  await db.update(informesIvaConciliacion).set({ estadoJson: JSON.stringify(estado) }).where(eq(informesIvaConciliacion.id, existente.id));
+}
+
 export async function guardarPasoCompras(
   clienteId: number, anio: number, periodicidad: Periodicidad, codigoPeriodo: number, resumenCompras: unknown,
 ): Promise<void> {

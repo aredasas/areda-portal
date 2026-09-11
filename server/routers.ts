@@ -89,6 +89,7 @@ import * as informesDian from "./informesDianDb";
 import * as informesGestionCliente from "./informesGestionClienteDb";
 import * as informesIva from "./informesIvaDb";
 import * as informesIvaCuentas from "./informesIvaCuentasDb";
+import { generarAnexoIva } from "./informesIvaAnexo";
 import * as rentaDb from "./rentaDb";
 import { storagePut, storageGetSignedUrl, storageGetBuffer } from "./storage";
 import { invokeLLM } from "./_core/llm";
@@ -2347,6 +2348,48 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
             };
           }),
       }),
+      // Datos que el Formulario 300 necesita pero que el contador digita
+      // directamente — no se calculan de ningún archivo cargado.
+      datosAdicionales: router({
+        guardar: protectedProcedure
+          .input(z.object({
+            clienteId: z.number(), anio: z.number(),
+            periodicidad: z.enum(["bimestral", "cuatrimestral", "anual"]), periodo: z.number(),
+            saldoFavorAnterior: z.number(), retencionesFuente: z.number(),
+          }))
+          .mutation(async ({ input, ctx }) => {
+            await assertClienteAccesibleInformes(ctx, input.clienteId);
+            await informesIva.guardarDatosAdicionalesIva(input.clienteId, input.anio, input.periodicidad, input.periodo, {
+              saldoFavorAnterior: input.saldoFavorAnterior, retencionesFuente: input.retencionesFuente,
+            });
+            return { success: true };
+          }),
+      }),
+      // Genera el Anexo completo de la conciliación — reúne todo lo
+      // calculado en los pasos anteriores más el saldo a favor anterior
+      // y las retenciones, en un solo Excel descargable.
+      generarAnexo: protectedProcedure
+        .input(z.object({
+          clienteId: z.number(), anio: z.number(),
+          periodicidad: z.enum(["bimestral", "cuatrimestral", "anual"]), periodo: z.number(),
+        }))
+        .mutation(async ({ input, ctx }) => {
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
+          const cliente = await db.getClientById(input.clienteId);
+          const buffer = await generarAnexoIva(
+            input.clienteId, cliente?.razonSocial || "Cliente", input.anio, input.periodicidad, input.periodo,
+          );
+          const key = `informes/IVA_ANEXO_${input.clienteId}_${input.anio}_${input.periodicidad}_${input.periodo}_${Date.now()}.xlsx`;
+          const { url, key: fileKey } = await storagePut(
+            key, buffer, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          );
+          await informesDb.guardarReporteGenerado({
+            clienteId: input.clienteId, anio: input.anio, mes: null, tipo: "IVA_ANEXO",
+            nivel: "detalle", fileKey, generadoPorId: ctx.user.id,
+          });
+          const signedUrl = await storageGetSignedUrl(fileKey);
+          return { url, signedUrl, fileKey };
+        }),
     }),
     dian: router({
       // Consulta si ya existe un libro auxiliar cargado (desde Estado de

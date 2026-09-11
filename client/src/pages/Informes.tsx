@@ -625,6 +625,7 @@ function IvaTab({ clienteId, anio }: { clienteId: number; anio: number }) {
                 <ComprasIvaCard clienteId={clienteId} anio={anio} periodicidad={periodicidad} periodo={periodo} />
                 <IvaDescontableCard clienteId={clienteId} anio={anio} periodicidad={periodicidad} periodo={periodo} />
                 <IvaTransitorioCard clienteId={clienteId} anio={anio} periodicidad={periodicidad} periodo={periodo} />
+                <AnexoIvaCard clienteId={clienteId} anio={anio} periodicidad={periodicidad} periodo={periodo} />
               </div>
             ) : (
               <div className="pt-1">
@@ -1940,6 +1941,83 @@ function IvaTransitorioCard({ clienteId, anio, periodicidad, periodo }: {
           )}
         </>
       )}
+    </div>
+  );
+}
+
+/** Paso final — captura el saldo a favor del periodo anterior y las
+ * retenciones en la fuente a título de IVA (valores que el contador
+ * digita directamente, no se calculan de ningún archivo), y genera el
+ * Anexo completo con todo lo calculado en los pasos 2 a 6. */
+function AnexoIvaCard({ clienteId, anio, periodicidad, periodo }: {
+  clienteId: number; anio: number; periodicidad: "bimestral" | "cuatrimestral" | "anual"; periodo: number;
+}) {
+  const [saldoFavorLocal, setSaldoFavorLocal] = useState("");
+  const [retencionesLocal, setRetencionesLocal] = useState("");
+  const [inicializado, setInicializado] = useState(false);
+
+  const conciliacionQuery = trpc.informes.iva.obtener.useQuery({ clienteId, anio, periodicidad, periodo });
+  if (!inicializado && conciliacionQuery.data) {
+    try {
+      const estado = conciliacionQuery.data.estadoJson ? JSON.parse(conciliacionQuery.data.estadoJson) : {};
+      setSaldoFavorLocal(estado.datosAdicionales?.saldoFavorAnterior ? String(estado.datosAdicionales.saldoFavorAnterior) : "");
+      setRetencionesLocal(estado.datosAdicionales?.retencionesFuente ? String(estado.datosAdicionales.retencionesFuente) : "");
+    } catch { /* estado inválido — se deja vacío */ }
+    setInicializado(true);
+  }
+
+  const guardarDatosMutation = trpc.informes.iva.datosAdicionales.guardar.useMutation({
+    onSuccess: () => toast.success("Datos adicionales guardados"),
+    onError: (err) => toast.error(err.message || "No se pudo guardar"),
+  });
+
+  const generarAnexoMutation = trpc.informes.iva.generarAnexo.useMutation({
+    onSuccess: (data) => { toast.success("Anexo generado"); window.open(data.signedUrl, "_blank"); },
+    onError: (err) => toast.error(err.message || "No se pudo generar el Anexo"),
+  });
+
+  const handleGuardarDatos = () => {
+    guardarDatosMutation.mutate({
+      clienteId, anio, periodicidad, periodo,
+      saldoFavorAnterior: Number(saldoFavorLocal) || 0,
+      retencionesFuente: Number(retencionesLocal) || 0,
+    });
+  };
+
+  if (conciliacionQuery.isLoading) return <div className="flex justify-center py-6"><Loader2 className="w-5 h-5 animate-spin" /></div>;
+
+  return (
+    <div className="border rounded-md p-3 space-y-3">
+      <p className="text-xs font-medium text-muted-foreground">Datos adicionales y Anexo</p>
+      <p className="text-xs text-muted-foreground">
+        Estos dos valores no se calculan de ningún archivo — se digitan directamente para completar el
+        Formulario 300.
+      </p>
+      <div className="grid grid-cols-2 gap-3">
+        <div className="space-y-1">
+          <Label className="text-xs">Saldo a favor del periodo anterior</Label>
+          <Input type="number" value={saldoFavorLocal} onChange={(e) => setSaldoFavorLocal(e.target.value)} className="h-8 text-xs" placeholder="0" />
+        </div>
+        <div className="space-y-1">
+          <Label className="text-xs">Retenciones en la fuente a título de IVA</Label>
+          <Input type="number" value={retencionesLocal} onChange={(e) => setRetencionesLocal(e.target.value)} className="h-8 text-xs" placeholder="0" />
+        </div>
+      </div>
+      <Button size="sm" variant="outline" disabled={guardarDatosMutation.isPending} onClick={handleGuardarDatos}>
+        {guardarDatosMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-2" /> : null}
+        Guardar datos adicionales
+      </Button>
+
+      <div className="border-t pt-3">
+        <Button size="sm" disabled={generarAnexoMutation.isPending} onClick={() => generarAnexoMutation.mutate({ clienteId, anio, periodicidad, periodo })}>
+          {generarAnexoMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-2" /> : <FileBarChart className="w-3.5 h-3.5 mr-2" />}
+          Generar Anexo
+        </Button>
+        <p className="text-xs text-muted-foreground mt-1">
+          Reúne el IVA generado, el descontable de compras, el transitorio con su prorrateo, y estos datos
+          adicionales, en un solo Excel — es una primera versión para irse ajustando.
+        </p>
+      </div>
     </div>
   );
 }

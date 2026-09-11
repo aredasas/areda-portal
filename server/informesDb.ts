@@ -664,7 +664,7 @@ export async function deduplicarSaldosMensuales(clienteId: number): Promise<{ fi
 }
 
 export async function guardarReporteGenerado(data: {
-  clienteId: number; anio: number; mes?: number | null; tipo: "ERM" | "ERI" | "DIAN";
+  clienteId: number; anio: number; mes?: number | null; tipo: "ERM" | "ERI" | "DIAN" | "IVA_ANEXO";
   nivel: "resumen" | "detalle"; fileKey: string; generadoPorId: number;
   totalEmitidoDian?: number; totalRecibidoDian?: number; totalesPorTipoJson?: string;
 }): Promise<void> {
