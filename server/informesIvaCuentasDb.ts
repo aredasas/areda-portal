@@ -1,5 +1,5 @@
 import { and, eq, inArray } from "drizzle-orm";
-import * as XLSX from "xlsx";
+import { leerFilasXlsxRobusto } from "./xlsxRobusto";
 import { getDb } from "./db";
 import { informesConfigCuentasIva, informesCuentasCliente, informesCuentasPuc, informesComprasTiposExcluidos, type InformeConfigCuentaIva } from "../drizzle/schema";
 import { getCargaConArchivo, normalizarCuentaPUC } from "./informesDb";
@@ -64,10 +64,8 @@ function columnaCuentaEsConfiable(filas: any[][], colIndex: number): boolean {
 // libro auxiliar (ej. "240805001") nunca coincidía con la clave del
 // catálogo ("24080501"), y la cuenta aparecía siempre "sin nombre"
 // aunque el plan de cuentas sí la tuviera.
-function sumarSaldosPorCuenta(buffer: Buffer, prefijos: string[], convencion: ConvencionSaldo = "pasivo"): Map<string, number> {
-  const wb = XLSX.read(buffer, { type: "buffer", cellDates: false });
-  const ws = wb.Sheets[wb.SheetNames[0]];
-  const filas: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null, raw: true });
+async function sumarSaldosPorCuenta(buffer: Buffer, prefijos: string[], convencion: ConvencionSaldo = "pasivo"): Promise<Map<string, number>> {
+  const filas: any[][] = await leerFilasXlsxRobusto(buffer);
   if (filas.length < 2) return new Map();
 
   const cols: ColsAuxiliarDian = resolverColumnasAuxiliarDian(filas[0]);
@@ -91,10 +89,8 @@ function sumarSaldosPorCuenta(buffer: Buffer, prefijos: string[], convencion: Co
  * comprobante de cada línea — necesario cuando hace falta filtrar por
  * tipo de documento antes de sumar (ej. excluir los asientos internos
  * de costo de venta de las cuentas 14/62, que no son compras reales). */
-function sumarSaldosPorCuentaYTipo(buffer: Buffer, prefijos: string[], convencion: ConvencionSaldo): Map<string, { cuenta: string; tipo: string; valor: number }> {
-  const wb = XLSX.read(buffer, { type: "buffer", cellDates: false });
-  const ws = wb.Sheets[wb.SheetNames[0]];
-  const filas: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null, raw: true });
+async function sumarSaldosPorCuentaYTipo(buffer: Buffer, prefijos: string[], convencion: ConvencionSaldo): Promise<Map<string, { cuenta: string; tipo: string; valor: number }>> {
+  const filas: any[][] = await leerFilasXlsxRobusto(buffer);
   if (filas.length < 2) return new Map();
 
   const cols: ColsAuxiliarDian = resolverColumnasAuxiliarDian(filas[0]);
@@ -139,7 +135,7 @@ export async function getTiposComprobantePorPrefijoDelPeriodo(
     const carga = await getCargaConArchivo(clienteId, anio, mes);
     if (!carga?.fileKey) continue;
     const buffer = await storageGetBuffer(carga.fileKey);
-    const saldosDelMes = sumarSaldosPorCuentaYTipo(buffer, prefijos, convencion);
+    const saldosDelMes = await sumarSaldosPorCuentaYTipo(buffer, prefijos, convencion);
     for (const { tipo, valor } of Array.from(saldosDelMes.values())) {
       if (!porTipo.has(tipo)) porTipo.set(tipo, { cantidad: 0, valor: 0 });
       const entrada = porTipo.get(tipo)!;
@@ -166,7 +162,7 @@ export async function getCuentasPrefijoConFiltroDelPeriodo(
     const carga = await getCargaConArchivo(clienteId, anio, mes);
     if (!carga?.fileKey) continue;
     const buffer = await storageGetBuffer(carga.fileKey);
-    const saldosDelMes = sumarSaldosPorCuentaYTipo(buffer, prefijos, convencion);
+    const saldosDelMes = await sumarSaldosPorCuentaYTipo(buffer, prefijos, convencion);
     for (const { cuenta, tipo, valor } of Array.from(saldosDelMes.values())) {
       if (excluidosSet.has(tipo)) continue;
       totalPorCuenta.set(cuenta, (totalPorCuenta.get(cuenta) || 0) + valor);
@@ -226,8 +222,8 @@ export async function getCuentasPrefijoDelPeriodoConDiagnostico(
     if (!carga?.fileKey) continue;
     mesesConArchivo++;
     const buffer = await storageGetBuffer(carga.fileKey);
-    const saldosDelMes = sumarSaldosPorCuenta(buffer, prefijos);
-    if (columnaCuentaDelArchivoEsConfiable(buffer)) mesesConColumnaCuentaConfiable++;
+    const saldosDelMes = await sumarSaldosPorCuenta(buffer, prefijos);
+    if (await columnaCuentaDelArchivoEsConfiable(buffer)) mesesConColumnaCuentaConfiable++;
     for (const [cuenta, valor] of Array.from(saldosDelMes.entries())) {
       totalPorCuenta.set(cuenta, (totalPorCuenta.get(cuenta) || 0) + valor);
     }
@@ -238,10 +234,8 @@ export async function getCuentasPrefijoDelPeriodoConDiagnostico(
 
 /** Confirma si el archivo, tal como está, tiene una columna de cuenta
  * reconocible y confiable — usado solo para el diagnóstico de arriba. */
-function columnaCuentaDelArchivoEsConfiable(buffer: Buffer): boolean {
-  const wb = XLSX.read(buffer, { type: "buffer", cellDates: false });
-  const ws = wb.Sheets[wb.SheetNames[0]];
-  const filas: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null, raw: true });
+async function columnaCuentaDelArchivoEsConfiable(buffer: Buffer): Promise<boolean> {
+  const filas: any[][] = await leerFilasXlsxRobusto(buffer);
   if (filas.length < 2) return false;
   const cols: ColsAuxiliarDian = resolverColumnasAuxiliarDian(filas[0]);
   return cols.cuenta !== null && columnaCuentaEsConfiable(filas, cols.cuenta);
@@ -285,7 +279,7 @@ export async function getSaldoCuentaEnPeriodo(clienteId: number, anio: number, m
     const carga = await getCargaConArchivo(clienteId, anio, mes);
     if (!carga?.fileKey) continue;
     const buffer = await storageGetBuffer(carga.fileKey);
-    const saldosDelMes = sumarSaldosPorCuenta(buffer, [cuenta]);
+    const saldosDelMes = await sumarSaldosPorCuenta(buffer, [cuenta]);
     total += saldosDelMes.get(cuenta) || 0;
   }
   return total;

@@ -1,5 +1,6 @@
 import ExcelJS from "exceljs";
 import * as XLSX from "xlsx";
+import { leerFilasXlsxRobusto } from "./xlsxRobusto";
 import { and, eq } from "drizzle-orm";
 import { getDb } from "./db";
 import { informesTiposDocumentoConfig, informesComprobantesExcluidos, type InformeTipoDocumentoConfig } from "../drizzle/schema";
@@ -331,9 +332,7 @@ export async function parseAuxiliarParaDian(
   // el mismo número aparecía en 2-3 series con montos diferentes).
   const documentos = new Map<string, DocumentoAuxiliar>();
   const buffer = Buffer.isBuffer(filePathOrBuffer) ? filePathOrBuffer : require("fs").readFileSync(filePathOrBuffer);
-  const wb = XLSX.read(buffer, { type: "buffer" });
-  const hoja = wb.Sheets[wb.SheetNames[0]];
-  const todasLasFilas: any[][] = XLSX.utils.sheet_to_json(hoja, { header: 1, defval: null });
+  const todasLasFilas: any[][] = await leerFilasXlsxRobusto(buffer);
   if (todasLasFilas.length === 0) return documentos;
 
   const header = todasLasFilas[0];
