@@ -624,6 +624,7 @@ function IvaTab({ clienteId, anio }: { clienteId: number; anio: number }) {
                 <IvaGeneradoCard clienteId={clienteId} anio={anio} periodicidad={periodicidad} periodo={periodo} />
                 <ComprasIvaCard clienteId={clienteId} anio={anio} periodicidad={periodicidad} periodo={periodo} />
                 <IvaDescontableCard clienteId={clienteId} anio={anio} periodicidad={periodicidad} periodo={periodo} />
+                <IvaTransitorioCard clienteId={clienteId} anio={anio} periodicidad={periodicidad} periodo={periodo} />
               </div>
             ) : (
               <div className="pt-1">
@@ -1801,6 +1802,147 @@ function IvaDescontableCard({ clienteId, anio, periodicidad, periodo }: {
   );
 }
 
+
+/** Paso 6 de la conciliación de IVA — el IVA transitorio (que acompaña
+ * gastos/servicios de la cuenta 5, en cuentas SEPARADAS del IVA
+ * descontable de compras) solo se puede descontar en la misma
+ * proporción que representan los ingresos gravados frente al total de
+ * ingresos relevantes (Art. 490 E.T.) — el resto va al gasto. */
+function IvaTransitorioCard({ clienteId, anio, periodicidad, periodo }: {
+  clienteId: number; anio: number; periodicidad: "bimestral" | "cuatrimestral" | "anual"; periodo: number;
+}) {
+  const [cuentaLocal, setCuentaLocal] = useState("");
+  const [inicializado, setInicializado] = useState(false);
+
+  const listarQuery = trpc.informes.iva.ivaTransitorio.listarCuentas.useQuery({ clienteId, anio, periodicidad, periodo });
+  if (!inicializado && listarQuery.data) {
+    setCuentaLocal(listarQuery.data.cuentaTransitorio || "");
+    setInicializado(true);
+  }
+
+  const guardarConfigMutation = trpc.informes.iva.ivaTransitorio.guardarConfig.useMutation({
+    onSuccess: () => { toast.success("Cuenta de IVA transitorio guardada"); listarQuery.refetch(); compararQuery.refetch(); },
+    onError: (err: any) => toast.error(err.message || "No se pudo guardar"),
+  });
+
+  // Habilitada según lo ya seleccionado en pantalla, no lo que trajo la
+  // carga inicial — mismo criterio que Pasos 3 y 5, para que la
+  // comparación aparezca de inmediato al elegir la cuenta.
+  const compararQuery = trpc.informes.iva.ivaTransitorio.comparar.useQuery(
+    { clienteId, anio, periodicidad, periodo },
+    { enabled: !!cuentaLocal },
+  );
+
+  const fmt = (n: number) => `$${Math.round(n).toLocaleString("es-CO")}`;
+
+  if (listarQuery.isLoading) return <div className="flex justify-center py-6"><Loader2 className="w-5 h-5 animate-spin" /></div>;
+
+  return (
+    <div className="border rounded-md p-3 space-y-3">
+      <p className="text-xs font-medium text-muted-foreground">Paso 6 · IVA transitorio (Art. 490 E.T.)</p>
+
+      <div className="flex items-center gap-2 text-xs">
+        <span className="text-muted-foreground">Cuenta mayor de IVA:</span>
+        <span className="font-medium">{listarQuery.data?.cuentaMayor || "24"}</span>
+        <span className="text-muted-foreground">(se edita desde el Paso 3)</span>
+      </div>
+
+      {(!listarQuery.data || listarQuery.data.cuentas.length === 0) ? (
+        <div className="text-xs text-muted-foreground space-y-1">
+          {(() => {
+            const d = listarQuery.data?.diagnostico;
+            if (!d) return <p>Cargando diagnóstico...</p>;
+            if (d.mesesConArchivo === 0) {
+              return (
+                <p className="text-amber-700 flex items-center gap-1.5">
+                  <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                  No se encontró el libro auxiliar cargado para ningún mes de este periodo ({d.totalMeses} mes(es)) —
+                  ve a "Estado de Resultados" y confirma que esté cargado.
+                </p>
+              );
+            }
+            if (d.mesesConColumnaCuentaConfiable === 0) {
+              return (
+                <p className="text-amber-700 flex items-center gap-1.5">
+                  <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                  El libro auxiliar está cargado para {d.mesesConArchivo} de {d.totalMeses} mes(es), pero no se
+                  pudo identificar con confianza la columna de código de cuenta en el archivo.
+                </p>
+              );
+            }
+            return (
+              <p>
+                No se encontró movimiento en cuentas que empiecen en "{listarQuery.data?.cuentaMayor || "24"}" en
+                este periodo — confirma la cuenta mayor en el Paso 3.
+              </p>
+            );
+          })()}
+        </div>
+      ) : (
+        <>
+          <p className="text-xs text-muted-foreground">
+            Elige, de las cuentas 24xx con movimiento en el periodo, cuál es la de IVA transitorio (el que
+            acompaña los gastos y servicios de la cuenta 5). Se guarda por cliente, para los siguientes
+            periodos también.
+          </p>
+          <div className="space-y-1">
+            <Label className="text-xs">Cuenta IVA transitorio</Label>
+            <Select value={cuentaLocal} onValueChange={setCuentaLocal}>
+              <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Elegir cuenta..." /></SelectTrigger>
+              <SelectContent>
+                {listarQuery.data.cuentas.map((c: any) => (
+                  <SelectItem key={c.cuenta} value={c.cuenta}>{c.cuenta} — {c.nombre} ({fmt(c.valor)})</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <Button
+            size="sm" disabled={guardarConfigMutation.isPending || !cuentaLocal}
+            onClick={() => guardarConfigMutation.mutate({ clienteId, cuentaTransitorio: cuentaLocal })}
+          >
+            {guardarConfigMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-2" /> : null}
+            Guardar configuración
+          </Button>
+
+          {compararQuery.isError && (
+            <p className="text-xs text-red-600 flex items-center gap-1.5 border-t pt-3">
+              <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+              {compararQuery.error?.message || "No se pudo calcular el prorrateo."}
+            </p>
+          )}
+
+          {compararQuery.data && (
+            <div className="border-t pt-3 space-y-2">
+              <p className="text-xs font-medium text-muted-foreground">Prorrateo (Art. 490 E.T.)</p>
+              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Ingresos gravados (5%+19%)</span><span>{fmt(compararQuery.data.baseGravada)}</span></div>
+              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Ingresos excluidos</span><span>{fmt(compararQuery.data.baseExcluida)}</span></div>
+              <div className="flex justify-between text-xs">
+                <span className="text-muted-foreground">Proporción descontable</span>
+                <span>{compararQuery.data.proporcionDescontable !== null ? `${(compararQuery.data.proporcionDescontable * 100).toFixed(1)}%` : "—"}</span>
+              </div>
+              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Saldo IVA transitorio (cuenta {compararQuery.data.cuenta})</span><span>{compararQuery.data.saldoTransitorio !== null ? fmt(compararQuery.data.saldoTransitorio) : "—"}</span></div>
+              <div className="flex justify-between text-sm font-medium border-t pt-1">
+                <span>Se descuenta en la declaración de IVA</span>
+                <span>{compararQuery.data.montoDescontable !== null ? fmt(compararQuery.data.montoDescontable) : "—"}</span>
+              </div>
+              <div className="flex justify-between text-sm font-medium">
+                <span>Va al gasto (IVA resultante de prorrateo)</span>
+                <span>{compararQuery.data.montoAGasto !== null ? fmt(compararQuery.data.montoAGasto) : "—"}</span>
+              </div>
+              {compararQuery.data.proporcionDescontable === null && (
+                <p className="text-xs text-amber-700 flex items-center gap-1.5">
+                  <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                  No hay ingresos gravados ni excluidos registrados en el Paso 2 — revisa la clasificación de
+                  ingresos antes de continuar.
+                </p>
+              )}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
 
 function ProximamenteCard({ icono: Icono, titulo, descripcion }: { icono: any; titulo: string; descripcion: string }) {
   return (

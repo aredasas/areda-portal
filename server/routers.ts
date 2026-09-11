@@ -2281,6 +2281,72 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
             };
           }),
       }),
+      // Paso 6 — IVA transitorio: el IVA que acompaña los gastos y
+      // servicios (cuenta 5) vive en cuentas SEPARADAS del IVA
+      // descontable de compras (14/62). Según el Art. 490 E.T., solo se
+      // puede descontar en la proporción que representan los ingresos
+      // GRAVADOS (5%+19%) frente al total de ingresos relevantes
+      // (gravados + excluidos — los NO gravados no entran en la
+      // proporción); el resto del saldo transitorio se lleva al gasto
+      // como "IVA resultante de prorrateo".
+      ivaTransitorio: router({
+        listarCuentas: protectedProcedure
+          .input(z.object({
+            clienteId: z.number(), anio: z.number(),
+            periodicidad: z.enum(["bimestral", "cuatrimestral", "anual"]), periodo: z.number(),
+          }))
+          .query(async ({ input, ctx }) => {
+            await assertClienteAccesibleInformes(ctx, input.clienteId);
+            const meses = informesIva.mesesDelPeriodo(input.periodicidad, input.periodo);
+            const cuentaMayor = await informesIvaCuentas.getCuentaMayorIva(input.clienteId);
+            const [diagnostico, config] = await Promise.all([
+              informesIvaCuentas.getCuentasPrefijoDelPeriodoConDiagnostico(input.clienteId, input.anio, meses, [cuentaMayor]),
+              informesIvaCuentas.getConfigCuentasIva(input.clienteId),
+            ]);
+            const cuentaTransitorio = config.find(c => c.tipoIva === "transitorio")?.cuenta || null;
+            return { cuentas: diagnostico.cuentas, cuentaTransitorio, cuentaMayor, diagnostico };
+          }),
+        guardarConfig: protectedProcedure
+          .input(z.object({ clienteId: z.number(), cuentaTransitorio: z.string().min(1) }))
+          .mutation(async ({ input, ctx }) => {
+            await assertClienteAccesibleInformes(ctx, input.clienteId);
+            await informesIvaCuentas.guardarConfigCuentasIva(input.clienteId, [{ tipoIva: "transitorio", cuenta: input.cuentaTransitorio }], ctx.user.id);
+            return { success: true };
+          }),
+        comparar: protectedProcedure
+          .input(z.object({
+            clienteId: z.number(), anio: z.number(),
+            periodicidad: z.enum(["bimestral", "cuatrimestral", "anual"]), periodo: z.number(),
+          }))
+          .query(async ({ input, ctx }) => {
+            await assertClienteAccesibleInformes(ctx, input.clienteId);
+            const expediente = await informesIva.getConciliacionIva(input.clienteId, input.anio, input.periodicidad, input.periodo);
+            let estado: any = {};
+            try { estado = expediente?.estadoJson ? JSON.parse(expediente.estadoJson) : {}; } catch { estado = {}; }
+            const totalPorClasificacion = estado.ingresos?.totalPorClasificacion;
+            if (!totalPorClasificacion) {
+              throw new Error("Primero completa y guarda el Paso 2 (clasificación de ingresos) de este periodo.");
+            }
+            const config = await informesIvaCuentas.getConfigCuentasIva(input.clienteId);
+            const cuenta = config.find(c => c.tipoIva === "transitorio")?.cuenta || null;
+            const meses = informesIva.mesesDelPeriodo(input.periodicidad, input.periodo);
+
+            // Proporción del Art. 490 E.T. — solo gravado vs. (gravado +
+            // excluido); los NO gravados no participan en absoluto.
+            const baseGravada = totalPorClasificacion.gravado_19 + totalPorClasificacion.gravado_5;
+            const baseExcluida = totalPorClasificacion.excluido;
+            const baseRelevante = baseGravada + baseExcluida;
+            const proporcionDescontable = baseRelevante > 0 ? baseGravada / baseRelevante : null;
+
+            const saldoTransitorio = cuenta ? await informesIvaCuentas.getSaldoCuentaEnPeriodo(input.clienteId, input.anio, meses, cuenta) : null;
+            const montoDescontable = saldoTransitorio !== null && proporcionDescontable !== null ? saldoTransitorio * proporcionDescontable : null;
+            const montoAGasto = saldoTransitorio !== null && montoDescontable !== null ? saldoTransitorio - montoDescontable : null;
+
+            return {
+              cuenta, saldoTransitorio, baseGravada, baseExcluida, proporcionDescontable, montoDescontable, montoAGasto,
+            };
+          }),
+      }),
     }),
     dian: router({
       // Consulta si ya existe un libro auxiliar cargado (desde Estado de
