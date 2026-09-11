@@ -84,6 +84,11 @@ export type FilaDian = {
    * signo que `total` (negativo si el documento resta). Positivo (o
    * negativo) por defecto en 0 si el archivo no trae esa columna. */
   valorImpuestos: number;
+  /** Solo el IVA (sin otros impuestos como ICA/INC), con el mismo signo
+   * que `total` — se guarda aparte porque `valorImpuestos` mezcla el
+   * IVA con otros impuestos, y para comparar el IVA generado/descontable
+   * contra lo que la DIAN reporta hace falta el IVA puro, no la mezcla. */
+  valorIva: number;
   grupo: "Emitido" | "Recibido" | "Desconocido";
 };
 
@@ -197,6 +202,7 @@ export async function parseArchivoDian(filePathOrBuffer: string | Buffer): Promi
       total: netoAbs * signo,
       totalBruto: Math.abs(totalBruto) * signo,
       valorImpuestos: (Math.abs(valorIva) + Math.abs(valorOtrosImpuestos)) * signo,
+      valorIva: Math.abs(valorIva) * signo,
       grupo,
     });
   }
@@ -512,6 +518,10 @@ export type TipoDocumentoDetectado = {
   grupo: "Emitido" | "Recibido";
   cantidad: number;
   total: number;
+  /** Suma del IVA puro (sin otros impuestos) de todos los documentos de
+   * este tipo — permite comparar el IVA generado/descontable contra lo
+   * que la DIAN reporta, cruzando por tipo de documento asociado. */
+  iva: number;
   categoriaSugerida: DocumentoAuxiliar["categoria"];
 };
 
@@ -527,12 +537,13 @@ export function getTiposDocumentoDelArchivo(filasDian: FilaDian[]): TipoDocument
     if (!porClave.has(clave)) {
       porClave.set(clave, {
         tipoDocumentoDian: fila.tipo, grupo: fila.grupo as "Emitido" | "Recibido",
-        cantidad: 0, total: 0, categoriaSugerida: categorizarFilaDian(fila),
+        cantidad: 0, total: 0, iva: 0, categoriaSugerida: categorizarFilaDian(fila),
       });
     }
     const entrada = porClave.get(clave)!;
     entrada.cantidad++;
     entrada.total += fila.total;
+    entrada.iva += fila.valorIva;
   }
   return Array.from(porClave.values()).sort((a, b) => b.total - a.total);
 }

@@ -7,16 +7,21 @@ import { dibujarPiePaginaAreda } from "./rentaDb";
 // ==================== CÁLCULO (compartido entre Excel y PDF) ====================
 
 type LineaCuenta = { base: number; esperado: number; real: number | null; cuentas: string[] };
+type LineaDevolucion = { real: number | null; cuentas: string[] };
+type ComparacionIvaDian = { esperado: number; real: number | null; haySinDato: boolean };
 type DatosAnexoIva = {
   clienteNombre: string; anio: number; periodicidad: informesIva.Periodicidad; periodo: number;
   generado: { tarifa19: LineaCuenta; tarifa5: LineaCuenta; total: number };
   observacionDian: { totalFacturado: number; totalDianEmitido: number; diferencia: number };
+  devolucionCompra19: LineaDevolucion; devolucionCompra5: LineaDevolucion;
   descontableCompras: { tarifa19: LineaCuenta; tarifa5: LineaCuenta; total: number };
   observacionFacturado: { totalContabilidad: number; totalFacturado: number; pct: number | null };
+  devolucionVenta19: LineaDevolucion; devolucionVenta5: LineaDevolucion;
   transitorio: {
     baseGravada: number; baseExcluida: number; proporcion: number | null;
     cuentas: string[]; saldo: number | null; montoDescontable: number | null; montoAGasto: number | null;
   };
+  ivaDianVentas: ComparacionIvaDian; ivaDianCompras: ComparacionIvaDian;
   datosAdicionales: { saldoFavorAnterior: number; retencionesFuente: number };
   resumen: { totalIvaGenerado: number; totalIvaDescontableCompras: number; totalIvaDescontableTransitorio: number; saldoAPagarOFavor: number };
 };
@@ -48,6 +53,8 @@ async function calcularDatosAnexoIva(
 
   const { saldo: realGen19, cuentas: cuentasGen19 } = await saldoPor("generado_19", "pasivo");
   const { saldo: realGen5, cuentas: cuentasGen5 } = await saldoPor("generado_5", "pasivo");
+  const { saldo: devCompra19, cuentas: cuentasDevCompra19 } = await saldoPor("generado_devolucion_compra_19", "pasivo");
+  const { saldo: devCompra5, cuentas: cuentasDevCompra5 } = await saldoPor("generado_devolucion_compra_5", "pasivo");
   const esperadoGen19 = totalIngresos.gravado_19 * 0.19;
   const esperadoGen5 = totalIngresos.gravado_5 * 0.05;
   const totalDianEmitidoPorMes = await informesIva.getTotalDianEmitidoPorMes(clienteId, anio, meses);
@@ -56,11 +63,31 @@ async function calcularDatosAnexoIva(
 
   const { saldo: realDesc19, cuentas: cuentasDesc19 } = await saldoPor("descontable_19", "activo_gasto");
   const { saldo: realDesc5, cuentas: cuentasDesc5 } = await saldoPor("descontable_5", "activo_gasto");
+  const { saldo: devVenta19, cuentas: cuentasDevVenta19 } = await saldoPor("descontable_devolucion_venta_19", "activo_gasto");
+  const { saldo: devVenta5, cuentas: cuentasDevVenta5 } = await saldoPor("descontable_devolucion_venta_5", "activo_gasto");
   const esperadoDesc19 = totalCompras.gravado_19 * 0.19;
   const esperadoDesc5 = totalCompras.gravado_5 * 0.05;
   const totalContabilidadCompras = estado.compras?.totalContabilidad ?? 0;
   const totalFacturadoCompras = estado.compras?.totalContabilidadFacturado ?? 0;
   const pctFacturadoCompras = totalContabilidadCompras > 0 ? totalFacturadoCompras / totalContabilidadCompras : null;
+
+  // El IVA que la DIAN reporta — el archivo no discrimina el IVA por
+  // tarifa dentro de cada documento, así que solo se compara el TOTAL
+  // (19%+5% juntos) contra lo que la DIAN reporta.
+  const ivaDianVentasPorMes = await informesIva.getTotalIvaDianVentasPorMes(clienteId, anio, meses);
+  const haySinDatoVentas = ivaDianVentasPorMes.some(m => m.valor === null);
+  const ivaDianVentas: ComparacionIvaDian = {
+    esperado: esperadoGen19 + esperadoGen5,
+    real: haySinDatoVentas ? null : ivaDianVentasPorMes.reduce((a, m) => a + (m.valor ?? 0), 0),
+    haySinDato: haySinDatoVentas,
+  };
+  const ivaDianComprasPorMes = await informesIva.getTotalIvaDianComprasPorMes(clienteId, anio, meses);
+  const haySinDatoCompras = ivaDianComprasPorMes.some(m => m.valor === null);
+  const ivaDianCompras: ComparacionIvaDian = {
+    esperado: esperadoDesc19 + esperadoDesc5,
+    real: haySinDatoCompras ? null : ivaDianComprasPorMes.reduce((a, m) => a + (m.valor ?? 0), 0),
+    haySinDato: haySinDatoCompras,
+  };
 
   const { saldo: saldoTransitorio, cuentas: cuentasTransitorio } = await saldoPor("transitorio", "activo_gasto");
   const baseGravadaTransitorio = totalIngresos.gravado_19 + totalIngresos.gravado_5;
@@ -89,16 +116,21 @@ async function calcularDatosAnexoIva(
       total: totalIvaGenerado,
     },
     observacionDian: { totalFacturado: totalFacturadoIngresos, totalDianEmitido, diferencia: totalFacturadoIngresos - totalDianEmitido },
+    devolucionCompra19: { real: devCompra19, cuentas: cuentasDevCompra19 },
+    devolucionCompra5: { real: devCompra5, cuentas: cuentasDevCompra5 },
     descontableCompras: {
       tarifa19: { base: totalCompras.gravado_19, esperado: esperadoDesc19, real: realDesc19, cuentas: cuentasDesc19 },
       tarifa5: { base: totalCompras.gravado_5, esperado: esperadoDesc5, real: realDesc5, cuentas: cuentasDesc5 },
       total: totalIvaDescontableCompras,
     },
     observacionFacturado: { totalContabilidad: totalContabilidadCompras, totalFacturado: totalFacturadoCompras, pct: pctFacturadoCompras },
+    devolucionVenta19: { real: devVenta19, cuentas: cuentasDevVenta19 },
+    devolucionVenta5: { real: devVenta5, cuentas: cuentasDevVenta5 },
     transitorio: {
       baseGravada: baseGravadaTransitorio, baseExcluida: baseExcluidaTransitorio, proporcion: proporcionTransitorio,
       cuentas: cuentasTransitorio, saldo: saldoTransitorio, montoDescontable: montoDescontableTransitorio, montoAGasto: montoAGastoTransitorio,
     },
+    ivaDianVentas, ivaDianCompras,
     datosAdicionales,
     resumen: { totalIvaGenerado, totalIvaDescontableCompras, totalIvaDescontableTransitorio, saldoAPagarOFavor },
   };
@@ -173,12 +205,30 @@ export async function generarAnexoIva(
   const rTotalGen = ws.addRow(["Total IVA generado", "", d.generado.total, "", ""]);
   rTotalGen.font = FONT_BOLD as any;
   ws.addRow([]);
+  if (d.devolucionCompra19.cuentas.length > 0 || d.devolucionCompra5.cuentas.length > 0) {
+    ws.addRow(["IVA generado en devoluciones en compra"]).font = FONT_BOLD as any;
+    if (d.devolucionCompra19.cuentas.length > 0) ws.addRow(["19%", "", "", d.devolucionCompra19.real, "", d.devolucionCompra19.cuentas.join(", ")]);
+    if (d.devolucionCompra5.cuentas.length > 0) ws.addRow(["5%", "", "", d.devolucionCompra5.real, "", d.devolucionCompra5.cuentas.join(", ")]);
+    ws.addRow([]);
+  }
   ws.addRow(["Observación — comparación contra la DIAN (ingresos, Paso 2)"]).font = FONT_BOLD as any;
   ws.addRow(["Total facturado electrónicamente (contabilidad)", d.observacionDian.totalFacturado]);
   ws.addRow(["Total reportado por la DIAN como Emitido", d.observacionDian.totalDianEmitido]);
   const rDifDian = ws.addRow(["Diferencia", d.observacionDian.diferencia]);
   if (Math.abs(d.observacionDian.diferencia) > Math.max(5, Math.abs(d.observacionDian.totalDianEmitido) * 0.001)) rDifDian.eachCell(c => c.fill = ALERTA_FILL);
   else rDifDian.eachCell(c => c.fill = OK_FILL);
+  ws.addRow([]);
+  ws.addRow(["Observación — IVA reportado por la DIAN en los documentos de venta"]).font = FONT_BOLD as any;
+  ws.addRow(["IVA esperado (19%+5%)", d.ivaDianVentas.esperado]);
+  if (d.ivaDianVentas.haySinDato) {
+    ws.addRow(["IVA según la DIAN", "sin dato — regenera la comparación DIAN de algún mes"]);
+  } else if (d.ivaDianVentas.real !== null) {
+    ws.addRow(["IVA según la DIAN", d.ivaDianVentas.real]);
+    const difIvaDianVentas = d.ivaDianVentas.esperado - d.ivaDianVentas.real;
+    const rDifIvaDianVentas = ws.addRow(["Diferencia contra la DIAN", difIvaDianVentas]);
+    if (Math.abs(difIvaDianVentas) > Math.max(5, Math.abs(d.ivaDianVentas.esperado) * 0.001)) rDifIvaDianVentas.eachCell(c => c.fill = ALERTA_FILL);
+    else rDifIvaDianVentas.eachCell(c => c.fill = OK_FILL);
+  }
   ws.addRow([]);
 
   tituloSeccion(ws, "2. IVA DESCONTABLE — COMPRAS");
@@ -188,11 +238,29 @@ export async function generarAnexoIva(
   const rTotalDesc = ws.addRow(["Total IVA descontable de compras", "", d.descontableCompras.total, "", ""]);
   rTotalDesc.font = FONT_BOLD as any;
   ws.addRow([]);
+  if (d.devolucionVenta19.cuentas.length > 0 || d.devolucionVenta5.cuentas.length > 0) {
+    ws.addRow(["IVA descontable en devoluciones en venta"]).font = FONT_BOLD as any;
+    if (d.devolucionVenta19.cuentas.length > 0) ws.addRow(["19%", "", "", d.devolucionVenta19.real, "", d.devolucionVenta19.cuentas.join(", ")]);
+    if (d.devolucionVenta5.cuentas.length > 0) ws.addRow(["5%", "", "", d.devolucionVenta5.real, "", d.devolucionVenta5.cuentas.join(", ")]);
+    ws.addRow([]);
+  }
   ws.addRow(["Observación — facturación electrónica de las compras"]).font = FONT_BOLD as any;
   ws.addRow(["Total compras (contabilidad)", d.observacionFacturado.totalContabilidad]);
   ws.addRow(["Facturado electrónicamente", d.observacionFacturado.totalFacturado, d.observacionFacturado.pct !== null ? `${(d.observacionFacturado.pct * 100).toFixed(1)}%` : "—"]);
   if (d.observacionFacturado.pct !== null && d.observacionFacturado.pct < 0.95) {
     ws.addRow(["\u26A0 Una parte importante de las compras no está facturada electrónicamente — revisar antes de tomar el descontable completo."]).font = { name: "Arial", size: 9, italic: true, color: { argb: "FFB45309" } } as any;
+  }
+  ws.addRow([]);
+  ws.addRow(["Observación — IVA reportado por la DIAN en los documentos de compra"]).font = FONT_BOLD as any;
+  ws.addRow(["IVA esperado (19%+5%)", d.ivaDianCompras.esperado]);
+  if (d.ivaDianCompras.haySinDato) {
+    ws.addRow(["IVA según la DIAN", "sin dato — regenera la comparación DIAN de algún mes"]);
+  } else if (d.ivaDianCompras.real !== null) {
+    ws.addRow(["IVA según la DIAN", d.ivaDianCompras.real]);
+    const difIvaDianCompras = d.ivaDianCompras.esperado - d.ivaDianCompras.real;
+    const rDifIvaDianCompras = ws.addRow(["Diferencia contra la DIAN", difIvaDianCompras]);
+    if (Math.abs(difIvaDianCompras) > Math.max(5, Math.abs(d.ivaDianCompras.esperado) * 0.001)) rDifIvaDianCompras.eachCell(c => c.fill = ALERTA_FILL);
+    else rDifIvaDianCompras.eachCell(c => c.fill = OK_FILL);
   }
   ws.addRow([]);
 
@@ -321,11 +389,28 @@ export async function generarAnexoIvaPdf(
   lineaDivisoria();
   filaTexto("Total IVA generado", fmt(d.generado.total), { negrita: true });
   doc.moveDown(0.5);
+  if (d.devolucionCompra19.cuentas.length > 0 || d.devolucionCompra5.cuentas.length > 0) {
+    notaObservacion("IVA generado en devoluciones en compra:");
+    if (d.devolucionCompra19.cuentas.length > 0) filaTexto(`19% (${d.devolucionCompra19.cuentas.join(", ")})`, d.devolucionCompra19.real !== null ? fmt(d.devolucionCompra19.real) : "—", { indent: 8 });
+    if (d.devolucionCompra5.cuentas.length > 0) filaTexto(`5% (${d.devolucionCompra5.cuentas.join(", ")})`, d.devolucionCompra5.real !== null ? fmt(d.devolucionCompra5.real) : "—", { indent: 8 });
+    doc.moveDown(0.5);
+  }
   notaObservacion("Observación — comparación contra la DIAN (ingresos, Paso 2):");
   filaTexto("Total facturado electrónicamente (contabilidad)", fmt(d.observacionDian.totalFacturado), { indent: 8 });
   filaTexto("Total reportado por la DIAN como Emitido", fmt(d.observacionDian.totalDianEmitido), { indent: 8 });
   const okDian = Math.abs(d.observacionDian.diferencia) <= Math.max(5, Math.abs(d.observacionDian.totalDianEmitido) * 0.001);
   filaTexto("Diferencia", fmt(d.observacionDian.diferencia), { indent: 8, negrita: true, color: okDian ? "#15803d" : "#b91c1c" });
+  doc.moveDown(0.5);
+  notaObservacion("Observación — IVA reportado por la DIAN en los documentos de venta:");
+  filaTexto("IVA esperado (19%+5%)", fmt(d.ivaDianVentas.esperado), { indent: 8 });
+  if (d.ivaDianVentas.haySinDato) {
+    filaTexto("IVA según la DIAN", "sin dato — regenera la comparación DIAN", { indent: 8, color: "#b45309" });
+  } else if (d.ivaDianVentas.real !== null) {
+    const difIvaDianVentas = d.ivaDianVentas.esperado - d.ivaDianVentas.real;
+    const okIvaDianVentas = Math.abs(difIvaDianVentas) <= Math.max(5, Math.abs(d.ivaDianVentas.esperado) * 0.001);
+    filaTexto("IVA según la DIAN", fmt(d.ivaDianVentas.real), { indent: 8 });
+    filaTexto("Diferencia contra la DIAN", fmt(difIvaDianVentas), { indent: 8, negrita: true, color: okIvaDianVentas ? "#15803d" : "#b91c1c" });
+  }
   doc.moveDown(0.8);
 
   tituloAnexo("2. IVA DESCONTABLE — COMPRAS");
@@ -341,6 +426,12 @@ export async function generarAnexoIvaPdf(
   lineaDivisoria();
   filaTexto("Total IVA descontable de compras", fmt(d.descontableCompras.total), { negrita: true });
   doc.moveDown(0.5);
+  if (d.devolucionVenta19.cuentas.length > 0 || d.devolucionVenta5.cuentas.length > 0) {
+    notaObservacion("IVA descontable en devoluciones en venta:");
+    if (d.devolucionVenta19.cuentas.length > 0) filaTexto(`19% (${d.devolucionVenta19.cuentas.join(", ")})`, d.devolucionVenta19.real !== null ? fmt(d.devolucionVenta19.real) : "—", { indent: 8 });
+    if (d.devolucionVenta5.cuentas.length > 0) filaTexto(`5% (${d.devolucionVenta5.cuentas.join(", ")})`, d.devolucionVenta5.real !== null ? fmt(d.devolucionVenta5.real) : "—", { indent: 8 });
+    doc.moveDown(0.5);
+  }
   notaObservacion("Observación — facturación electrónica de las compras:");
   filaTexto("Total compras (contabilidad)", fmt(d.observacionFacturado.totalContabilidad), { indent: 8 });
   filaTexto(
@@ -350,6 +441,17 @@ export async function generarAnexoIvaPdf(
   );
   if (d.observacionFacturado.pct !== null && d.observacionFacturado.pct < 0.95) {
     notaObservacion("Una parte importante de las compras no está facturada electrónicamente — revisar antes de tomar el descontable completo.", "#b45309");
+  }
+  doc.moveDown(0.5);
+  notaObservacion("Observación — IVA reportado por la DIAN en los documentos de compra:");
+  filaTexto("IVA esperado (19%+5%)", fmt(d.ivaDianCompras.esperado), { indent: 8 });
+  if (d.ivaDianCompras.haySinDato) {
+    filaTexto("IVA según la DIAN", "sin dato — regenera la comparación DIAN", { indent: 8, color: "#b45309" });
+  } else if (d.ivaDianCompras.real !== null) {
+    const difIvaDianCompras = d.ivaDianCompras.esperado - d.ivaDianCompras.real;
+    const okIvaDianCompras = Math.abs(difIvaDianCompras) <= Math.max(5, Math.abs(d.ivaDianCompras.esperado) * 0.001);
+    filaTexto("IVA según la DIAN", fmt(d.ivaDianCompras.real), { indent: 8 });
+    filaTexto("Diferencia contra la DIAN", fmt(difIvaDianCompras), { indent: 8, negrita: true, color: okIvaDianCompras ? "#15803d" : "#b91c1c" });
   }
   doc.moveDown(0.8);
 

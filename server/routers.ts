@@ -2188,11 +2188,21 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
             const { saldo: devCompra19, cuentas: cuentasDevCompra19 } = await informesIvaCuentas.getSaldoSumadoPorCategoria(input.clienteId, input.anio, meses, "generado_devolucion_compra_19", "pasivo");
             const { saldo: devCompra5, cuentas: cuentasDevCompra5 } = await informesIvaCuentas.getSaldoSumadoPorCategoria(input.clienteId, input.anio, meses, "generado_devolucion_compra_5", "pasivo");
 
+            // El IVA que la DIAN reporta en los documentos de venta — el
+            // archivo no discrimina el IVA por tarifa dentro de cada
+            // documento, así que solo se puede comparar el TOTAL (19%+5%
+            // juntos) contra lo que la DIAN reporta, no cada tarifa por
+            // separado.
+            const ivaDianPorMes = await informesIva.getTotalIvaDianVentasPorMes(input.clienteId, input.anio, meses);
+            const hayMesesSinIvaDian = ivaDianPorMes.some(m => m.valor === null);
+            const totalIvaDian = hayMesesSinIvaDian ? null : ivaDianPorMes.reduce((a, m) => a + (m.valor ?? 0), 0);
+
             return {
               tarifa19: { base: totalPorClasificacion.gravado_19, esperado: esperado19, cuentas: cuentas19, real: real19, diferencia: real19 !== null ? esperado19 - real19 : null },
               tarifa5: { base: totalPorClasificacion.gravado_5, esperado: esperado5, cuentas: cuentas5, real: real5, diferencia: real5 !== null ? esperado5 - real5 : null },
               devolucionCompra19: { cuentas: cuentasDevCompra19, real: devCompra19 },
               devolucionCompra5: { cuentas: cuentasDevCompra5, real: devCompra5 },
+              totalIvaDian, hayMesesSinIvaDian,
             };
           }),
       }),
@@ -2227,12 +2237,21 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
             const totalContabilidadFacturado = estado.compras?.totalContabilidadFacturado ?? 0;
             const pctFacturado = totalContabilidad > 0 ? (totalContabilidadFacturado / totalContabilidad) : null;
 
+            // El IVA que la DIAN reporta en los documentos de compra
+            // activos (mismo grupo de documentos ya usado para el total
+            // neto de compras) — solo se puede comparar el TOTAL (19%+5%
+            // juntos), el archivo no discrimina el IVA por tarifa.
+            const ivaDianPorMes = await informesIva.getTotalIvaDianComprasPorMes(input.clienteId, input.anio, meses);
+            const hayMesesSinIvaDian = ivaDianPorMes.some(m => m.valor === null);
+            const totalIvaDian = hayMesesSinIvaDian ? null : ivaDianPorMes.reduce((a, m) => a + (m.valor ?? 0), 0);
+
             return {
               tarifa19: { base: totalPorClasificacion.gravado_19, esperado: esperado19, cuentas: cuentas19, real: real19, diferencia: real19 !== null ? esperado19 - real19 : null },
               tarifa5: { base: totalPorClasificacion.gravado_5, esperado: esperado5, cuentas: cuentas5, real: real5, diferencia: real5 !== null ? esperado5 - real5 : null },
               devolucionVenta19: { cuentas: cuentasDevVenta19, real: devVenta19 },
               devolucionVenta5: { cuentas: cuentasDevVenta5, real: devVenta5 },
               pctFacturado, totalContabilidad, totalContabilidadFacturado,
+              totalIvaDian, hayMesesSinIvaDian,
             };
           }),
       }),
@@ -2506,10 +2525,11 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           const totalEmitidoDian = filasDian.filter(f => informesDian.categorizarFilaDianConConfig(f, mapaConfigTipos) === "ingreso").reduce((a, f) => a + f.total, 0);
           const totalRecibidoDian = filasDian.filter(f => f.grupo === "Recibido").reduce((a, f) => a + f.total, 0);
           // Desglose por tipo de documento exacto — para que otros pasos
-          // (ej. compras de IVA) puedan comparar contra SOLO los tipos
-          // que les corresponden, en vez del total "Recibido" completo.
+          // (ej. compras de IVA, y ahora la comparación de IVA contra la
+          // DIAN) puedan comparar contra SOLO los tipos que les
+          // corresponden, en vez del total "Recibido" completo.
           const totalesPorTipoJson = JSON.stringify(
-            tiposDetectadosEnArchivo.map(d => ({ tipoDocumentoDian: d.tipoDocumentoDian, grupo: d.grupo, total: d.total })),
+            tiposDetectadosEnArchivo.map(d => ({ tipoDocumentoDian: d.tipoDocumentoDian, grupo: d.grupo, total: d.total, iva: d.iva })),
           );
           await informesDb.guardarReporteGenerado({
             clienteId: input.clienteId, anio: input.anio, mes: input.mes, tipo: "DIAN",

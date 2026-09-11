@@ -1600,22 +1600,43 @@ function IvaGeneradoCard({ clienteId, anio, periodicidad, periodo }: {
             );
           })}
           {(compararQuery.data.devolucionCompra19.cuentas.length > 0 || compararQuery.data.devolucionCompra5.cuentas.length > 0) && (
-            <div className="border-t pt-2 space-y-1">
-              <p className="text-xs font-medium text-muted-foreground">IVA generado en devoluciones en compra (referencia, sin base de comparación todavía)</p>
+            <div className="border-t pt-2 space-y-2">
+              <p className="text-xs font-medium text-muted-foreground">IVA generado en devoluciones en compra</p>
               {compararQuery.data.devolucionCompra19.cuentas.length > 0 && (
-                <div className="flex justify-between text-xs">
-                  <span className="text-muted-foreground">19% — {compararQuery.data.devolucionCompra19.cuentas.join(", ")}</span>
-                  <span>{compararQuery.data.devolucionCompra19.real !== null ? fmt(compararQuery.data.devolucionCompra19.real) : "—"}</span>
+                <div className="text-sm space-y-1 border-b pb-2 last:border-b-0">
+                  <p className="font-medium">IVA generado en DEV. compra 19% — {compararQuery.data.devolucionCompra19.cuentas.length} cuenta(s): {compararQuery.data.devolucionCompra19.cuentas.join(", ")}</p>
+                  <div className="flex justify-between text-xs"><span className="text-muted-foreground">Valor real en las cuentas</span><span>{compararQuery.data.devolucionCompra19.real !== null ? fmt(compararQuery.data.devolucionCompra19.real) : "—"}</span></div>
                 </div>
               )}
               {compararQuery.data.devolucionCompra5.cuentas.length > 0 && (
-                <div className="flex justify-between text-xs">
-                  <span className="text-muted-foreground">5% — {compararQuery.data.devolucionCompra5.cuentas.join(", ")}</span>
-                  <span>{compararQuery.data.devolucionCompra5.real !== null ? fmt(compararQuery.data.devolucionCompra5.real) : "—"}</span>
+                <div className="text-sm space-y-1">
+                  <p className="font-medium">IVA generado en DEV. compra 5% — {compararQuery.data.devolucionCompra5.cuentas.length} cuenta(s): {compararQuery.data.devolucionCompra5.cuentas.join(", ")}</p>
+                  <div className="flex justify-between text-xs"><span className="text-muted-foreground">Valor real en las cuentas</span><span>{compararQuery.data.devolucionCompra5.real !== null ? fmt(compararQuery.data.devolucionCompra5.real) : "—"}</span></div>
                 </div>
               )}
+              <p className="text-xs text-muted-foreground">Referencia — todavía sin una base propia para calcular un "esperado".</p>
             </div>
           )}
+
+          <div className="border-t pt-2 space-y-1">
+            <p className="text-xs font-medium text-muted-foreground">Comparación contra el IVA reportado por la DIAN</p>
+            <p className="text-xs text-muted-foreground">
+              El archivo de la DIAN no discrimina el IVA por tarifa dentro de cada documento, así que aquí
+              se compara el total (19%+5%) contra la suma de IVA generado + valor real de las cuentas.
+            </p>
+            <div className="flex justify-between text-xs"><span className="text-muted-foreground">IVA esperado (19%+5%)</span><span>{fmt(compararQuery.data.tarifa19.esperado + compararQuery.data.tarifa5.esperado)}</span></div>
+            <div className="flex justify-between text-xs"><span className="text-muted-foreground">IVA según la DIAN (documentos de venta)</span><span>{compararQuery.data.hayMesesSinIvaDian ? "sin dato — regenera la comparación DIAN de algún mes" : (compararQuery.data.totalIvaDian !== null ? fmt(compararQuery.data.totalIvaDian) : "—")}</span></div>
+            {!compararQuery.data.hayMesesSinIvaDian && compararQuery.data.totalIvaDian !== null && (() => {
+              const esperadoTotal = compararQuery.data.tarifa19.esperado + compararQuery.data.tarifa5.esperado;
+              const diferenciaDian = esperadoTotal - compararQuery.data.totalIvaDian;
+              const cuadraDian = Math.abs(diferenciaDian) <= Math.max(5, Math.abs(esperadoTotal) * 0.001);
+              return cuadraDian ? (
+                <p className="text-xs text-green-700 flex items-center gap-1.5"><CheckCircle2 className="w-3.5 h-3.5 shrink-0" /> Cuadra con la DIAN</p>
+              ) : (
+                <p className="text-xs text-red-600 flex items-center gap-1.5"><AlertCircle className="w-3.5 h-3.5 shrink-0" /> Diferencia de {fmt(diferenciaDian)} contra la DIAN</p>
+              );
+            })()}
+          </div>
         </div>
       )}
     </div>
@@ -1676,20 +1697,21 @@ function IvaDescontableCard({ clienteId, anio, periodicidad, periodo }: {
             );
           })}
           {(compararQuery.data.devolucionVenta19.cuentas.length > 0 || compararQuery.data.devolucionVenta5.cuentas.length > 0) && (
-            <div className="border-t pt-2 space-y-1">
-              <p className="text-xs font-medium text-muted-foreground">IVA descontable en devoluciones en venta (referencia, sin base de comparación todavía)</p>
+            <div className="border-t pt-2 space-y-2">
+              <p className="text-xs font-medium text-muted-foreground">IVA descontable en devoluciones en venta</p>
               {compararQuery.data.devolucionVenta19.cuentas.length > 0 && (
-                <div className="flex justify-between text-xs">
-                  <span className="text-muted-foreground">19% — {compararQuery.data.devolucionVenta19.cuentas.join(", ")}</span>
-                  <span>{compararQuery.data.devolucionVenta19.real !== null ? fmt(compararQuery.data.devolucionVenta19.real) : "—"}</span>
+                <div className="text-sm space-y-1 border-b pb-2 last:border-b-0">
+                  <p className="font-medium">IVA descontable en DEV. venta 19% — {compararQuery.data.devolucionVenta19.cuentas.length} cuenta(s): {compararQuery.data.devolucionVenta19.cuentas.join(", ")}</p>
+                  <div className="flex justify-between text-xs"><span className="text-muted-foreground">Valor real en las cuentas</span><span>{compararQuery.data.devolucionVenta19.real !== null ? fmt(compararQuery.data.devolucionVenta19.real) : "—"}</span></div>
                 </div>
               )}
               {compararQuery.data.devolucionVenta5.cuentas.length > 0 && (
-                <div className="flex justify-between text-xs">
-                  <span className="text-muted-foreground">5% — {compararQuery.data.devolucionVenta5.cuentas.join(", ")}</span>
-                  <span>{compararQuery.data.devolucionVenta5.real !== null ? fmt(compararQuery.data.devolucionVenta5.real) : "—"}</span>
+                <div className="text-sm space-y-1">
+                  <p className="font-medium">IVA descontable en DEV. venta 5% — {compararQuery.data.devolucionVenta5.cuentas.length} cuenta(s): {compararQuery.data.devolucionVenta5.cuentas.join(", ")}</p>
+                  <div className="flex justify-between text-xs"><span className="text-muted-foreground">Valor real en las cuentas</span><span>{compararQuery.data.devolucionVenta5.real !== null ? fmt(compararQuery.data.devolucionVenta5.real) : "—"}</span></div>
                 </div>
               )}
+              <p className="text-xs text-muted-foreground">Referencia — todavía sin una base propia para calcular un "esperado".</p>
             </div>
           )}
           {compararQuery.data.pctFacturado !== null && (
@@ -1707,6 +1729,26 @@ function IvaDescontableCard({ clienteId, anio, periodicidad, periodo }: {
               )}
             </div>
           )}
+
+          <div className="border-t pt-2 space-y-1">
+            <p className="text-xs font-medium text-muted-foreground">Comparación contra el IVA reportado por la DIAN</p>
+            <p className="text-xs text-muted-foreground">
+              El archivo de la DIAN no discrimina el IVA por tarifa dentro de cada documento, así que aquí
+              se compara el total (19%+5%) contra la suma de IVA descontable esperado.
+            </p>
+            <div className="flex justify-between text-xs"><span className="text-muted-foreground">IVA esperado (19%+5%)</span><span>{fmt(compararQuery.data.tarifa19.esperado + compararQuery.data.tarifa5.esperado)}</span></div>
+            <div className="flex justify-between text-xs"><span className="text-muted-foreground">IVA según la DIAN (documentos de compra)</span><span>{compararQuery.data.hayMesesSinIvaDian ? "sin dato — regenera la comparación DIAN de algún mes" : (compararQuery.data.totalIvaDian !== null ? fmt(compararQuery.data.totalIvaDian) : "—")}</span></div>
+            {!compararQuery.data.hayMesesSinIvaDian && compararQuery.data.totalIvaDian !== null && (() => {
+              const esperadoTotal = compararQuery.data.tarifa19.esperado + compararQuery.data.tarifa5.esperado;
+              const diferenciaDian = esperadoTotal - compararQuery.data.totalIvaDian;
+              const cuadraDian = Math.abs(diferenciaDian) <= Math.max(5, Math.abs(esperadoTotal) * 0.001);
+              return cuadraDian ? (
+                <p className="text-xs text-green-700 flex items-center gap-1.5"><CheckCircle2 className="w-3.5 h-3.5 shrink-0" /> Cuadra con la DIAN</p>
+              ) : (
+                <p className="text-xs text-red-600 flex items-center gap-1.5"><AlertCircle className="w-3.5 h-3.5 shrink-0" /> Diferencia de {fmt(diferenciaDian)} contra la DIAN</p>
+              );
+            })()}
+          </div>
         </div>
       )}
     </div>
