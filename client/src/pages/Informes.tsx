@@ -2031,6 +2031,11 @@ function AnexoIvaCard({ clienteId, anio, periodicidad, periodo }: {
     onError: (err) => toast.error(err.message || "No se pudo generar el Anexo"),
   });
 
+  const generarAnexoPdfMutation = trpc.informes.iva.generarAnexoPdf.useMutation({
+    onSuccess: (data) => { toast.success("Anexo (PDF) generado"); window.open(data.signedUrl, "_blank"); },
+    onError: (err) => toast.error(err.message || "No se pudo generar el Anexo"),
+  });
+
   const handleGuardarDatos = () => {
     guardarDatosMutation.mutate({
       clienteId, anio, periodicidad, periodo,
@@ -2064,18 +2069,25 @@ function AnexoIvaCard({ clienteId, anio, periodicidad, periodo }: {
       </Button>
 
       <div className="border-t pt-3">
-        <Button size="sm" disabled={generarAnexoMutation.isPending} onClick={() => generarAnexoMutation.mutate({ clienteId, anio, periodicidad, periodo })}>
-          {generarAnexoMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-2" /> : <FileBarChart className="w-3.5 h-3.5 mr-2" />}
-          {generarAnexoMutation.isPending ? "Generando..." : "Generar Anexo"}
-        </Button>
-        {generarAnexoMutation.isPending && (
+        <div className="flex gap-2">
+          <Button size="sm" disabled={generarAnexoMutation.isPending} onClick={() => generarAnexoMutation.mutate({ clienteId, anio, periodicidad, periodo })}>
+            {generarAnexoMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-2" /> : <FileBarChart className="w-3.5 h-3.5 mr-2" />}
+            {generarAnexoMutation.isPending ? "Generando..." : "Generar Anexo (Excel)"}
+          </Button>
+          <Button size="sm" variant="outline" disabled={generarAnexoPdfMutation.isPending} onClick={() => generarAnexoPdfMutation.mutate({ clienteId, anio, periodicidad, periodo })}>
+            {generarAnexoPdfMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-2" /> : <FileBarChart className="w-3.5 h-3.5 mr-2" />}
+            {generarAnexoPdfMutation.isPending ? "Generando..." : "Generar Anexo (PDF)"}
+          </Button>
+        </div>
+        {(generarAnexoMutation.isPending || generarAnexoPdfMutation.isPending) && (
           <p className="text-xs text-muted-foreground mt-1 flex items-center gap-1.5">
             <Loader2 className="w-3.5 h-3.5 animate-spin" /> Procesando el Anexo, puede tardar unos segundos con archivos grandes...
           </p>
         )}
         <p className="text-xs text-muted-foreground mt-1">
           Reúne el IVA generado, el descontable de compras, el transitorio con su prorrateo, y estos datos
-          adicionales, en un solo Excel — es una primera versión para irse ajustando.
+          adicionales — el PDF usa el mismo estilo de presentación que los anexos de Renta. Es una primera
+          versión para irse ajustando.
         </p>
       </div>
     </div>

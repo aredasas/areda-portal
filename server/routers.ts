@@ -89,7 +89,7 @@ import * as informesDian from "./informesDianDb";
 import * as informesGestionCliente from "./informesGestionClienteDb";
 import * as informesIva from "./informesIvaDb";
 import * as informesIvaCuentas from "./informesIvaCuentasDb";
-import { generarAnexoIva } from "./informesIvaAnexo";
+import { generarAnexoIva, generarAnexoIvaPdf } from "./informesIvaAnexo";
 import * as rentaDb from "./rentaDb";
 import { storagePut, storageGetSignedUrl, storageGetBuffer } from "./storage";
 import { invokeLLM } from "./_core/llm";
@@ -2397,6 +2397,29 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           const { url, key: fileKey } = await storagePut(
             key, buffer, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
           );
+          await informesDb.guardarReporteGenerado({
+            clienteId: input.clienteId, anio: input.anio, mes: null, tipo: "IVA_ANEXO",
+            nivel: "detalle", fileKey, generadoPorId: ctx.user.id,
+          });
+          const signedUrl = await storageGetSignedUrl(fileKey);
+          return { url, signedUrl, fileKey };
+        }),
+      // Mismo Anexo, en PDF — mismo estilo visual que los anexos del
+      // módulo de Renta Persona Natural (encabezado, filas alineadas,
+      // logo de Areda al pie de cada página).
+      generarAnexoPdf: protectedProcedure
+        .input(z.object({
+          clienteId: z.number(), anio: z.number(),
+          periodicidad: z.enum(["bimestral", "cuatrimestral", "anual"]), periodo: z.number(),
+        }))
+        .mutation(async ({ input, ctx }) => {
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
+          const cliente = await db.getClientById(input.clienteId);
+          const buffer = await generarAnexoIvaPdf(
+            input.clienteId, cliente?.razonSocial || "Cliente", input.anio, input.periodicidad, input.periodo,
+          );
+          const key = `informes/IVA_ANEXO_${input.clienteId}_${input.anio}_${input.periodicidad}_${input.periodo}_${Date.now()}.pdf`;
+          const { url, key: fileKey } = await storagePut(key, buffer, "application/pdf");
           await informesDb.guardarReporteGenerado({
             clienteId: input.clienteId, anio: input.anio, mes: null, tipo: "IVA_ANEXO",
             nivel: "detalle", fileKey, generadoPorId: ctx.user.id,
