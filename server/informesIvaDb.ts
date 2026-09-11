@@ -10,6 +10,7 @@ import {
   getCuentasPrefijoConFiltroDelPeriodo, getTiposComprobantePorPrefijoDelPeriodo,
   getComprasTiposExcluidos as getComprasTiposExcluidosDeCuentas,
   guardarComprasTiposExcluidos as guardarComprasTiposExcluidosDeCuentas,
+  getComprobantesConMovimientoEnCategorias,
 } from "./informesIvaCuentasDb";
 
 export type Periodicidad = "bimestral" | "cuatrimestral" | "anual";
@@ -543,17 +544,52 @@ async function getTiposDianRelevantesCompras(clienteId: number, anio: number, me
   return tiposDianRelevantes;
 }
 
-/** Los tipos de documento DIAN (grupo Emitido) que estén configurados
- * como categoría "ingreso" — mismo criterio que ya usa
- * `totalEmitidoDian` para el total neto de ventas, para poder sumar
- * también el IVA de esos mismos documentos. */
-async function getTiposDianRelevantesVentas(clienteId: number): Promise<Set<string>> {
-  const configTiposDoc = await getConfigTiposDocumento(clienteId);
+/** Los tipos de documento DIAN (grupo Emitido) asociados a los
+ * comprobantes contables que REALMENTE tuvieron movimiento en las
+ * cuentas de IVA generado (2408, clasificadas como generado_19/5) —
+ * NO se asume por categoría "ingreso": se identifica el comprobante
+ * real que mueve el IVA (puede no ser el mismo que factura la venta,
+ * ej. si el IVA se causa en un comprobante de ajuste distinto) y se
+ * cruza con la config de tipos de documento de la DIAN. */
+async function getTiposDianRelevantesVentasIva(clienteId: number, anio: number, meses: number[]): Promise<Set<string>> {
+  const [comprobantesIvaGenerado, configTiposDoc] = await Promise.all([
+    getComprobantesConMovimientoEnCategorias(clienteId, anio, meses, ["generado_19", "generado_5"], "pasivo"),
+    getConfigTiposDocumento(clienteId),
+  ]);
+  const comprobantesSet = new Set(comprobantesIvaGenerado);
   const tiposDianRelevantes = new Set<string>();
   for (const c of configTiposDoc) {
-    if (c.grupo === "Emitido" && c.categoria === "ingreso") {
-      tiposDianRelevantes.add(`${c.tipoDocumentoDian}|${c.grupo}`);
-    }
+    if (c.grupo !== "Emitido" || !c.tiposComprobanteContable) continue;
+    try {
+      const lista: string[] = JSON.parse(c.tiposComprobanteContable);
+      if (lista.some(t => comprobantesSet.has(t.trim()))) {
+        tiposDianRelevantes.add(`${c.tipoDocumentoDian}|${c.grupo}`);
+      }
+    } catch { /* config inválida — se ignora */ }
+  }
+  return tiposDianRelevantes;
+}
+
+/** Igual que la anterior, pero para el IVA DESCONTABLE (grupo Recibido,
+ * cuentas clasificadas como descontable_19/5) — función APARTE de
+ * `getTiposDianRelevantesCompras` (esa sirve para el total NETO de
+ * compras 14/62, un criterio distinto: comprobante activo en esas
+ * cuentas, no en el IVA). */
+async function getTiposDianRelevantesComprasIva(clienteId: number, anio: number, meses: number[]): Promise<Set<string>> {
+  const [comprobantesIvaDescontable, configTiposDoc] = await Promise.all([
+    getComprobantesConMovimientoEnCategorias(clienteId, anio, meses, ["descontable_19", "descontable_5"], "activo_gasto"),
+    getConfigTiposDocumento(clienteId),
+  ]);
+  const comprobantesSet = new Set(comprobantesIvaDescontable);
+  const tiposDianRelevantes = new Set<string>();
+  for (const c of configTiposDoc) {
+    if (c.grupo !== "Recibido" || !c.tiposComprobanteContable) continue;
+    try {
+      const lista: string[] = JSON.parse(c.tiposComprobanteContable);
+      if (lista.some(t => comprobantesSet.has(t.trim()))) {
+        tiposDianRelevantes.add(`${c.tipoDocumentoDian}|${c.grupo}`);
+      }
+    } catch { /* config inválida — se ignora */ }
   }
   return tiposDianRelevantes;
 }
@@ -564,7 +600,7 @@ async function getTiposDianRelevantesVentas(clienteId: number): Promise<Set<stri
 export async function getTotalIvaDianVentasPorMes(
   clienteId: number, anio: number, meses: number[],
 ): Promise<{ mes: number; valor: number | null; generadoEl: Date | null }[]> {
-  const tiposDianRelevantes = await getTiposDianRelevantesVentas(clienteId);
+  const tiposDianRelevantes = await getTiposDianRelevantesVentasIva(clienteId, anio, meses);
   return getTotalDianPorTiposRelevantes(clienteId, anio, meses, tiposDianRelevantes, "iva");
 }
 
@@ -575,7 +611,7 @@ export async function getTotalIvaDianVentasPorMes(
 export async function getTotalIvaDianComprasPorMes(
   clienteId: number, anio: number, meses: number[],
 ): Promise<{ mes: number; valor: number | null; generadoEl: Date | null }[]> {
-  const tiposDianRelevantes = await getTiposDianRelevantesCompras(clienteId, anio, meses);
+  const tiposDianRelevantes = await getTiposDianRelevantesComprasIva(clienteId, anio, meses);
   return getTotalDianPorTiposRelevantes(clienteId, anio, meses, tiposDianRelevantes, "iva");
 }
 

@@ -437,3 +437,21 @@ export async function getSaldoSumadoPorCategoria(
   }
   return { saldo, cuentas };
 }
+
+/** Los tipos de comprobante contable que REALMENTE tuvieron movimiento
+ * en las cuentas de IVA (2408) clasificadas bajo alguna de las
+ * categorías dadas — ej. las 2 cuentas marcadas como "generado_19" y
+ * "generado_5". Es la pieza que faltaba para cruzar correctamente
+ * contra la DIAN: el comprobante que mueve el IVA generado puede no
+ * ser el mismo que aparece asociado a "ingreso" en la config de tipos
+ * de documento — hay que mirar en qué comprobante se registró el
+ * movimiento de la cuenta 2408 en sí, no asumirlo por categoría. */
+export async function getComprobantesConMovimientoEnCategorias(
+  clienteId: number, anio: number, meses: number[], categorias: CategoriaIva[], convencion: ConvencionSaldo,
+): Promise<string[]> {
+  const mapa = await getClasificacionCuentasIva(clienteId);
+  const cuentas = Array.from(mapa.entries()).filter(([, cat]) => categorias.includes(cat)).map(([cuenta]) => cuenta);
+  if (cuentas.length === 0) return [];
+  const tipos = await getTiposComprobantePorPrefijoDelPeriodo(clienteId, anio, meses, cuentas, convencion);
+  return tipos.map(t => t.tipo).filter(t => t.length > 0);
+}
