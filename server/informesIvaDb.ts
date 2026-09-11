@@ -615,6 +615,41 @@ export async function getTotalIvaDianComprasPorMes(
   return getTotalDianPorTiposRelevantes(clienteId, anio, meses, tiposDianRelevantes, "iva");
 }
 
+/** IVA (puro) reportado por la DIAN en los documentos que el cliente
+ * clasificó explícitamente como "devolucion_compra" (grupo Recibido) —
+ * este es el mismo movimiento que revierte el IVA descontable tomado
+ * al devolver mercancía a un proveedor, registrado en las cuentas
+ * "generado_devolucion_compra_19/5". A diferencia del IVA generado y
+ * descontable "normales" (que se cruzan por el comprobante REAL que
+ * mueve la cuenta 2408), aquí se usa la categoría que el cliente
+ * asignó explícitamente en la configuración de tipos de documento —
+ * las devoluciones no siempre tienen un comprobante contable propio y
+ * dedicado, así que este cruce directo por categoría es más confiable. */
+export async function getTotalIvaDianDevolucionCompraPorMes(
+  clienteId: number, anio: number, meses: number[],
+): Promise<{ mes: number; valor: number | null; generadoEl: Date | null }[]> {
+  const configTiposDoc = await getConfigTiposDocumento(clienteId);
+  const tiposDianRelevantes = new Set<string>();
+  for (const c of configTiposDoc) {
+    if (c.grupo === "Recibido" && c.categoria === "devolucion_compra") tiposDianRelevantes.add(`${c.tipoDocumentoDian}|${c.grupo}`);
+  }
+  return getTotalDianPorTiposRelevantes(clienteId, anio, meses, tiposDianRelevantes, "iva");
+}
+
+/** Igual que la anterior, para "devolucion_venta" (grupo Emitido) — el
+ * IVA que se revierte del generado cuando un cliente devuelve, en las
+ * cuentas "descontable_devolucion_venta_19/5". */
+export async function getTotalIvaDianDevolucionVentaPorMes(
+  clienteId: number, anio: number, meses: number[],
+): Promise<{ mes: number; valor: number | null; generadoEl: Date | null }[]> {
+  const configTiposDoc = await getConfigTiposDocumento(clienteId);
+  const tiposDianRelevantes = new Set<string>();
+  for (const c of configTiposDoc) {
+    if (c.grupo === "Emitido" && c.categoria === "devolucion_venta") tiposDianRelevantes.add(`${c.tipoDocumentoDian}|${c.grupo}`);
+  }
+  return getTotalDianPorTiposRelevantes(clienteId, anio, meses, tiposDianRelevantes, "iva");
+}
+
 /** Arma el resumen completo del paso "compras" — mismo patrón que
  * `computarResumenIngresos`: subtotales por tarifa sobre TODA la compra
  * (facturada o no, para el total real del Formulario 300), y la

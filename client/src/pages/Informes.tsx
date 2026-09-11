@@ -1614,7 +1614,8 @@ function IvaGeneradoCard({ clienteId, anio, periodicidad, periodo }: {
                   <div className="flex justify-between text-xs"><span className="text-muted-foreground">Valor real en las cuentas</span><span>{compararQuery.data.devolucionCompra5.real !== null ? fmt(compararQuery.data.devolucionCompra5.real) : "—"}</span></div>
                 </div>
               )}
-              <p className="text-xs text-muted-foreground">Referencia — todavía sin una base propia para calcular un "esperado".</p>
+              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Valor total en cuentas (19%+5%)</span><span>{fmt((compararQuery.data.devolucionCompra19.real ?? 0) + (compararQuery.data.devolucionCompra5.real ?? 0))}</span></div>
+              <div className="flex justify-between text-xs"><span className="text-muted-foreground">IVA según la DIAN (documentos "Devolución en compra")</span><span>{compararQuery.data.hayMesesSinIvaDianDevCompra ? "sin dato — regenera la comparación DIAN" : (compararQuery.data.totalIvaDianDevCompra !== null ? fmt(compararQuery.data.totalIvaDianDevCompra) : "sin documentos clasificados así")}</span></div>
             </div>
           )}
 
@@ -1711,7 +1712,8 @@ function IvaDescontableCard({ clienteId, anio, periodicidad, periodo }: {
                   <div className="flex justify-between text-xs"><span className="text-muted-foreground">Valor real en las cuentas</span><span>{compararQuery.data.devolucionVenta5.real !== null ? fmt(compararQuery.data.devolucionVenta5.real) : "—"}</span></div>
                 </div>
               )}
-              <p className="text-xs text-muted-foreground">Referencia — todavía sin una base propia para calcular un "esperado".</p>
+              <div className="flex justify-between text-xs"><span className="text-muted-foreground">Valor total en cuentas (19%+5%)</span><span>{fmt((compararQuery.data.devolucionVenta19.real ?? 0) + (compararQuery.data.devolucionVenta5.real ?? 0))}</span></div>
+              <div className="flex justify-between text-xs"><span className="text-muted-foreground">IVA según la DIAN (documentos "Devolución en venta")</span><span>{compararQuery.data.hayMesesSinIvaDianDevVenta ? "sin dato — regenera la comparación DIAN" : (compararQuery.data.totalIvaDianDevVenta !== null ? fmt(compararQuery.data.totalIvaDianDevVenta) : "sin documentos clasificados así")}</span></div>
             </div>
           )}
           {compararQuery.data.pctFacturado !== null && (
@@ -2482,12 +2484,15 @@ function ComparacionDianCard({ clienteId, anio, mes, setMes, reportes }: {
                     <div className="space-y-1">
                       <Label className="text-xs">Representa</Label>
                       <Select value={edicion.categoria} onValueChange={(v) => setEdicionesTipos(prev => ({ ...prev, [clave]: { ...edicion, categoria: v } }))}>
-                        <SelectTrigger className="w-44 h-8 text-xs"><SelectValue /></SelectTrigger>
+                        <SelectTrigger className="w-52 shrink-0 h-8 text-xs"><SelectValue /></SelectTrigger>
                         <SelectContent>
                           <SelectItem value="ingreso">Ingreso</SelectItem>
                           <SelectItem value="nomina">Nómina</SelectItem>
                           <SelectItem value="honorarios_servicios">Honorarios y Servicios</SelectItem>
                           <SelectItem value="otro_gasto">Otro gasto</SelectItem>
+                          <SelectItem value="compras_mercancia">Compras de mercancía</SelectItem>
+                          <SelectItem value="devolucion_venta">Devolución en venta</SelectItem>
+                          <SelectItem value="devolucion_compra">Devolución en compra</SelectItem>
                           <SelectItem value="excluir">Excluir de la comparación</SelectItem>
                         </SelectContent>
                       </Select>

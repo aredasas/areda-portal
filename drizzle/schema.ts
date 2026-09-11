@@ -645,7 +645,7 @@ export const informesTiposDocumentoConfig = mysqlTable("informesTiposDocumentoCo
   clienteId: int("clienteId").notNull(),
   tipoDocumentoDian: varchar("tipoDocumentoDian", { length: 100 }).notNull(),
   grupo: mysqlEnum("grupo", ["Emitido", "Recibido"]).notNull(),
-  categoria: mysqlEnum("categoria", ["ingreso", "nomina", "honorarios_servicios", "otro_gasto", "excluir"]).notNull(),
+  categoria: mysqlEnum("categoria", ["ingreso", "nomina", "honorarios_servicios", "otro_gasto", "compras_mercancia", "devolucion_venta", "devolucion_compra", "excluir"]).notNull(),
   tiposComprobanteContable: text("tiposComprobanteContable"),
   actualizadoPorId: int("actualizadoPorId").notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),

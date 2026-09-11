@@ -235,8 +235,12 @@ export type DocumentoAuxiliar = {
   /** Familia contable de este documento, determinada por la cuenta de su
    * línea más relevante (mayor valor absoluto entre las que caen en una
    * cuenta 4/5/14/15/16/17) — se usa solo para SUGERIR la categoría de
-   * un tipo de documento al configurarlo, no para el valor comparado. */
-  categoria: "ingreso" | "nomina" | "honorarios_servicios" | "otro_gasto" | null;
+   * un tipo de documento al configurarlo, no para el valor comparado.
+   * "devolucion_venta"/"devolucion_compra" nunca llegan de esta
+   * sugerencia automática — solo cuando el cliente los asigna
+   * explícitamente en la config, para no reclasificar en silencio
+   * documentos que ya se comparan correctamente como ingreso/gasto. */
+  categoria: "ingreso" | "nomina" | "honorarios_servicios" | "otro_gasto" | "compras_mercancia" | "devolucion_venta" | "devolucion_compra" | null;
 };
 
 export type ColsAuxiliarDian = {
@@ -262,7 +266,8 @@ function categorizarCuenta(cuentaRaw: string): DocumentoAuxiliar["categoria"] {
   if (cuenta.startsWith("4")) return "ingreso";
   if (cuenta.startsWith("5105") || cuenta.startsWith("5205")) return "nomina";
   if (cuenta.startsWith("5110") || cuenta.startsWith("5115") || cuenta.startsWith("5210") || cuenta.startsWith("5215")) return "honorarios_servicios";
-  if (cuenta.startsWith("5") || cuenta.startsWith("14") || cuenta.startsWith("15") || cuenta.startsWith("16") || cuenta.startsWith("17")) return "otro_gasto";
+  if (cuenta.startsWith("14")) return "compras_mercancia";
+  if (cuenta.startsWith("5") || cuenta.startsWith("15") || cuenta.startsWith("16") || cuenta.startsWith("17")) return "otro_gasto";
   return null; // 1 (excepto 14-17), 2, 3, 6, 7, 8, 9 — no es ingreso ni gasto/deducción
 }
 
@@ -511,7 +516,7 @@ export function categorizarFilaDian(fila: FilaDian): DocumentoAuxiliar["categori
   return "otro_gasto"; // facturas electrónicas y demás documentos recibidos
 }
 
-export type CategoriaConfigDocumento = "ingreso" | "nomina" | "honorarios_servicios" | "otro_gasto" | "excluir";
+export type CategoriaConfigDocumento = "ingreso" | "nomina" | "honorarios_servicios" | "otro_gasto" | "compras_mercancia" | "devolucion_venta" | "devolucion_compra" | "excluir";
 
 export type TipoDocumentoDetectado = {
   tipoDocumentoDian: string;

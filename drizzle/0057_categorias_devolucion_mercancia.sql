@@ -1,0 +1,1 @@
+ALTER TABLE `informesTiposDocumentoConfig` MODIFY COLUMN `categoria` enum('ingreso','nomina','honorarios_servicios','otro_gasto','compras_mercancia','devolucion_venta','devolucion_compra','excluir') NOT NULL;

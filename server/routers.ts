@@ -2197,12 +2197,22 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
             const hayMesesSinIvaDian = ivaDianPorMes.some(m => m.valor === null);
             const totalIvaDian = hayMesesSinIvaDian ? null : ivaDianPorMes.reduce((a, m) => a + (m.valor ?? 0), 0);
 
+            // IVA de la DIAN para los documentos que el cliente clasificó
+            // como "devolucion_compra" en la config de tipos de documento
+            // — permite comparar el valor real de las cuentas de
+            // devolución contra lo que la DIAN reporta para esos mismos
+            // documentos.
+            const ivaDianDevCompraPorMes = await informesIva.getTotalIvaDianDevolucionCompraPorMes(input.clienteId, input.anio, meses);
+            const hayMesesSinIvaDianDevCompra = ivaDianDevCompraPorMes.some(m => m.valor === null);
+            const totalIvaDianDevCompra = hayMesesSinIvaDianDevCompra ? null : ivaDianDevCompraPorMes.reduce((a, m) => a + (m.valor ?? 0), 0);
+
             return {
               tarifa19: { base: totalPorClasificacion.gravado_19, esperado: esperado19, cuentas: cuentas19, real: real19, diferencia: real19 !== null ? esperado19 - real19 : null },
               tarifa5: { base: totalPorClasificacion.gravado_5, esperado: esperado5, cuentas: cuentas5, real: real5, diferencia: real5 !== null ? esperado5 - real5 : null },
               devolucionCompra19: { cuentas: cuentasDevCompra19, real: devCompra19 },
               devolucionCompra5: { cuentas: cuentasDevCompra5, real: devCompra5 },
               totalIvaDian, hayMesesSinIvaDian,
+              totalIvaDianDevCompra, hayMesesSinIvaDianDevCompra,
             };
           }),
       }),
@@ -2245,6 +2255,13 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
             const hayMesesSinIvaDian = ivaDianPorMes.some(m => m.valor === null);
             const totalIvaDian = hayMesesSinIvaDian ? null : ivaDianPorMes.reduce((a, m) => a + (m.valor ?? 0), 0);
 
+            // IVA de la DIAN para los documentos que el cliente clasificó
+            // como "devolucion_venta" — permite comparar el valor real de
+            // las cuentas de devolución contra lo que la DIAN reporta.
+            const ivaDianDevVentaPorMes = await informesIva.getTotalIvaDianDevolucionVentaPorMes(input.clienteId, input.anio, meses);
+            const hayMesesSinIvaDianDevVenta = ivaDianDevVentaPorMes.some(m => m.valor === null);
+            const totalIvaDianDevVenta = hayMesesSinIvaDianDevVenta ? null : ivaDianDevVentaPorMes.reduce((a, m) => a + (m.valor ?? 0), 0);
+
             return {
               tarifa19: { base: totalPorClasificacion.gravado_19, esperado: esperado19, cuentas: cuentas19, real: real19, diferencia: real19 !== null ? esperado19 - real19 : null },
               tarifa5: { base: totalPorClasificacion.gravado_5, esperado: esperado5, cuentas: cuentas5, real: real5, diferencia: real5 !== null ? esperado5 - real5 : null },
@@ -2252,6 +2269,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
               devolucionVenta5: { cuentas: cuentasDevVenta5, real: devVenta5 },
               pctFacturado, totalContabilidad, totalContabilidadFacturado,
               totalIvaDian, hayMesesSinIvaDian,
+              totalIvaDianDevVenta, hayMesesSinIvaDianDevVenta,
             };
           }),
       }),
@@ -2411,7 +2429,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           clienteId: z.number(),
           configs: z.array(z.object({
             tipoDocumentoDian: z.string(), grupo: z.enum(["Emitido", "Recibido"]),
-            categoria: z.enum(["ingreso", "nomina", "honorarios_servicios", "otro_gasto", "excluir"]),
+            categoria: z.enum(["ingreso", "nomina", "honorarios_servicios", "otro_gasto", "compras_mercancia", "devolucion_venta", "devolucion_compra", "excluir"]),
             tiposComprobanteContable: z.array(z.string()).optional(),
           })),
         }))
@@ -2522,7 +2540,15 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           // usado para comparar contra los ingresos ya clasificados en la
           // conciliación de IVA. Se usa la misma categorización real
           // (por tipo de documento) que ya usa el resto de la comparación.
-          const totalEmitidoDian = filasDian.filter(f => informesDian.categorizarFilaDianConConfig(f, mapaConfigTipos) === "ingreso").reduce((a, f) => a + f.total, 0);
+          // Las devoluciones en venta, aunque el cliente las reclasifique
+          // explícitamente como "devolucion_venta" (en vez de dejarlas en
+          // "ingreso"), siguen siendo parte del ingreso NETO — su signo
+          // ya resta correctamente (son notas crédito), así que hay que
+          // seguir sumándolas aquí para que el total no quede inflado.
+          const totalEmitidoDian = filasDian.filter(f => {
+            const cat = informesDian.categorizarFilaDianConConfig(f, mapaConfigTipos);
+            return cat === "ingreso" || cat === "devolucion_venta";
+          }).reduce((a, f) => a + f.total, 0);
           const totalRecibidoDian = filasDian.filter(f => f.grupo === "Recibido").reduce((a, f) => a + f.total, 0);
           // Desglose por tipo de documento exacto — para que otros pasos
           // (ej. compras de IVA, y ahora la comparación de IVA contra la
