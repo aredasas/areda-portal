@@ -16,7 +16,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { trpc } from "@/lib/trpc";
 import {
   UserSquare2, Construction, Plus, Loader2, Pencil, Trash2, CheckCircle2, Clock, Users, FileSpreadsheet,
-  Upload, AlertTriangle, Wallet, ChevronDown, Download, Calculator, Eye, FolderOpen, File, Send, ThumbsUp, ThumbsDown, ShieldCheck, Search, Ban, RotateCcw, ClipboardList, MessageSquare,
+  Upload, AlertTriangle, Wallet, ChevronDown, Download, Calculator, Eye, FolderOpen, File, Send, ThumbsUp, ThumbsDown, ShieldCheck, Search, Ban, RotateCcw, ClipboardList, MessageSquare, Receipt,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -119,6 +119,7 @@ export default function RentaPersonaNatural() {
           <TabsList>
             <TabsTrigger value="clientes" className="gap-1.5"><Users className="w-3.5 h-3.5" /> Listado Clientes Renta</TabsTrigger>
             <TabsTrigger value="liquidacion" className="gap-1.5"><FileSpreadsheet className="w-3.5 h-3.5" /> Liquidación</TabsTrigger>
+            <TabsTrigger value="cta" className="gap-1.5"><Receipt className="w-3.5 h-3.5" /> CTA</TabsTrigger>
           </TabsList>
 
           <TabsContent value="clientes" className="mt-4">
@@ -130,6 +131,10 @@ export default function RentaPersonaNatural() {
 
           <TabsContent value="liquidacion" className="mt-4">
             <LiquidacionTab anioGravable={anioGravable} rentaClienteIdInicial={rentaClienteIdDesdeUrl} />
+          </TabsContent>
+
+          <TabsContent value="cta" className="mt-4">
+            <CuentasCobroTab anioGravable={anioGravable} />
           </TabsContent>
         </Tabs>
       </div>
@@ -152,6 +157,142 @@ function TerminadoBadge({ fileKey }: { fileKey: string | null }) {
         <CheckCircle2 className="w-3 h-3" /> Terminado
       </Badge>
     </button>
+  );
+}
+
+/** Pestaña "CTA" — genera cuentas de cobro para los clientes de Renta.
+ * Selecciona un cliente, trae su nombre y el total de ingresos que ya
+ * declaró (solo de referencia, para decidir cuánto cobrar), y con un
+ * Detalle y un Valor arma el PDF con el mismo formato que Arlex ya
+ * usaba — numeración propia con prefijo "R25" empezando en 1. */
+function CuentasCobroTab({ anioGravable }: { anioGravable: number }) {
+  const utils = trpc.useUtils();
+  const clientesQuery = trpc.renta.clientes.list.useQuery({ anioGravable });
+  const listaQuery = trpc.renta.cuentasCobro.listar.useQuery();
+
+  const [rentaClienteId, setRentaClienteId] = useState<string>("");
+  const [detalle, setDetalle] = useState("");
+  const [valor, setValor] = useState("");
+
+  const siguienteNumeroQuery = trpc.renta.cuentasCobro.siguienteNumero.useQuery({ prefijo: "R25" });
+  const totalIngresosQuery = trpc.renta.cuentasCobro.totalIngresos.useQuery(
+    { rentaClienteId: Number(rentaClienteId) },
+    { enabled: !!rentaClienteId },
+  );
+
+  const clienteSeleccionado = clientesQuery.data?.find((c: any) => String(c.id) === rentaClienteId);
+
+  const guardarMutation = trpc.renta.cuentasCobro.guardar.useMutation({
+    onSuccess: (data) => {
+      toast.success(`Cuenta de cobro R25-${String(data.numero).padStart(4, "0")} generada`);
+      if (data.signedUrl) window.open(data.signedUrl, "_blank");
+      setDetalle(""); setValor("");
+      utils.renta.cuentasCobro.listar.invalidate();
+      utils.renta.cuentasCobro.siguienteNumero.invalidate();
+    },
+    onError: (err) => toast.error(err.message || "No se pudo generar la cuenta de cobro"),
+  });
+
+  const fmt = (n: number) => `$${Math.round(n).toLocaleString("es-CO")}`;
+
+  const handleGuardar = () => {
+    if (!rentaClienteId || !detalle.trim() || !valor) {
+      toast.error("Completa el cliente, el detalle y el valor");
+      return;
+    }
+    guardarMutation.mutate({
+      rentaClienteId: Number(rentaClienteId), prefijo: "R25",
+      detalle: detalle.trim(), valor: Number(valor),
+      totalIngresosReferencia: totalIngresosQuery.data?.total ?? undefined,
+    });
+  };
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Generar cuenta de cobro</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="grid sm:grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label className="text-xs">Cliente</Label>
+              <Select value={rentaClienteId} onValueChange={setRentaClienteId}>
+                <SelectTrigger className="h-9 text-sm"><SelectValue placeholder="Elegir cliente..." /></SelectTrigger>
+                <SelectContent>
+                  {(clientesQuery.data || []).map((c: any) => (
+                    <SelectItem key={c.id} value={String(c.id)}>{c.nombre}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs">Próximo folio</Label>
+              <Input value={siguienteNumeroQuery.data ? `R25 - ${String(siguienteNumeroQuery.data.numero).padStart(4, "0")}` : "..."} disabled className="h-9 text-sm bg-muted" />
+            </div>
+          </div>
+
+          {rentaClienteId && (
+            <div className="rounded-md border bg-muted/30 p-3 text-sm space-y-1">
+              <div className="flex justify-between"><span className="text-muted-foreground">Cliente</span><span className="font-medium">{clienteSeleccionado?.nombre}</span></div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Total de ingresos declarados (referencia)</span>
+                <span>
+                  {totalIngresosQuery.isLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin inline" /> :
+                    totalIngresosQuery.data?.total != null ? fmt(totalIngresosQuery.data.total) : "aún sin datos de liquidación"}
+                </span>
+              </div>
+            </div>
+          )}
+
+          <div className="grid sm:grid-cols-3 gap-3">
+            <div className="sm:col-span-2 space-y-1.5">
+              <Label className="text-xs">Detalle</Label>
+              <Input value={detalle} onChange={(e) => setDetalle(e.target.value)} placeholder="Ej. Asesoría Contable Y Tributaria Agosto 2026" className="h-9 text-sm" />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs">Valor</Label>
+              <Input type="number" value={valor} onChange={(e) => setValor(e.target.value)} placeholder="0" className="h-9 text-sm" />
+            </div>
+          </div>
+
+          <Button onClick={handleGuardar} disabled={guardarMutation.isPending} className="bg-[#EDA011] hover:bg-[#d48f0f] text-white">
+            {guardarMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Receipt className="w-4 h-4 mr-2" />}
+            Guardar y generar
+          </Button>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Cuentas de cobro generadas</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {listaQuery.isLoading ? (
+            <div className="flex justify-center py-6"><Loader2 className="w-5 h-5 animate-spin" /></div>
+          ) : !listaQuery.data || listaQuery.data.length === 0 ? (
+            <p className="text-sm text-muted-foreground">Todavía no se ha generado ninguna cuenta de cobro.</p>
+          ) : (
+            <div className="space-y-2">
+              {listaQuery.data.map((cta: any) => (
+                <div key={cta.id} className="flex items-center justify-between gap-2 border-b pb-2 last:border-b-0 text-sm">
+                  <div className="flex-1 min-w-0">
+                    <p className="font-medium">{cta.prefijo} - {String(cta.numero).padStart(4, "0")} · {cta.clienteNombre}</p>
+                    <p className="text-xs text-muted-foreground truncate">{cta.detalle}</p>
+                  </div>
+                  <span className="shrink-0 text-sm font-medium">{fmt(cta.valor)}</span>
+                  {cta.signedUrl && (
+                    <Button size="sm" variant="outline" className="shrink-0 h-8" onClick={() => window.open(cta.signedUrl, "_blank")}>
+                      <Download className="w-3.5 h-3.5" />
+                    </Button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
   );
 }
 

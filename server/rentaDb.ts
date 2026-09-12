@@ -1642,3 +1642,13 @@ export async function generarAnexosRenta(
   doc.end();
   return done;
 }
+
+/** Total de ingresos brutos declarados por esta persona en el año —
+ * suma los ingresos de las 6 cédulas (trabajo, honorarios, capital, no
+ * laboral, pensiones, dividendos). Usado como REFERENCIA al generar
+ * una cuenta de cobro (para decidir cuánto cobrar), no como el valor
+ * cobrado en sí. */
+export function getTotalIngresosBrutosRenta(resultado: ResultadoLiquidacion): number {
+  const deSubRentas = Object.values(resultado.subRentas).reduce((a, sr) => a + sr.ingresoBruto, 0);
+  return deSubRentas + resultado.ingresoBrutoPensiones + resultado.ingresoBrutoDividendos;
+}

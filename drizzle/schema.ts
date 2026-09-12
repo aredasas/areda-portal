@@ -1050,3 +1050,29 @@ export const rentaReportes = mysqlTable("rentaReportes", {
 export type RentaReporte = typeof rentaReportes.$inferSelect;
 export type InsertRentaReporte = typeof rentaReportes.$inferInsert;
 
+/** Cuentas de cobro que Arlex le pasa a cada cliente de Renta por la
+ * asesoría — un consecutivo propio de la aplicación (prefijo "R25" +
+ * número, empezando en 1), independiente del que llevaba antes en
+ * FoxPro. `totalIngresosReferencia` es una FOTO del total de ingresos
+ * brutos declarados en la Renta del cliente al momento de generar la
+ * cuenta — solo de referencia (para decidir el valor a cobrar), no es
+ * el valor cobrado en sí (ese es `valor`, siempre digitado a mano). */
+export const rentaCuentasCobro = mysqlTable("rentaCuentasCobro", {
+  id: int("id").autoincrement().primaryKey(),
+  rentaClienteId: int("rentaClienteId").notNull(),
+  prefijo: varchar("prefijo", { length: 10 }).default("R25").notNull(),
+  numero: int("numero").notNull(),
+  fecha: timestamp("fecha").defaultNow().notNull(),
+  detalle: text("detalle").notNull(),
+  valor: double("valor").notNull(),
+  totalIngresosReferencia: double("totalIngresosReferencia"),
+  fileKey: varchar("fileKey", { length: 500 }),
+  generadoPorId: int("generadoPorId").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (table) => ({
+  rentaClienteIdx: index("rentaCuentasCobro_rentaCliente_idx").on(table.rentaClienteId),
+  numeroIdx: uniqueIndex("rentaCuentasCobro_numero_idx").on(table.prefijo, table.numero),
+}));
+export type RentaCuentaCobro = typeof rentaCuentasCobro.$inferSelect;
+export type InsertRentaCuentaCobro = typeof rentaCuentasCobro.$inferInsert;
+

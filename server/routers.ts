@@ -92,6 +92,7 @@ import * as informesIvaCuentas from "./informesIvaCuentasDb";
 import { generarAnexoIva, generarAnexoIvaPdf } from "./informesIvaAnexo";
 import * as rentaDb from "./rentaDb";
 import { storagePut, storageGetSignedUrl, storageGetBuffer } from "./storage";
+import { generarCuentaCobroPdf } from "./rentaCuentaCobro";
 import { invokeLLM } from "./_core/llm";
 import { isDriveConfigured, extractFolderIdFromUrl, testFolderAccess, listSubfoldersRecursive, listAllFilesRecursive, uploadFileToDrive, resolveUploadFolder } from "./googleDrive";
 import { sdk } from "./_core/sdk";
@@ -2974,6 +2975,69 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           const { rentaClienteId, ...data } = input;
           await db.guardarDeclaracionAnterior(rentaClienteId, data);
           return { success: true };
+        }),
+    }),
+    cuentasCobro: router({
+      listar: protectedProcedure.query(async ({ ctx }) => {
+        assertRentaPNAccess(ctx.user.role);
+        const filas = await db.getRentaCuentasCobro();
+        return Promise.all(filas.map(async (f) => ({
+          ...f,
+          signedUrl: f.fileKey ? await storageGetSignedUrl(f.fileKey) : null,
+        })));
+      }),
+      // El próximo folio a usar — solo de referencia, para mostrarlo en
+      // el formulario antes de guardar (el número real se asigna al
+      // guardar, para evitar que dos personas reserven el mismo).
+      siguienteNumero: protectedProcedure
+        .input(z.object({ prefijo: z.string().default("R25") }))
+        .query(async ({ input, ctx }) => {
+          assertRentaPNAccess(ctx.user.role);
+          return { numero: await db.getSiguienteNumeroCuentaCobro(input.prefijo) };
+        }),
+      // Total de ingresos brutos ya declarados por el cliente — solo de
+      // REFERENCIA para decidir cuánto cobrar, no es el valor de la cuenta.
+      totalIngresos: protectedProcedure
+        .input(z.object({ rentaClienteId: z.number() }))
+        .query(async ({ input, ctx }) => {
+          assertRentaPNAccess(ctx.user.role);
+          const datos = await db.getDatosLiquidacion(input.rentaClienteId);
+          if (!datos) return { total: null };
+          const resultado = rentaDb.armarLiquidacion(datos);
+          return { total: rentaDb.getTotalIngresosBrutosRenta(resultado) };
+        }),
+      guardar: protectedProcedure
+        .input(z.object({
+          rentaClienteId: z.number(),
+          prefijo: z.string().default("R25"),
+          detalle: z.string().min(1),
+          valor: z.number().positive(),
+          totalIngresosReferencia: z.number().optional(),
+        }))
+        .mutation(async ({ input, ctx }) => {
+          assertRentaPNAccess(ctx.user.role);
+          const cliente = await db.getRentaClienteById(input.rentaClienteId);
+          if (!cliente) throw new Error("Cliente no encontrado.");
+
+          const numero = await db.getSiguienteNumeroCuentaCobro(input.prefijo);
+          const fecha = new Date();
+
+          const buffer = await generarCuentaCobroPdf({
+            prefijo: input.prefijo, numero, fecha,
+            clienteNombre: cliente.nombre, clienteCedula: cliente.cedula,
+            detalle: input.detalle, valor: input.valor,
+          });
+          const key = `renta/cuentas-cobro/${input.prefijo}_${numero}_${Date.now()}.pdf`;
+          const { key: fileKey } = await storagePut(key, buffer, "application/pdf");
+
+          const id = await db.guardarRentaCuentaCobro({
+            rentaClienteId: input.rentaClienteId, prefijo: input.prefijo, numero, fecha,
+            detalle: input.detalle, valor: input.valor,
+            totalIngresosReferencia: input.totalIngresosReferencia ?? null,
+            fileKey, generadoPorId: ctx.user.id,
+          });
+          const signedUrl = await storageGetSignedUrl(fileKey);
+          return { id, numero, signedUrl };
         }),
     }),
     liquidacion: router({

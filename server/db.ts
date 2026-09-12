@@ -1,7 +1,7 @@
 import { eq, and, desc, asc, like, sql, inArray, gte, lte, or, ne, isNull } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { alias } from "drizzle-orm/mysql-core";
-import { InsertUser, users, clients, InsertClient, taxObligations, InsertTaxObligation, clientObligations, InsertClientObligation, taxDeadlines, InsertTaxDeadline, tasks, InsertTask, taskAttachments, InsertTaskAttachment, deadlineAttachments, InsertDeadlineAttachment, appSettings, InsertAppSetting, dianCalendar, InsertDianCalendar, clientDriveSubfolders, timeEntries, InsertTimeEntry, comments, InsertComment, historyEvents, notifications, workLocationEntries, taskRecurrences, InsertTaskRecurrence, boardPosts, boardAttachments, rentaClientes, InsertRentaCliente, rentaExogena, InsertRentaExogena, rentaExogenaItems, InsertRentaExogenaItem, rentaDeclaracionAnterior, InsertRentaDeclaracionAnterior, rentaLiquidacionItems, InsertRentaLiquidacionItem, rentaDependientes, InsertRentaDependiente, rentaReportes, InsertRentaReporte } from "../drizzle/schema";
+import { InsertUser, users, clients, InsertClient, taxObligations, InsertTaxObligation, clientObligations, InsertClientObligation, taxDeadlines, InsertTaxDeadline, tasks, InsertTask, taskAttachments, InsertTaskAttachment, deadlineAttachments, InsertDeadlineAttachment, appSettings, InsertAppSetting, dianCalendar, InsertDianCalendar, clientDriveSubfolders, timeEntries, InsertTimeEntry, comments, InsertComment, historyEvents, notifications, workLocationEntries, taskRecurrences, InsertTaskRecurrence, boardPosts, boardAttachments, rentaClientes, InsertRentaCliente, rentaExogena, InsertRentaExogena, rentaExogenaItems, InsertRentaExogenaItem, rentaDeclaracionAnterior, InsertRentaDeclaracionAnterior, rentaLiquidacionItems, InsertRentaLiquidacionItem, rentaDependientes, InsertRentaDependiente, rentaReportes, InsertRentaReporte, rentaCuentasCobro, InsertRentaCuentaCobro } from "../drizzle/schema";
 import { ENV } from './_core/env';
 import { bogotaTodayUTCMidnight } from "./dateUtils";
 import { categorizar as categorizarExogena } from "./rentaDb";
@@ -2491,6 +2491,46 @@ export async function eliminarRentaReporte(id: number) {
   const db = await getDb();
   if (!db) return;
   await db.delete(rentaReportes).where(eq(rentaReportes.id, id));
+}
+
+/** Lista TODAS las cuentas de cobro generadas (de todos los clientes),
+ * más recientes primero — para la pestaña "CTA" del módulo de Renta. */
+export async function getRentaCuentasCobro() {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select({
+    id: rentaCuentasCobro.id, rentaClienteId: rentaCuentasCobro.rentaClienteId,
+    prefijo: rentaCuentasCobro.prefijo, numero: rentaCuentasCobro.numero,
+    fecha: rentaCuentasCobro.fecha, detalle: rentaCuentasCobro.detalle, valor: rentaCuentasCobro.valor,
+    totalIngresosReferencia: rentaCuentasCobro.totalIngresosReferencia, fileKey: rentaCuentasCobro.fileKey,
+    createdAt: rentaCuentasCobro.createdAt,
+    clienteNombre: rentaClientes.nombre, clienteCedula: rentaClientes.cedula,
+  }).from(rentaCuentasCobro)
+    .leftJoin(rentaClientes, eq(rentaCuentasCobro.rentaClienteId, rentaClientes.id))
+    .orderBy(desc(rentaCuentasCobro.createdAt));
+}
+
+/** El próximo número a usar para un prefijo dado — empieza en 1 si
+ * todavía no hay ninguna cuenta de cobro con ese prefijo. */
+export async function getSiguienteNumeroCuentaCobro(prefijo: string): Promise<number> {
+  const db = await getDb();
+  if (!db) return 1;
+  const filas = await db.select({ numero: rentaCuentasCobro.numero }).from(rentaCuentasCobro)
+    .where(eq(rentaCuentasCobro.prefijo, prefijo)).orderBy(desc(rentaCuentasCobro.numero)).limit(1);
+  return (filas[0]?.numero ?? 0) + 1;
+}
+
+export async function guardarRentaCuentaCobro(data: Omit<InsertRentaCuentaCobro, "id" | "createdAt">): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new Error("Base de datos no disponible");
+  const result = await db.insert(rentaCuentasCobro).values(data);
+  return Number((result as any).insertId ?? (result as any)[0]?.insertId);
+}
+
+export async function actualizarFileKeyCuentaCobro(id: number, fileKey: string): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(rentaCuentasCobro).set({ fileKey }).where(eq(rentaCuentasCobro.id, id));
 }
 
 /** Borra TODOS los datos cargados en la pestaña Liquidación (exógena,
