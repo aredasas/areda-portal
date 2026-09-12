@@ -2183,26 +2183,38 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
 
             const esperado19 = totalPorClasificacion.gravado_19 * 0.19;
             const esperado5 = totalPorClasificacion.gravado_5 * 0.05;
-            const { saldo: real19, cuentas: cuentas19 } = await informesIvaCuentas.getSaldoSumadoPorCategoria(input.clienteId, input.anio, meses, "generado_19", "pasivo");
-            const { saldo: real5, cuentas: cuentas5 } = await informesIvaCuentas.getSaldoSumadoPorCategoria(input.clienteId, input.anio, meses, "generado_5", "pasivo");
-            const { saldo: devCompra19, cuentas: cuentasDevCompra19 } = await informesIvaCuentas.getSaldoSumadoPorCategoria(input.clienteId, input.anio, meses, "generado_devolucion_compra_19", "pasivo");
-            const { saldo: devCompra5, cuentas: cuentasDevCompra5 } = await informesIvaCuentas.getSaldoSumadoPorCategoria(input.clienteId, input.anio, meses, "generado_devolucion_compra_5", "pasivo");
 
-            // El IVA que la DIAN reporta en los documentos de venta — el
-            // archivo no discrimina el IVA por tarifa dentro de cada
-            // documento, así que solo se puede comparar el TOTAL (19%+5%
-            // juntos) contra lo que la DIAN reporta, no cada tarifa por
-            // separado.
-            const ivaDianPorMes = await informesIva.getTotalIvaDianVentasPorMes(input.clienteId, input.anio, meses);
+            // Las 4 lecturas de saldo y las 2 comparaciones contra la DIAN
+            // son independientes entre sí — lanzarlas TODAS a la vez (en
+            // vez de una detrás de otra) es lo que evita que el tiempo se
+            // acumule y la sección se sienta lenta al abrirla.
+            const [
+              { saldo: real19, cuentas: cuentas19 },
+              { saldo: real5, cuentas: cuentas5 },
+              { saldo: devCompra19, cuentas: cuentasDevCompra19 },
+              { saldo: devCompra5, cuentas: cuentasDevCompra5 },
+              ivaDianPorMes,
+              ivaDianDevCompraPorMes,
+            ] = await Promise.all([
+              informesIvaCuentas.getSaldoSumadoPorCategoria(input.clienteId, input.anio, meses, "generado_19", "pasivo"),
+              informesIvaCuentas.getSaldoSumadoPorCategoria(input.clienteId, input.anio, meses, "generado_5", "pasivo"),
+              informesIvaCuentas.getSaldoSumadoPorCategoria(input.clienteId, input.anio, meses, "generado_devolucion_compra_19", "pasivo"),
+              informesIvaCuentas.getSaldoSumadoPorCategoria(input.clienteId, input.anio, meses, "generado_devolucion_compra_5", "pasivo"),
+              // El IVA que la DIAN reporta en los documentos de venta — el
+              // archivo no discrimina el IVA por tarifa dentro de cada
+              // documento, así que solo se puede comparar el TOTAL (19%+5%
+              // juntos) contra lo que la DIAN reporta, no cada tarifa por
+              // separado.
+              informesIva.getTotalIvaDianVentasPorMes(input.clienteId, input.anio, meses),
+              // IVA de la DIAN para los documentos que el cliente clasificó
+              // como "devolucion_compra" en la config de tipos de documento
+              // — permite comparar el valor real de las cuentas de
+              // devolución contra lo que la DIAN reporta para esos mismos
+              // documentos.
+              informesIva.getTotalIvaDianDevolucionCompraPorMes(input.clienteId, input.anio, meses),
+            ]);
             const hayMesesSinIvaDian = ivaDianPorMes.some(m => m.valor === null);
             const totalIvaDian = hayMesesSinIvaDian ? null : ivaDianPorMes.reduce((a, m) => a + (m.valor ?? 0), 0);
-
-            // IVA de la DIAN para los documentos que el cliente clasificó
-            // como "devolucion_compra" en la config de tipos de documento
-            // — permite comparar el valor real de las cuentas de
-            // devolución contra lo que la DIAN reporta para esos mismos
-            // documentos.
-            const ivaDianDevCompraPorMes = await informesIva.getTotalIvaDianDevolucionCompraPorMes(input.clienteId, input.anio, meses);
             const hayMesesSinIvaDianDevCompra = ivaDianDevCompraPorMes.some(m => m.valor === null);
             const totalIvaDianDevCompra = hayMesesSinIvaDianDevCompra ? null : ivaDianDevCompraPorMes.reduce((a, m) => a + (m.valor ?? 0), 0);
 
@@ -2235,10 +2247,28 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
 
             const esperado19 = totalPorClasificacion.gravado_19 * 0.19;
             const esperado5 = totalPorClasificacion.gravado_5 * 0.05;
-            const { saldo: real19, cuentas: cuentas19 } = await informesIvaCuentas.getSaldoSumadoPorCategoria(input.clienteId, input.anio, meses, "descontable_19", "activo_gasto");
-            const { saldo: real5, cuentas: cuentas5 } = await informesIvaCuentas.getSaldoSumadoPorCategoria(input.clienteId, input.anio, meses, "descontable_5", "activo_gasto");
-            const { saldo: devVenta19, cuentas: cuentasDevVenta19 } = await informesIvaCuentas.getSaldoSumadoPorCategoria(input.clienteId, input.anio, meses, "descontable_devolucion_venta_19", "activo_gasto");
-            const { saldo: devVenta5, cuentas: cuentasDevVenta5 } = await informesIvaCuentas.getSaldoSumadoPorCategoria(input.clienteId, input.anio, meses, "descontable_devolucion_venta_5", "activo_gasto");
+            const [
+              { saldo: real19, cuentas: cuentas19 },
+              { saldo: real5, cuentas: cuentas5 },
+              { saldo: devVenta19, cuentas: cuentasDevVenta19 },
+              { saldo: devVenta5, cuentas: cuentasDevVenta5 },
+              // El IVA que la DIAN reporta en los documentos de compra
+              // activos (mismo grupo de documentos ya usado para el total
+              // neto de compras) — solo se puede comparar el TOTAL (19%+5%
+              // juntos), el archivo no discrimina el IVA por tarifa.
+              ivaDianPorMes,
+              // IVA de la DIAN para los documentos que el cliente clasificó
+              // como "devolucion_venta" — permite comparar el valor real de
+              // las cuentas de devolución contra lo que la DIAN reporta.
+              ivaDianDevVentaPorMes,
+            ] = await Promise.all([
+              informesIvaCuentas.getSaldoSumadoPorCategoria(input.clienteId, input.anio, meses, "descontable_19", "activo_gasto"),
+              informesIvaCuentas.getSaldoSumadoPorCategoria(input.clienteId, input.anio, meses, "descontable_5", "activo_gasto"),
+              informesIvaCuentas.getSaldoSumadoPorCategoria(input.clienteId, input.anio, meses, "descontable_devolucion_venta_19", "activo_gasto"),
+              informesIvaCuentas.getSaldoSumadoPorCategoria(input.clienteId, input.anio, meses, "descontable_devolucion_venta_5", "activo_gasto"),
+              informesIva.getTotalIvaDianComprasPorMes(input.clienteId, input.anio, meses),
+              informesIva.getTotalIvaDianDevolucionVentaPorMes(input.clienteId, input.anio, meses),
+            ]);
 
             // Qué proporción de la base de compras (todas las tarifas)
             // está facturada electrónicamente — solo eso da derecho al
@@ -2247,18 +2277,8 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
             const totalContabilidadFacturado = estado.compras?.totalContabilidadFacturado ?? 0;
             const pctFacturado = totalContabilidad > 0 ? (totalContabilidadFacturado / totalContabilidad) : null;
 
-            // El IVA que la DIAN reporta en los documentos de compra
-            // activos (mismo grupo de documentos ya usado para el total
-            // neto de compras) — solo se puede comparar el TOTAL (19%+5%
-            // juntos), el archivo no discrimina el IVA por tarifa.
-            const ivaDianPorMes = await informesIva.getTotalIvaDianComprasPorMes(input.clienteId, input.anio, meses);
             const hayMesesSinIvaDian = ivaDianPorMes.some(m => m.valor === null);
             const totalIvaDian = hayMesesSinIvaDian ? null : ivaDianPorMes.reduce((a, m) => a + (m.valor ?? 0), 0);
-
-            // IVA de la DIAN para los documentos que el cliente clasificó
-            // como "devolucion_venta" — permite comparar el valor real de
-            // las cuentas de devolución contra lo que la DIAN reporta.
-            const ivaDianDevVentaPorMes = await informesIva.getTotalIvaDianDevolucionVentaPorMes(input.clienteId, input.anio, meses);
             const hayMesesSinIvaDianDevVenta = ivaDianDevVentaPorMes.some(m => m.valor === null);
             const totalIvaDianDevVenta = hayMesesSinIvaDianDevVenta ? null : ivaDianDevVentaPorMes.reduce((a, m) => a + (m.valor ?? 0), 0);
 

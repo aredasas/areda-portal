@@ -1627,7 +1627,7 @@ function ComprasIvaCard({ clienteId, anio, periodicidad, periodo }: {
 function IvaGeneradoCard({ clienteId, anio, periodicidad, periodo }: {
   clienteId: number; anio: number; periodicidad: "bimestral" | "cuatrimestral" | "anual"; periodo: number;
 }) {
-  const compararQuery = trpc.informes.iva.ivaGenerado.comparar.useQuery({ clienteId, anio, periodicidad, periodo });
+  const compararQuery = trpc.informes.iva.ivaGenerado.comparar.useQuery({ clienteId, anio, periodicidad, periodo }, { retry: false });
   const fmt = (n: number) => `$${Math.round(n).toLocaleString("es-CO")}`;
 
   return (
@@ -1735,7 +1735,7 @@ function IvaGeneradoCard({ clienteId, anio, periodicidad, periodo }: {
 function IvaDescontableCard({ clienteId, anio, periodicidad, periodo }: {
   clienteId: number; anio: number; periodicidad: "bimestral" | "cuatrimestral" | "anual"; periodo: number;
 }) {
-  const compararQuery = trpc.informes.iva.ivaDescontable.comparar.useQuery({ clienteId, anio, periodicidad, periodo });
+  const compararQuery = trpc.informes.iva.ivaDescontable.comparar.useQuery({ clienteId, anio, periodicidad, periodo }, { retry: false });
   const fmt = (n: number) => `$${Math.round(n).toLocaleString("es-CO")}`;
 
   return (
@@ -1868,7 +1868,7 @@ function IvaDescontableCard({ clienteId, anio, periodicidad, periodo }: {
 function IvaTransitorioCard({ clienteId, anio, periodicidad, periodo }: {
   clienteId: number; anio: number; periodicidad: "bimestral" | "cuatrimestral" | "anual"; periodo: number;
 }) {
-  const compararQuery = trpc.informes.iva.ivaTransitorio.comparar.useQuery({ clienteId, anio, periodicidad, periodo });
+  const compararQuery = trpc.informes.iva.ivaTransitorio.comparar.useQuery({ clienteId, anio, periodicidad, periodo }, { retry: false });
   const fmt = (n: number) => `$${Math.round(n).toLocaleString("es-CO")}`;
 
   return (
