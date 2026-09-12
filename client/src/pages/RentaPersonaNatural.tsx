@@ -170,6 +170,14 @@ function CuentasCobroTab({ anioGravable }: { anioGravable: number }) {
   const clientesQuery = trpc.renta.clientes.list.useQuery({ anioGravable });
   const listaQuery = trpc.renta.cuentasCobro.listar.useQuery();
 
+  // Solo clientes con la Renta ya terminada (Formulario 210 subido) —
+  // antes de eso no tiene sentido cobrarles la asesoría de este año.
+  const clientesTerminados = (clientesQuery.data || []).filter((c: any) => c.terminado);
+  // Clientes que YA tienen al menos una cuenta de cobro generada — para
+  // marcarlos con un check en el selector, y ver de un vistazo a quién
+  // ya se le pasó cuenta.
+  const clientesConCta = new Set((listaQuery.data || []).map((cta: any) => cta.rentaClienteId));
+
   const [rentaClienteId, setRentaClienteId] = useState<string>("");
   const [detalle, setDetalle] = useState("");
   const [valor, setValor] = useState("");
@@ -180,7 +188,7 @@ function CuentasCobroTab({ anioGravable }: { anioGravable: number }) {
     { enabled: !!rentaClienteId },
   );
 
-  const clienteSeleccionado = clientesQuery.data?.find((c: any) => String(c.id) === rentaClienteId);
+  const clienteSeleccionado = clientesTerminados.find((c: any) => String(c.id) === rentaClienteId);
 
   const guardarMutation = trpc.renta.cuentasCobro.guardar.useMutation({
     onSuccess: (data) => {
@@ -220,8 +228,13 @@ function CuentasCobroTab({ anioGravable }: { anioGravable: number }) {
               <Select value={rentaClienteId} onValueChange={setRentaClienteId}>
                 <SelectTrigger className="h-9 text-sm"><SelectValue placeholder="Elegir cliente..." /></SelectTrigger>
                 <SelectContent>
-                  {(clientesQuery.data || []).map((c: any) => (
-                    <SelectItem key={c.id} value={String(c.id)}>{c.nombre}</SelectItem>
+                  {clientesTerminados.length === 0 && (
+                    <div className="px-2 py-1.5 text-xs text-muted-foreground">Ningún cliente con la Renta terminada todavía.</div>
+                  )}
+                  {clientesTerminados.map((c: any) => (
+                    <SelectItem key={c.id} value={String(c.id)}>
+                      {clientesConCta.has(c.id) ? "✓ " : ""}{c.nombre}
+                    </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
