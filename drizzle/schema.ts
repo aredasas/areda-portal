@@ -841,6 +841,11 @@ export const rentaClientes = mysqlTable("rentaClientes", {
   /** Marcado cuando se revisó y NO está obligado a declarar — se ubica al
    * final del listado en vez de ordenarse por vencimiento. */
   noObligado: boolean("noObligado").default(false).notNull(),
+  /** Por qué se marcó como no obligado — visible en el listado general.
+   * Distinto de `comentariosGenerales` (esa es una nota de la
+   * liquidación que sale impresa en el PDF de anexos; esta es solo
+   * para explicar la decisión de no obligado, y no imprime nada). */
+  comentarioNoObligado: text("comentarioNoObligado"),
   /** Se pone en true cuando en la pestaña de liquidación se sube el
    * Formulario 210 con el sello de "recibido" — la renta queda finalizada. */
   terminado: boolean("terminado").default(false).notNull(),

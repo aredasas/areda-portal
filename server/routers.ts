@@ -2735,7 +2735,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
         .input(z.object({
           id: z.number(), nombre: z.string().optional(), cedula: z.string().optional(),
           noObligado: z.boolean().optional(), terminado: z.boolean().optional(), activo: z.boolean().optional(),
-          comentariosGenerales: z.string().optional(),
+          comentariosGenerales: z.string().optional(), comentarioNoObligado: z.string().optional(),
         }))
         .mutation(async ({ input, ctx }) => {
           assertRentaPNAccess(ctx.user.role);

@@ -414,6 +414,13 @@
       "when": 1789217413710,
       "tag": "0058_renta_cuentas_cobro",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "5",
+      "when": 1789406412136,
+      "tag": "0059_renta_comentario_no_obligado",
+      "breakpoints": true
     }
   ]
 }

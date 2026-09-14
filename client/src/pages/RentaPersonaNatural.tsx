@@ -375,7 +375,13 @@ function ClientesRentaTab({ anioGravable, onIrALiquidacion }: { anioGravable: nu
   };
 
   const handleToggleNoObligado = (c: any, checked: boolean) => {
-    updateMutation.mutate({ id: c.id, noObligado: checked });
+    if (checked) {
+      const comentario = window.prompt(`¿Por qué ${c.nombre} no está obligado a declarar? (queda visible en el listado)`, c.comentarioNoObligado || "");
+      if (comentario === null) return; // canceló, no se marca
+      updateMutation.mutate({ id: c.id, noObligado: checked, comentarioNoObligado: comentario });
+    } else {
+      updateMutation.mutate({ id: c.id, noObligado: checked });
+    }
   };
 
   const handleToggleActivo = (c: any) => {
@@ -463,7 +469,9 @@ function ClientesRentaTab({ anioGravable, onIrALiquidacion }: { anioGravable: nu
                       {c.terminado ? (
                         <TerminadoBadge fileKey={c.declaracionFileKey} />
                       ) : c.noObligado ? (
-                        <Badge variant="outline">No obligado</Badge>
+                        <button onClick={() => onIrALiquidacion(c.id)} title={c.comentarioNoObligado ? `Motivo: ${c.comentarioNoObligado}\n\nVer la consulta de exógena en Liquidación` : "Ver la consulta de exógena en Liquidación"}>
+                          <Badge variant="outline" className="hover:bg-muted cursor-pointer gap-1">No obligado</Badge>
+                        </button>
                       ) : c.tieneExogena ? (
                         <button onClick={() => onIrALiquidacion(c.id)}>
                           <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100 cursor-pointer gap-1">
