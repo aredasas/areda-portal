@@ -2649,3 +2649,17 @@ export async function limpiarDatosLiquidacionRentaPN(): Promise<{ clientesAfecta
 
 
 
+
+/** Cuántas tareas están devueltas o por-completar para un colaborador
+ * (o para todos si es admin) — pensado para un indicador SIEMPRE
+ * VISIBLE en el menú (no solo una notificación puntual que se puede
+ * pasar por alto), así el colaborador no depende de haber visto la
+ * campanita para darse cuenta de que tiene algo esperando su acción. */
+export async function countTasksDevueltasOPorCompletar(assignedToId?: number): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const condiciones = [inArray(tasks.reviewStatus, ["correccion", "completar"])];
+  if (assignedToId) condiciones.push(or(eq(tasks.assignedToId, assignedToId), eq(tasks.createdById, assignedToId))!);
+  const filas = await db.select({ id: tasks.id }).from(tasks).where(and(...condiciones));
+  return filas.length;
+}

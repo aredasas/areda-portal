@@ -8,12 +8,13 @@ import {
   DropdownMenuContent,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Bell, MessageSquare, ThumbsUp, RotateCcw, CheckCheck, LayoutGrid } from "lucide-react";
+import { Bell, MessageSquare, ThumbsUp, RotateCcw, ClipboardList, CheckCheck, LayoutGrid } from "lucide-react";
 
 const typeConfig: Record<string, { icon: any; color: string }> = {
   comentario: { icon: MessageSquare, color: "text-blue-600" },
   aprobada: { icon: ThumbsUp, color: "text-green-600" },
   correccion_solicitada: { icon: RotateCcw, color: "text-orange-600" },
+  completar_solicitado: { icon: ClipboardList, color: "text-sky-600" },
   tablero_post: { icon: LayoutGrid, color: "text-purple-600" },
 };
 

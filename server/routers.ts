@@ -946,6 +946,12 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
     list: protectedProcedure.query(async ({ ctx }) => {
       return db.getAllTasks(ctx.user.role === "admin" ? undefined : ctx.user.id);
     }),
+    // Conteo ligero para el indicador del menú — se consulta con mucha
+    // más frecuencia que la lista completa, así que va aparte en vez de
+    // derivarse de `list` en el cliente.
+    countDevueltasOPorCompletar: protectedProcedure.query(async ({ ctx }) => {
+      return db.countTasksDevueltasOPorCompletar(ctx.user.role === "admin" ? undefined : ctx.user.id);
+    }),
     getByAssignee: protectedProcedure
       .input(z.object({ userId: z.number() }))
       .query(async ({ input }) => {

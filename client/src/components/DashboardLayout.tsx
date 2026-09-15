@@ -1,4 +1,5 @@
 import { useAuth } from "@/_core/hooks/useAuth";
+import { trpc } from "@/lib/trpc";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
   DropdownMenu,
@@ -133,6 +134,15 @@ function DashboardLayoutContent({
   const activeMenuItem = menuItems.find((item) => item.path === location);
   const isMobile = useIsMobile();
 
+  // Indicador SIEMPRE VISIBLE en el menú (no solo una notificación
+  // puntual que se puede pasar por alto) — así el colaborador no
+  // depende de haber visto la campanita para darse cuenta de que tiene
+  // tareas devueltas o por-completar esperando su acción.
+  const { data: tareasPendientesConteo } = trpc.tasks.countDevueltasOPorCompletar.useQuery(undefined, {
+    enabled: !!user,
+    refetchInterval: 30000,
+  });
+
   const visibleMenuItems = menuItems.filter((item: any) => {
     if (item.adminOnly && user?.role !== "admin") return false;
     if (item.restrictedToCedula && user?.cedula !== item.restrictedToCedula) return false;
@@ -226,6 +236,14 @@ function DashboardLayoutContent({
                         className={`h-4 w-4 ${isActive ? "text-primary" : ""}`}
                       />
                       <span>{item.label}</span>
+                      {item.path === "/tareas" && !!tareasPendientesConteo && (
+                        <span
+                          className="ml-auto h-5 min-w-5 px-1 flex items-center justify-center rounded-full bg-orange-500 text-white text-[10px] font-medium"
+                          title="Tareas devueltas o por completar"
+                        >
+                          {tareasPendientesConteo > 9 ? "9+" : tareasPendientesConteo}
+                        </span>
+                      )}
                       {item.adminOnly && (
                         <Shield className="h-3 w-3 ml-auto text-sidebar-foreground/40" />
                       )}
