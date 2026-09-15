@@ -5,6 +5,7 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import DashboardLayout from "@/components/DashboardLayout";
 import CommentsSection from "@/components/CommentsSection";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -94,6 +95,7 @@ export default function Revision() {
   const [obligationFilter, setObligationFilter] = useState("all");
   const [taskSearch, setTaskSearch] = useState("");
   const [selectedItem, setSelectedItem] = useState<any>(null);
+  const [vista, setVista] = useState<"pendientes" | "devueltas" | "por_completar">("pendientes");
 
   const { data: clients } = trpc.clients.list.useQuery();
   const { data: collaborators } = trpc.collaborators.list.useQuery({ isActive: true });
@@ -105,7 +107,8 @@ export default function Revision() {
     assignedToId: assigneeFilter !== "all" ? parseInt(assigneeFilter) : undefined,
     obligationId: obligationFilter !== "all" ? parseInt(obligationFilter) : undefined,
     taskSearch: taskSearch.trim() || undefined,
-  });
+    vista,
+  } as any);
 
   const { data: taskDetail } = trpc.tasks.getById.useQuery(
     { id: selectedItem?.id },
@@ -229,6 +232,14 @@ export default function Revision() {
             Tareas y vencimientos tributarios ya marcados como completados, con sus soportes adjuntos
           </p>
         </div>
+
+        <Tabs value={vista} onValueChange={(v) => setVista(v as any)}>
+          <TabsList>
+            <TabsTrigger value="pendientes">Pendientes de revisar</TabsTrigger>
+            <TabsTrigger value="devueltas" className="text-orange-700">Devueltas</TabsTrigger>
+            <TabsTrigger value="por_completar" className="text-blue-700">Por completar</TabsTrigger>
+          </TabsList>
+        </Tabs>
 
         {!!rentaPendienteQuery.data?.length && (
           <Card>

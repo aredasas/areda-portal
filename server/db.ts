@@ -1395,6 +1395,14 @@ export type ReviewFilters = {
   obligationId?: number;
   managerId?: number; // role-scoping for non-admins
   taskSearch?: string; // busca por texto en el título de la tarea/obligación
+  /** Qué grupo mostrar — "pendientes" (default, comportamiento de
+   * siempre: todo lo marcado como completado, sin importar si ya se
+   * revisó) o los dos grupos que viven "devueltos" (status volvió a
+   * pendiente, así que NO aparecerían en "pendientes" en absoluto):
+   * "devueltas" (reviewStatus="correccion", tasks y deadlines) y
+   * "por_completar" (reviewStatus="completar", solo tasks — ese flujo
+   * no existe para deadlines). */
+  vista?: "pendientes" | "devueltas" | "por_completar";
 };
 
 /** Completed tasks + completed deadlines across ALL clients, for the admin
@@ -1419,7 +1427,11 @@ export async function getCompletedItemsForReview(filters: ReviewFilters) {
   const reviewedByUser = alias(users, "reviewedByUser");
 
   // ---- Completed tasks ----
-  const taskConditions = [eq(tasks.status, "completada")];
+  const vista = filters.vista ?? "pendientes";
+  const taskConditions =
+    vista === "devueltas" ? [eq(tasks.reviewStatus, "correccion")]
+    : vista === "por_completar" ? [eq(tasks.reviewStatus, "completar")]
+    : [eq(tasks.status, "completada")];
   if (monthRange) taskConditions.push(gte(tasks.completedAt, monthRange.start), lte(tasks.completedAt, monthRange.end));
   if (filters.clientId) taskConditions.push(eq(tasks.clientId, filters.clientId));
   if (filters.assignedToId) taskConditions.push(eq(tasks.assignedToId, filters.assignedToId));
@@ -1453,36 +1465,43 @@ export async function getCompletedItemsForReview(filters: ReviewFilters) {
     .orderBy(desc(tasks.completedAt));
 
   // ---- Completed deadlines ----
-  const deadlineConditions = [eq(taxDeadlines.status, "completado")];
-  if (monthRange) deadlineConditions.push(gte(taxDeadlines.completedAt, monthRange.start), lte(taxDeadlines.completedAt, monthRange.end));
-  if (filters.clientId) deadlineConditions.push(eq(taxDeadlines.clientId, filters.clientId));
-  if (filters.obligationId) deadlineConditions.push(eq(taxDeadlines.obligationId, filters.obligationId));
-  if (filters.managerId) deadlineConditions.push(eq(clients.managerId, filters.managerId));
-  if (filters.assignedToId) deadlineConditions.push(eq(clients.managerId, filters.assignedToId));
-  if (filters.taskSearch) deadlineConditions.push(like(taxObligations.name, `%${filters.taskSearch}%`));
+  // "por_completar" no existe para vencimientos (ese flujo es solo de
+  // tareas) — se evita la consulta en vez de forzar una condición falsa.
+  let completedDeadlines: any[] = [];
+  if (vista !== "por_completar") {
+    const deadlineConditions =
+      vista === "devueltas" ? [eq(taxDeadlines.reviewStatus, "correccion")]
+      : [eq(taxDeadlines.status, "completado")];
+    if (monthRange) deadlineConditions.push(gte(taxDeadlines.completedAt, monthRange.start), lte(taxDeadlines.completedAt, monthRange.end));
+    if (filters.clientId) deadlineConditions.push(eq(taxDeadlines.clientId, filters.clientId));
+    if (filters.obligationId) deadlineConditions.push(eq(taxDeadlines.obligationId, filters.obligationId));
+    if (filters.managerId) deadlineConditions.push(eq(clients.managerId, filters.managerId));
+    if (filters.assignedToId) deadlineConditions.push(eq(clients.managerId, filters.assignedToId));
+    if (filters.taskSearch) deadlineConditions.push(like(taxObligations.name, `%${filters.taskSearch}%`));
 
-  const completedDeadlines = await db.select({
-    id: taxDeadlines.id,
-    clientId: taxDeadlines.clientId,
-    clientName: clients.razonSocial,
-    obligationName: taxObligations.name,
-    period: taxDeadlines.period,
-    completedAt: taxDeadlines.completedAt,
-    completedByName: users.name,
-    driveSubfolder: taxDeadlines.driveSubfolder,
-    clientDriveFolderUrl: clients.driveFolderUrl,
-    reviewNotesRaw: taxDeadlines.reviewNotes,
-    reviewedAtRaw: taxDeadlines.reviewedAt,
-    reviewedByNameRaw: reviewedByUser.name,
-    reviewStatusRaw: taxDeadlines.reviewStatus,
-  })
-    .from(taxDeadlines)
-    .innerJoin(clients, eq(taxDeadlines.clientId, clients.id))
-    .innerJoin(taxObligations, eq(taxDeadlines.obligationId, taxObligations.id))
-    .leftJoin(users, eq(taxDeadlines.completedById, users.id))
-    .leftJoin(reviewedByUser, eq(taxDeadlines.reviewedById, reviewedByUser.id))
-    .where(and(...deadlineConditions))
-    .orderBy(desc(taxDeadlines.completedAt));
+    completedDeadlines = await db.select({
+      id: taxDeadlines.id,
+      clientId: taxDeadlines.clientId,
+      clientName: clients.razonSocial,
+      obligationName: taxObligations.name,
+      period: taxDeadlines.period,
+      completedAt: taxDeadlines.completedAt,
+      completedByName: users.name,
+      driveSubfolder: taxDeadlines.driveSubfolder,
+      clientDriveFolderUrl: clients.driveFolderUrl,
+      reviewNotesRaw: taxDeadlines.reviewNotes,
+      reviewedAtRaw: taxDeadlines.reviewedAt,
+      reviewedByNameRaw: reviewedByUser.name,
+      reviewStatusRaw: taxDeadlines.reviewStatus,
+    })
+      .from(taxDeadlines)
+      .innerJoin(clients, eq(taxDeadlines.clientId, clients.id))
+      .innerJoin(taxObligations, eq(taxDeadlines.obligationId, taxObligations.id))
+      .leftJoin(users, eq(taxDeadlines.completedById, users.id))
+      .leftJoin(reviewedByUser, eq(taxDeadlines.reviewedById, reviewedByUser.id))
+      .where(and(...deadlineConditions))
+      .orderBy(desc(taxDeadlines.completedAt));
+  }
 
   const combined = [
     ...completedTasks.map(t => ({

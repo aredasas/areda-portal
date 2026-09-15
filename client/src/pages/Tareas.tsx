@@ -297,15 +297,7 @@ export default function Tareas() {
   };
   const tasksFiltradosBase = tasks?.filter(pasaFiltrosBase);
   const filteredTasks = tasksFiltradosBase
-    ?.filter((t: any) => {
-      if (activeTab === "todas") return true;
-      // "Devueltas" y "Por completar" son tareas que técnicamente están en
-      // "pendiente" de nuevo (para retomarse), distinguidas por reviewStatus
-      // — no por status, así que necesitan su propio criterio aparte.
-      if (activeTab === "devuelta") return t.reviewStatus === "correccion";
-      if (activeTab === "por_completar") return t.reviewStatus === "completar";
-      return t.status === activeTab;
-    })
+    ?.filter((t: any) => activeTab === "todas" || t.status === activeTab)
     // Approved tasks sink to the bottom — once reviewed, they're done business,
     // so unreviewed/active work stays easier to spot at a glance.
     .sort((a: any, b: any) => (a.reviewedAt ? 1 : 0) - (b.reviewedAt ? 1 : 0));
@@ -383,8 +375,6 @@ export default function Tareas() {
           <TabsTrigger value="pendiente">Pendientes ({tasksFiltradosBase?.filter((t: any) => t.status === "pendiente").length || 0})</TabsTrigger>
           <TabsTrigger value="en_progreso">En Progreso ({tasksFiltradosBase?.filter((t: any) => t.status === "en_progreso").length || 0})</TabsTrigger>
           <TabsTrigger value="completada">Completadas ({tasksFiltradosBase?.filter((t: any) => t.status === "completada").length || 0})</TabsTrigger>
-          <TabsTrigger value="devuelta" className="text-orange-700">Devueltas ({tasksFiltradosBase?.filter((t: any) => t.reviewStatus === "correccion").length || 0})</TabsTrigger>
-          <TabsTrigger value="por_completar" className="text-blue-700">Por completar ({tasksFiltradosBase?.filter((t: any) => t.reviewStatus === "completar").length || 0})</TabsTrigger>
           <TabsTrigger value="vencida">Vencidas ({tasksFiltradosBase?.filter((t: any) => t.status === "vencida").length || 0})</TabsTrigger>
           <TabsTrigger value="cancelada">Canceladas ({tasksFiltradosBase?.filter((t: any) => t.status === "cancelada").length || 0})</TabsTrigger>
         </TabsList>
