@@ -1,0 +1,1 @@
+ALTER TABLE `taxDeadlines` MODIFY COLUMN `reviewStatus` enum('aprobado','correccion','completar');

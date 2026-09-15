@@ -128,6 +128,7 @@ export default function Revision() {
   const requestTaskCorrection = trpc.tasks.requestCorrection.useMutation();
   const requestDeadlineCorrection = trpc.deadlines.requestCorrection.useMutation();
   const requestTaskCompletion = trpc.tasks.requestCompletion.useMutation();
+  const requestDeadlineCompletion = trpc.deadlines.requestCompletion.useMutation();
 
   const { data: taskHistory } = trpc.tasks.getHistory.useQuery(
     { id: selectedItem?.id },
@@ -159,19 +160,19 @@ export default function Revision() {
   const handleRequestCorrection = async () => {
     if (!selectedItem || !reviewNotesInput.trim()) return;
     try {
+      const adjuntos = await Promise.all(adjuntosCorreccion.map(async (archivo) => {
+        const fileBase64 = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve((reader.result as string).split(",")[1]);
+          reader.onerror = reject;
+          reader.readAsDataURL(archivo);
+        });
+        return { fileName: archivo.name, fileBase64, contentType: archivo.type || "application/octet-stream" };
+      }));
       if (selectedItem.itemType === "task") {
-        const adjuntos = await Promise.all(adjuntosCorreccion.map(async (archivo) => {
-          const fileBase64 = await new Promise<string>((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve((reader.result as string).split(",")[1]);
-            reader.onerror = reject;
-            reader.readAsDataURL(archivo);
-          });
-          return { fileName: archivo.name, fileBase64, contentType: archivo.type || "application/octet-stream" };
-        }));
         await requestTaskCorrection.mutateAsync({ id: selectedItem.id, reviewNotes: reviewNotesInput, adjuntos });
       } else {
-        await requestDeadlineCorrection.mutateAsync({ id: selectedItem.id, reviewNotes: reviewNotesInput });
+        await requestDeadlineCorrection.mutateAsync({ id: selectedItem.id, reviewNotes: reviewNotesInput, adjuntos });
       }
       toast.success("Se envió de vuelta al encargado con la observación");
       setSelectedItem(null);
@@ -184,7 +185,7 @@ export default function Revision() {
   };
 
   const handleRequestCompletion = async () => {
-    if (!selectedItem || selectedItem.itemType !== "task" || !reviewNotesInput.trim()) return;
+    if (!selectedItem || !reviewNotesInput.trim()) return;
     try {
       const adjuntos = await Promise.all(adjuntosCorreccion.map(async (archivo) => {
         const fileBase64 = await new Promise<string>((resolve, reject) => {
@@ -195,7 +196,11 @@ export default function Revision() {
         });
         return { fileName: archivo.name, fileBase64, contentType: archivo.type || "application/octet-stream" };
       }));
-      await requestTaskCompletion.mutateAsync({ id: selectedItem.id, reviewNotes: reviewNotesInput, adjuntos });
+      if (selectedItem.itemType === "task") {
+        await requestTaskCompletion.mutateAsync({ id: selectedItem.id, reviewNotes: reviewNotesInput, adjuntos });
+      } else {
+        await requestDeadlineCompletion.mutateAsync({ id: selectedItem.id, reviewNotes: reviewNotesInput, adjuntos });
+      }
       toast.success("Se envió de vuelta al encargado para la acción final");
       setSelectedItem(null);
       setReviewNotesInput("");
@@ -560,30 +565,28 @@ export default function Revision() {
                         placeholder="Ej: Todo en orden. / Verificar el valor del renglón 32 para el próximo período."
                         rows={2}
                       />
-                      {selectedItem.itemType === "task" && (
-                        <div className="space-y-1.5">
-                          <input
-                            type="file"
-                            id="adjunto-correccion"
-                            multiple
-                            className="hidden"
-                            onChange={(e) => setAdjuntosCorreccion((prev) => [...prev, ...Array.from(e.target.files || [])])}
-                          />
-                          <Button
-                            variant="outline" size="sm" type="button" className="gap-2"
-                            onClick={() => document.getElementById("adjunto-correccion")?.click()}
-                          >
-                            <Paperclip className="h-3.5 w-3.5" />
-                            {adjuntosCorreccion.length > 0 ? `Agregar otro archivo (${adjuntosCorreccion.length} adjunto(s))` : "Adjuntar archivo(s) (opcional, para corregir)"}
-                          </Button>
-                          {adjuntosCorreccion.map((archivo, i) => (
-                            <div key={i} className="flex items-center justify-between text-xs bg-muted/50 rounded px-2 py-1">
-                              <span className="flex-1 min-w-0 truncate">{archivo.name}</span>
-                              <Button variant="ghost" size="sm" className="h-6 px-2" onClick={() => setAdjuntosCorreccion((prev) => prev.filter((_, j) => j !== i))}>Quitar</Button>
-                            </div>
-                          ))}
-                        </div>
-                      )}
+                      <div className="space-y-1.5">
+                        <input
+                          type="file"
+                          id="adjunto-correccion"
+                          multiple
+                          className="hidden"
+                          onChange={(e) => setAdjuntosCorreccion((prev) => [...prev, ...Array.from(e.target.files || [])])}
+                        />
+                        <Button
+                          variant="outline" size="sm" type="button" className="gap-2"
+                          onClick={() => document.getElementById("adjunto-correccion")?.click()}
+                        >
+                          <Paperclip className="h-3.5 w-3.5" />
+                          {adjuntosCorreccion.length > 0 ? `Agregar otro archivo (${adjuntosCorreccion.length} adjunto(s))` : "Adjuntar archivo(s) (opcional, para corregir)"}
+                        </Button>
+                        {adjuntosCorreccion.map((archivo, i) => (
+                          <div key={i} className="flex items-center justify-between text-xs bg-muted/50 rounded px-2 py-1">
+                            <span className="flex-1 min-w-0 truncate">{archivo.name}</span>
+                            <Button variant="ghost" size="sm" className="h-6 px-2" onClick={() => setAdjuntosCorreccion((prev) => prev.filter((_, j) => j !== i))}>Quitar</Button>
+                          </div>
+                        ))}
+                      </div>
                       <div className="flex flex-col sm:flex-row gap-2">
                         <Button
                           onClick={handleApprove}
@@ -603,18 +606,16 @@ export default function Revision() {
                           {(requestTaskCorrection.isPending || requestDeadlineCorrection.isPending) ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
                           Corregir
                         </Button>
-                        {selectedItem.itemType === "task" && (
-                          <Button
-                            onClick={handleRequestCompletion}
-                            disabled={!reviewNotesInput.trim() || approveTask.isPending || requestTaskCorrection.isPending || requestTaskCompletion.isPending}
-                            variant="outline"
-                            className="gap-2 border-blue-300 text-blue-700 hover:bg-blue-50 flex-1"
-                            title={!reviewNotesInput.trim() ? "Indique qué falta para completar" : "El trabajo hecho está bien, pero falta una acción más antes de cerrar la tarea"}
-                          >
-                            {requestTaskCompletion.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <ClipboardList className="h-4 w-4" />}
-                            Completar
-                          </Button>
-                        )}
+                        <Button
+                          onClick={handleRequestCompletion}
+                          disabled={!reviewNotesInput.trim() || approveTask.isPending || approveDeadline.isPending || requestTaskCorrection.isPending || requestDeadlineCorrection.isPending || requestTaskCompletion.isPending || requestDeadlineCompletion.isPending}
+                          variant="outline"
+                          className="gap-2 border-blue-300 text-blue-700 hover:bg-blue-50 flex-1"
+                          title={!reviewNotesInput.trim() ? "Indique qué falta para completar" : `El trabajo hecho está bien, pero falta una acción más antes de cerrar ${selectedItem.itemType === "task" ? "la tarea" : "el vencimiento"}`}
+                        >
+                          {(requestTaskCompletion.isPending || requestDeadlineCompletion.isPending) ? <Loader2 className="h-4 w-4 animate-spin" /> : <ClipboardList className="h-4 w-4" />}
+                          Completar
+                        </Button>
                       </div>
                     </div>
                   )}

@@ -428,6 +428,13 @@
       "when": 1789429791951,
       "tag": "0060_comments_renta_y_task_completar",
       "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "5",
+      "when": 1789480771491,
+      "tag": "0061_deadlines_completar",
+      "breakpoints": true
     }
   ]
 }

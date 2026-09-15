@@ -860,15 +860,54 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
     /** Admin sends a completed deadline back to the collaborator for
      * correction, with a required observation of what needs fixing. */
     requestCorrection: adminProcedure
-      .input(z.object({ id: z.number(), reviewNotes: z.string().min(1, "Debe indicar qué corregir") }))
+      .input(z.object({
+        id: z.number(), reviewNotes: z.string().min(1, "Debe indicar qué corregir"),
+        adjuntos: z.array(z.object({ fileName: z.string(), fileBase64: z.string(), contentType: z.string() })).optional(),
+      }))
       .mutation(async ({ input, ctx }) => {
         const deadlinePrevio = await db.getDeadlineById(input.id);
         await db.assertClienteActivo(deadlinePrevio?.clientId);
         await db.requestDeadlineCorrection(input.id, ctx.user.id, input.reviewNotes);
+        for (const adjunto of input.adjuntos || []) {
+          const buffer = Buffer.from(adjunto.fileBase64, "base64");
+          const rawKey = `deadlines/${input.id}/${Date.now()}_${adjunto.fileName}`;
+          const { url, key } = await storagePut(rawKey, buffer, adjunto.contentType);
+          await db.createDeadlineAttachment({
+            deadlineId: input.id, fileName: adjunto.fileName, fileUrl: url, fileKey: key,
+            contentType: adjunto.contentType, fileSize: buffer.length, uploadedById: ctx.user.id,
+          });
+        }
         const deadline = await db.getDeadlineById(input.id);
         const client = deadline ? await db.getClientById(deadline.clientId) : null;
         if (client?.managerId && client.managerId !== ctx.user.id) {
           await db.createNotification(client.managerId, "correccion_solicitada", "deadline", input.id, `${client.razonSocial} — período ${deadline!.period}`, input.reviewNotes, deadline!.clientId);
+        }
+        return { success: true };
+      }),
+    /** Mismo concepto que tasks.requestCompletion — el trabajo ya hecho
+     * estaba bien, falta UNA acción más antes de cerrar el vencimiento. */
+    requestCompletion: adminProcedure
+      .input(z.object({
+        id: z.number(), reviewNotes: z.string().min(1, "Indique qué falta para completar"),
+        adjuntos: z.array(z.object({ fileName: z.string(), fileBase64: z.string(), contentType: z.string() })).optional(),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        const deadlinePrevio = await db.getDeadlineById(input.id);
+        await db.assertClienteActivo(deadlinePrevio?.clientId);
+        await db.requestDeadlineCompletion(input.id, ctx.user.id, input.reviewNotes);
+        for (const adjunto of input.adjuntos || []) {
+          const buffer = Buffer.from(adjunto.fileBase64, "base64");
+          const rawKey = `deadlines/${input.id}/${Date.now()}_${adjunto.fileName}`;
+          const { url, key } = await storagePut(rawKey, buffer, adjunto.contentType);
+          await db.createDeadlineAttachment({
+            deadlineId: input.id, fileName: adjunto.fileName, fileUrl: url, fileKey: key,
+            contentType: adjunto.contentType, fileSize: buffer.length, uploadedById: ctx.user.id,
+          });
+        }
+        const deadline = await db.getDeadlineById(input.id);
+        const client = deadline ? await db.getClientById(deadline.clientId) : null;
+        if (client?.managerId && client.managerId !== ctx.user.id) {
+          await db.createNotification(client.managerId, "completar_solicitado", "deadline", input.id, `${client.razonSocial} — período ${deadline!.period}`, input.reviewNotes, deadline!.clientId);
         }
         return { success: true };
       }),

@@ -119,9 +119,11 @@ export const taxDeadlines = mysqlTable("taxDeadlines", {
    * where the evidence was saved — free text, since the app doesn't browse
    * the real Drive folder structure. See clientDriveSubfolders below. */
   driveSubfolder: varchar("driveSubfolder", { length: 150 }),
-  /** Set once an admin reviews a completed deadline — either approving it or
-   * sending it back for correction. reviewStatus distinguishes which. */
-  reviewStatus: mysqlEnum("reviewStatus", ["aprobado", "correccion"]),
+  /** Set once an admin reviews a completed deadline — approving it,
+   * sending it back for correction, or marking that it needs ONE MORE
+   * action before being truly done (same idea as tasks: doesn't reopen
+   * the whole thing, just adds a final step). */
+  reviewStatus: mysqlEnum("reviewStatus", ["aprobado", "correccion", "completar"]),
   reviewNotes: text("reviewNotes"),
   reviewedById: int("reviewedById"),
   reviewedAt: timestamp("reviewedAt"),

@@ -1351,6 +1351,24 @@ export async function requestDeadlineCorrection(id: number, reviewedById: number
   await logHistoryEvent("deadline", id, "correccion_solicitada", reviewedById, reviewNotes);
 }
 
+/** Igual que `requestTaskCompletion` pero para vencimientos tributarios
+ * — el trabajo ya hecho estaba bien, solo falta UNA acción más antes
+ * de cerrar (ej. un vencimiento cuya declaración ya se presentó, pero
+ * falta subir el comprobante de pago). NO borra la evidencia ya
+ * subida, a diferencia de la corrección. */
+export async function requestDeadlineCompletion(id: number, reviewedById: number, reviewNotes: string) {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(taxDeadlines).set({
+    status: "pendiente",
+    reviewStatus: "completar",
+    reviewedById,
+    reviewedAt: new Date(),
+    reviewNotes,
+  }).where(eq(taxDeadlines.id, id));
+  await logHistoryEvent("deadline", id, "completar_solicitado", reviewedById, reviewNotes);
+}
+
 /** Admin cancels a task that's no longer needed. If nothing was ever
  * attached to it, it's just removed outright — there's no work to preserve.
  * If evidence/a response was already attached, it's kept for the record but
@@ -1399,9 +1417,8 @@ export type ReviewFilters = {
    * siempre: todo lo marcado como completado, sin importar si ya se
    * revisó) o los dos grupos que viven "devueltos" (status volvió a
    * pendiente, así que NO aparecerían en "pendientes" en absoluto):
-   * "devueltas" (reviewStatus="correccion", tasks y deadlines) y
-   * "por_completar" (reviewStatus="completar", solo tasks — ese flujo
-   * no existe para deadlines). */
+   * "devueltas" (reviewStatus="correccion") y "por_completar"
+   * (reviewStatus="completar") — ambas aplican a tasks Y deadlines. */
   vista?: "pendientes" | "devueltas" | "por_completar";
 };
 
@@ -1472,43 +1489,39 @@ export async function getCompletedItemsForReview(filters: ReviewFilters) {
     .orderBy(desc(tasks.completedAt));
 
   // ---- Completed deadlines ----
-  // "por_completar" no existe para vencimientos (ese flujo es solo de
-  // tareas) — se evita la consulta en vez de forzar una condición falsa.
-  let completedDeadlines: any[] = [];
-  if (vista !== "por_completar") {
-    const deadlineConditions =
-      vista === "devueltas" ? [eq(taxDeadlines.reviewStatus, "correccion")]
-      : [eq(taxDeadlines.status, "completado")];
-    if (monthRange && vista === "pendientes") deadlineConditions.push(gte(taxDeadlines.completedAt, monthRange.start), lte(taxDeadlines.completedAt, monthRange.end));
-    if (filters.clientId) deadlineConditions.push(eq(taxDeadlines.clientId, filters.clientId));
-    if (filters.obligationId) deadlineConditions.push(eq(taxDeadlines.obligationId, filters.obligationId));
-    if (filters.managerId) deadlineConditions.push(eq(clients.managerId, filters.managerId));
-    if (filters.assignedToId) deadlineConditions.push(eq(clients.managerId, filters.assignedToId));
-    if (filters.taskSearch) deadlineConditions.push(like(taxObligations.name, `%${filters.taskSearch}%`));
+  const deadlineConditions =
+    vista === "devueltas" ? [eq(taxDeadlines.reviewStatus, "correccion")]
+    : vista === "por_completar" ? [eq(taxDeadlines.reviewStatus, "completar")]
+    : [eq(taxDeadlines.status, "completado")];
+  if (monthRange && vista === "pendientes") deadlineConditions.push(gte(taxDeadlines.completedAt, monthRange.start), lte(taxDeadlines.completedAt, monthRange.end));
+  if (filters.clientId) deadlineConditions.push(eq(taxDeadlines.clientId, filters.clientId));
+  if (filters.obligationId) deadlineConditions.push(eq(taxDeadlines.obligationId, filters.obligationId));
+  if (filters.managerId) deadlineConditions.push(eq(clients.managerId, filters.managerId));
+  if (filters.assignedToId) deadlineConditions.push(eq(clients.managerId, filters.assignedToId));
+  if (filters.taskSearch) deadlineConditions.push(like(taxObligations.name, `%${filters.taskSearch}%`));
 
-    completedDeadlines = await db.select({
-      id: taxDeadlines.id,
-      clientId: taxDeadlines.clientId,
-      clientName: clients.razonSocial,
-      obligationName: taxObligations.name,
-      period: taxDeadlines.period,
-      completedAt: taxDeadlines.completedAt,
-      completedByName: users.name,
-      driveSubfolder: taxDeadlines.driveSubfolder,
-      clientDriveFolderUrl: clients.driveFolderUrl,
-      reviewNotesRaw: taxDeadlines.reviewNotes,
-      reviewedAtRaw: taxDeadlines.reviewedAt,
-      reviewedByNameRaw: reviewedByUser.name,
-      reviewStatusRaw: taxDeadlines.reviewStatus,
-    })
-      .from(taxDeadlines)
-      .innerJoin(clients, eq(taxDeadlines.clientId, clients.id))
-      .innerJoin(taxObligations, eq(taxDeadlines.obligationId, taxObligations.id))
-      .leftJoin(users, eq(taxDeadlines.completedById, users.id))
-      .leftJoin(reviewedByUser, eq(taxDeadlines.reviewedById, reviewedByUser.id))
-      .where(and(...deadlineConditions))
-      .orderBy(desc(taxDeadlines.completedAt));
-  }
+  const completedDeadlines = await db.select({
+    id: taxDeadlines.id,
+    clientId: taxDeadlines.clientId,
+    clientName: clients.razonSocial,
+    obligationName: taxObligations.name,
+    period: taxDeadlines.period,
+    completedAt: taxDeadlines.completedAt,
+    completedByName: users.name,
+    driveSubfolder: taxDeadlines.driveSubfolder,
+    clientDriveFolderUrl: clients.driveFolderUrl,
+    reviewNotesRaw: taxDeadlines.reviewNotes,
+    reviewedAtRaw: taxDeadlines.reviewedAt,
+    reviewedByNameRaw: reviewedByUser.name,
+    reviewStatusRaw: taxDeadlines.reviewStatus,
+  })
+    .from(taxDeadlines)
+    .innerJoin(clients, eq(taxDeadlines.clientId, clients.id))
+    .innerJoin(taxObligations, eq(taxDeadlines.obligationId, taxObligations.id))
+    .leftJoin(users, eq(taxDeadlines.completedById, users.id))
+    .leftJoin(reviewedByUser, eq(taxDeadlines.reviewedById, reviewedByUser.id))
+    .where(and(...deadlineConditions))
+    .orderBy(desc(taxDeadlines.completedAt));
 
   const combined = [
     ...completedTasks.map(t => ({
