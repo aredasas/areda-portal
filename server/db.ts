@@ -810,6 +810,23 @@ export async function createComment(entityType: "task" | "deadline" | "board_pos
   await db.insert(comments).values({ entityType, entityId, authorId, content });
 }
 
+/** Registra la observación de una acción de revisión (aprobar, corregir,
+ * completar) como un COMENTARIO REAL, además de guardarse en
+ * `reviewNotes`/`historyEvents` como ya hacía cada función. Antes, esas
+ * observaciones vivían en un campo aparte que se sobrescribía en cada
+ * ronda — el colaborador que retomaba la tarea no las veía junto a los
+ * demás comentarios, dando la sensación de que "se perdían". Ahora todo
+ * queda en el MISMO hilo, en orden cronológico, sin importar cuántas
+ * veces se devuelva la tarea. Se omite en silencio si `notas` viene
+ * vacío (aprobar sin observaciones no genera un comentario vacío). */
+async function agregarComentarioDeRevision(
+  entityType: "task" | "deadline", entityId: number, authorId: number,
+  etiqueta: string, notas?: string | null,
+): Promise<void> {
+  if (!notas || !notas.trim()) return;
+  await createComment(entityType, entityId, authorId, `[${etiqueta}] ${notas.trim()}`);
+}
+
 /** Comment counts for several items at once (e.g. every task in a list) —
  * one query instead of one per row. */
 export async function getCommentCounts(entityType: "task" | "deadline", entityIds: number[]) {
@@ -1275,6 +1292,7 @@ export async function approveTask(id: number, reviewedById: number, reviewNotes?
     reviewNotes: reviewNotes || null,
   }).where(eq(tasks.id, id));
   await logHistoryEvent("task", id, "aprobada", reviewedById, reviewNotes);
+  await agregarComentarioDeRevision("task", id, reviewedById, "Aprobado", reviewNotes);
 }
 
 /** Sends a completed task back to the collaborator for correction: clears
@@ -1298,6 +1316,7 @@ export async function requestTaskCorrection(id: number, reviewedById: number, re
     reviewNotes,
   }).where(eq(tasks.id, id));
   await logHistoryEvent("task", id, "correccion_solicitada", reviewedById, reviewNotes);
+  await agregarComentarioDeRevision("task", id, reviewedById, "Devuelta para corrección", reviewNotes);
 }
 
 /** Envía una tarea completada de vuelta al colaborador para UNA ACCIÓN
@@ -1317,6 +1336,7 @@ export async function requestTaskCompletion(id: number, reviewedById: number, re
     reviewNotes,
   }).where(eq(tasks.id, id));
   await logHistoryEvent("task", id, "completar_solicitado", reviewedById, reviewNotes);
+  await agregarComentarioDeRevision("task", id, reviewedById, "Enviada a completar", reviewNotes);
 }
 
 export async function approveDeadline(id: number, reviewedById: number, reviewNotes?: string | null) {
@@ -1329,6 +1349,7 @@ export async function approveDeadline(id: number, reviewedById: number, reviewNo
     reviewNotes: reviewNotes || null,
   }).where(eq(taxDeadlines.id, id));
   await logHistoryEvent("deadline", id, "aprobada", reviewedById, reviewNotes);
+  await agregarComentarioDeRevision("deadline", id, reviewedById, "Aprobado", reviewNotes);
 }
 
 /** Same idea as requestTaskCorrection, but for a tax deadline. */
@@ -1349,6 +1370,7 @@ export async function requestDeadlineCorrection(id: number, reviewedById: number
     reviewNotes,
   }).where(eq(taxDeadlines.id, id));
   await logHistoryEvent("deadline", id, "correccion_solicitada", reviewedById, reviewNotes);
+  await agregarComentarioDeRevision("deadline", id, reviewedById, "Devuelto para corrección", reviewNotes);
 }
 
 /** Igual que `requestTaskCompletion` pero para vencimientos tributarios
@@ -1367,6 +1389,7 @@ export async function requestDeadlineCompletion(id: number, reviewedById: number
     reviewNotes,
   }).where(eq(taxDeadlines.id, id));
   await logHistoryEvent("deadline", id, "completar_solicitado", reviewedById, reviewNotes);
+  await agregarComentarioDeRevision("deadline", id, reviewedById, "Enviado a completar", reviewNotes);
 }
 
 /** Admin cancels a task that's no longer needed. If nothing was ever
