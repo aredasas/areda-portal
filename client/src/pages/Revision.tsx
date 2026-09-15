@@ -40,6 +40,7 @@ const historyLabels: Record<string, string> = {
   creada: "Creada",
   completada: "Completada",
   correccion_solicitada: "Devuelta para corrección",
+  completar_solicitado: "Enviada a completar (una acción más)",
   aprobada: "Aprobada",
   reabierta: "Reabierta",
   cancelada: "Cancelada",
@@ -49,6 +50,7 @@ const historyDot: Record<string, string> = {
   creada: "bg-gray-400",
   completada: "bg-blue-500",
   correccion_solicitada: "bg-orange-500",
+  completar_solicitado: "bg-sky-500",
   aprobada: "bg-green-500",
   reabierta: "bg-yellow-500",
   cancelada: "bg-red-500",
@@ -122,6 +124,7 @@ export default function Revision() {
   const approveDeadline = trpc.deadlines.approve.useMutation();
   const requestTaskCorrection = trpc.tasks.requestCorrection.useMutation();
   const requestDeadlineCorrection = trpc.deadlines.requestCorrection.useMutation();
+  const requestTaskCompletion = trpc.tasks.requestCompletion.useMutation();
 
   const { data: taskHistory } = trpc.tasks.getHistory.useQuery(
     { id: selectedItem?.id },
@@ -174,6 +177,29 @@ export default function Revision() {
       refetch();
     } catch (error: any) {
       toast.error(error.message || "Error al solicitar la corrección");
+    }
+  };
+
+  const handleRequestCompletion = async () => {
+    if (!selectedItem || selectedItem.itemType !== "task" || !reviewNotesInput.trim()) return;
+    try {
+      const adjuntos = await Promise.all(adjuntosCorreccion.map(async (archivo) => {
+        const fileBase64 = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve((reader.result as string).split(",")[1]);
+          reader.onerror = reject;
+          reader.readAsDataURL(archivo);
+        });
+        return { fileName: archivo.name, fileBase64, contentType: archivo.type || "application/octet-stream" };
+      }));
+      await requestTaskCompletion.mutateAsync({ id: selectedItem.id, reviewNotes: reviewNotesInput, adjuntos });
+      toast.success("Se envió de vuelta al encargado para la acción final");
+      setSelectedItem(null);
+      setReviewNotesInput("");
+      setAdjuntosCorreccion([]);
+      refetch();
+    } catch (error: any) {
+      toast.error(error.message || "Error al enviar a completar");
     }
   };
 
@@ -526,6 +552,18 @@ export default function Revision() {
                           {(requestTaskCorrection.isPending || requestDeadlineCorrection.isPending) ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
                           Corregir
                         </Button>
+                        {selectedItem.itemType === "task" && (
+                          <Button
+                            onClick={handleRequestCompletion}
+                            disabled={!reviewNotesInput.trim() || approveTask.isPending || requestTaskCorrection.isPending || requestTaskCompletion.isPending}
+                            variant="outline"
+                            className="gap-2 border-blue-300 text-blue-700 hover:bg-blue-50 flex-1"
+                            title={!reviewNotesInput.trim() ? "Indique qué falta para completar" : "El trabajo hecho está bien, pero falta una acción más antes de cerrar la tarea"}
+                          >
+                            {requestTaskCompletion.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <ClipboardList className="h-4 w-4" />}
+                            Completar
+                          </Button>
+                        )}
                       </div>
                     </div>
                   )}

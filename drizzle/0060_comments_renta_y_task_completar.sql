@@ -1,0 +1,4 @@
+ALTER TABLE `comments` MODIFY COLUMN `entityType` enum('task','deadline','board_post','renta_cliente') NOT NULL;--> statement-breakpoint
+ALTER TABLE `historyEvents` MODIFY COLUMN `eventType` enum('creada','completada','correccion_solicitada','completar_solicitado','aprobada','reabierta','cancelada') NOT NULL;--> statement-breakpoint
+ALTER TABLE `notifications` MODIFY COLUMN `type` enum('comentario','aprobada','correccion_solicitada','completar_solicitado','tablero_post') NOT NULL;--> statement-breakpoint
+ALTER TABLE `tasks` MODIFY COLUMN `reviewStatus` enum('aprobado','correccion','completar');

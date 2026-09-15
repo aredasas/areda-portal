@@ -1156,6 +1156,38 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
         }
         return { success: true };
       }),
+    /** Admin marca que el trabajo ya hecho estaba BIEN pero falta UNA
+     * ACCIÓN MÁS antes de dar la tarea por terminada (ej. un documento
+     * que se envió a firmar ya volvió firmado) — a diferencia de
+     * "corregir", NO borra la evidencia ya subida, el colaborador la
+     * conserva y solo agrega lo que falta con este comentario/adjunto
+     * como guía. */
+    requestCompletion: adminProcedure
+      .input(z.object({
+        id: z.number(), reviewNotes: z.string().min(1, "Indique qué falta para completar"),
+        adjuntos: z.array(z.object({ fileName: z.string(), fileBase64: z.string(), contentType: z.string() })).optional(),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        const tareaExistente = await db.getTaskById(input.id);
+        await db.assertClienteActivo(tareaExistente?.clientId);
+        await db.requestTaskCompletion(input.id, ctx.user.id, input.reviewNotes);
+        for (const adjunto of input.adjuntos || []) {
+          const buffer = Buffer.from(adjunto.fileBase64, "base64");
+          const rawKey = `tasks/${input.id}/${Date.now()}_${adjunto.fileName}`;
+          const { url, key } = await storagePut(rawKey, buffer, adjunto.contentType);
+          await db.createTaskAttachment({
+            taskId: input.id, fileName: adjunto.fileName, fileUrl: url, fileKey: key,
+            contentType: adjunto.contentType, fileSize: buffer.length, uploadedById: ctx.user.id,
+          });
+        }
+        const task = await db.getTaskById(input.id);
+        if (task?.assignedToId && task.assignedToId !== ctx.user.id) {
+          const client = await db.getClientById(task.clientId);
+          const title = client ? `${client.razonSocial} — ${task.title}` : task.title;
+          await db.createNotification(task.assignedToId, "completar_solicitado", "task", input.id, title, input.reviewNotes, task.clientId);
+        }
+        return { success: true };
+      }),
     getHistory: protectedProcedure
       .input(z.object({ id: z.number() }))
       .query(async ({ input }) => {
@@ -1593,7 +1625,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
    * a general chat between users. */
   comments: router({
     list: protectedProcedure
-      .input(z.object({ entityType: z.enum(["task", "deadline"]), entityId: z.number() }))
+      .input(z.object({ entityType: z.enum(["task", "deadline", "renta_cliente"]), entityId: z.number() }))
       .query(async ({ input, ctx }) => {
         if (input.entityType === "task") {
           const task = await db.getTaskById(input.entityId);
@@ -1601,6 +1633,8 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           if (ctx.user.role !== "admin" && task.assignedToId !== ctx.user.id) {
             throw new TRPCError({ code: "FORBIDDEN", message: "No tiene acceso a esta tarea" });
           }
+        } else if (input.entityType === "renta_cliente") {
+          assertRentaPNAccess(ctx.user.role);
         } else {
           const deadline = await db.getDeadlineById(input.entityId);
           if (!deadline) throw new Error("Vencimiento no encontrado");
@@ -1614,7 +1648,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
         return db.getComments(input.entityType, input.entityId);
       }),
     create: protectedProcedure
-      .input(z.object({ entityType: z.enum(["task", "deadline"]), entityId: z.number(), content: z.string().min(1) }))
+      .input(z.object({ entityType: z.enum(["task", "deadline", "renta_cliente"]), entityId: z.number(), content: z.string().min(1) }))
       .mutation(async ({ input, ctx }) => {
         if (input.entityType === "task") {
           const task = await db.getTaskById(input.entityId);
@@ -1641,6 +1675,9 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
               await db.createNotification(uid, "comentario", "task", task.id, title, input.content, task.clientId);
             }
           }
+        } else if (input.entityType === "renta_cliente") {
+          assertRentaPNAccess(ctx.user.role);
+          await db.createComment(input.entityType, input.entityId, ctx.user.id, input.content);
         } else {
           const deadline = await db.getDeadlineById(input.entityId);
           if (!deadline) throw new Error("Vencimiento no encontrado");

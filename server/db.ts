@@ -786,7 +786,7 @@ export async function getClientEvidenceContext(clientId: number, limit: number =
 
 // ==================== COMMENTS ====================
 
-export async function getComments(entityType: "task" | "deadline" | "board_post", entityId: number) {
+export async function getComments(entityType: "task" | "deadline" | "board_post" | "renta_cliente", entityId: number) {
   const db = await getDb();
   if (!db) return [];
   return db.select({
@@ -804,7 +804,7 @@ export async function getComments(entityType: "task" | "deadline" | "board_post"
     .orderBy(asc(comments.createdAt));
 }
 
-export async function createComment(entityType: "task" | "deadline" | "board_post", entityId: number, authorId: number, content: string) {
+export async function createComment(entityType: "task" | "deadline" | "board_post" | "renta_cliente", entityId: number, authorId: number, content: string) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   await db.insert(comments).values({ entityType, entityId, authorId, content });
@@ -829,7 +829,7 @@ export async function getCommentCounts(entityType: "task" | "deadline", entityId
 
 // ==================== HISTORY (audit trail) ====================
 
-export type HistoryEventType = "creada" | "completada" | "correccion_solicitada" | "aprobada" | "reabierta" | "cancelada";
+export type HistoryEventType = "creada" | "completada" | "correccion_solicitada" | "completar_solicitado" | "aprobada" | "reabierta" | "cancelada";
 
 export async function logHistoryEvent(
   entityType: "task" | "deadline",
@@ -862,7 +862,7 @@ export async function getHistory(entityType: "task" | "deadline", entityId: numb
 
 // ==================== NOTIFICATIONS ====================
 
-export type NotificationType = "comentario" | "aprobada" | "correccion_solicitada" | "tablero_post";
+export type NotificationType = "comentario" | "aprobada" | "correccion_solicitada" | "completar_solicitado" | "tablero_post";
 
 export async function createNotification(
   userId: number,
@@ -1298,6 +1298,25 @@ export async function requestTaskCorrection(id: number, reviewedById: number, re
     reviewNotes,
   }).where(eq(tasks.id, id));
   await logHistoryEvent("task", id, "correccion_solicitada", reviewedById, reviewNotes);
+}
+
+/** Envía una tarea completada de vuelta al colaborador para UNA ACCIÓN
+ * MÁS antes de darla por terminada — a diferencia de la corrección, el
+ * trabajo ya hecho SÍ estaba bien, así que NO se borra la evidencia
+ * anterior (el colaborador la conserva y solo agrega lo que falta). Ej.
+ * un documento que se envió a firmar ya volvió firmado — se adjunta
+ * aquí y se le pide al colaborador subirlo/archivarlo para cerrar. */
+export async function requestTaskCompletion(id: number, reviewedById: number, reviewNotes: string) {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(tasks).set({
+    status: "pendiente",
+    reviewStatus: "completar",
+    reviewedById,
+    reviewedAt: new Date(),
+    reviewNotes,
+  }).where(eq(tasks.id, id));
+  await logHistoryEvent("task", id, "completar_solicitado", reviewedById, reviewNotes);
 }
 
 export async function approveDeadline(id: number, reviewedById: number, reviewNotes?: string | null) {

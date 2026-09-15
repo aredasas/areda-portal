@@ -166,9 +166,12 @@ export const tasks = mysqlTable("tasks", {
   driveSubfolder: varchar("driveSubfolder", { length: 150 }),
   /** Notes when completing the task */
   completionNotes: text("completionNotes"),
-  /** Set once an admin reviews a completed task — either approving it or
-   * sending it back for correction. reviewStatus distinguishes which. */
-  reviewStatus: mysqlEnum("reviewStatus", ["aprobado", "correccion"]),
+  /** Set once an admin reviews a completed task — either approving it,
+   * sending it back for correction, or marking that it needs ONE MORE
+   * action to be truly done (ej. un documento que se envió a firmar ya
+   * volvió firmado — "completar" no reinicia el trabajo, solo le agrega
+   * un paso más antes de cerrarse). */
+  reviewStatus: mysqlEnum("reviewStatus", ["aprobado", "correccion", "completar"]),
   reviewNotes: text("reviewNotes"),
   reviewedById: int("reviewedById"),
   reviewedAt: timestamp("reviewedAt"),
@@ -302,7 +305,7 @@ export type InsertDianCalendar = typeof dianCalendar.$inferInsert;
  */
 export const comments = mysqlTable("comments", {
   id: int("id").autoincrement().primaryKey(),
-  entityType: mysqlEnum("entityType", ["task", "deadline", "board_post"]).notNull(),
+  entityType: mysqlEnum("entityType", ["task", "deadline", "board_post", "renta_cliente"]).notNull(),
   entityId: int("entityId").notNull(),
   authorId: int("authorId").notNull(),
   content: text("content").notNull(),
@@ -326,6 +329,7 @@ export const historyEvents = mysqlTable("historyEvents", {
     "creada",
     "completada",
     "correccion_solicitada",
+    "completar_solicitado",
     "aprobada",
     "reabierta",
     "cancelada",
@@ -346,7 +350,7 @@ export type InsertHistoryEvent = typeof historyEvents.$inferInsert;
 export const notifications = mysqlTable("notifications", {
   id: int("id").autoincrement().primaryKey(),
   userId: int("userId").notNull(),
-  type: mysqlEnum("type", ["comentario", "aprobada", "correccion_solicitada", "tablero_post"]).notNull(),
+  type: mysqlEnum("type", ["comentario", "aprobada", "correccion_solicitada", "completar_solicitado", "tablero_post"]).notNull(),
   entityType: mysqlEnum("entityType", ["task", "deadline", "board_post"]).notNull(),
   entityId: int("entityId").notNull(),
   /** So clicking a notification can jump straight to the right client's

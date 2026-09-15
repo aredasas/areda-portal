@@ -7,7 +7,7 @@ import { MessageSquare, Send, Loader2 } from "lucide-react";
 
 /** Comments on a specific task or deadline — for asking/flagging things
  * about that item directly, instead of a general chat between users. */
-export default function CommentsSection({ entityType, entityId }: { entityType: "task" | "deadline"; entityId: number }) {
+export default function CommentsSection({ entityType, entityId }: { entityType: "task" | "deadline" | "renta_cliente"; entityId: number }) {
   const [content, setContent] = useState("");
   const { data: commentsList, isLoading, refetch } = trpc.comments.list.useQuery({ entityType, entityId });
   const createComment = trpc.comments.create.useMutation();

@@ -421,6 +421,13 @@
       "when": 1789406412136,
       "tag": "0059_renta_comentario_no_obligado",
       "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "5",
+      "when": 1789429791951,
+      "tag": "0060_comments_renta_y_task_completar",
+      "breakpoints": true
     }
   ]
 }

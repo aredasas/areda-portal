@@ -297,7 +297,15 @@ export default function Tareas() {
   };
   const tasksFiltradosBase = tasks?.filter(pasaFiltrosBase);
   const filteredTasks = tasksFiltradosBase
-    ?.filter((t: any) => activeTab === "todas" || t.status === activeTab)
+    ?.filter((t: any) => {
+      if (activeTab === "todas") return true;
+      // "Devueltas" y "Por completar" son tareas que técnicamente están en
+      // "pendiente" de nuevo (para retomarse), distinguidas por reviewStatus
+      // — no por status, así que necesitan su propio criterio aparte.
+      if (activeTab === "devuelta") return t.reviewStatus === "correccion";
+      if (activeTab === "por_completar") return t.reviewStatus === "completar";
+      return t.status === activeTab;
+    })
     // Approved tasks sink to the bottom — once reviewed, they're done business,
     // so unreviewed/active work stays easier to spot at a glance.
     .sort((a: any, b: any) => (a.reviewedAt ? 1 : 0) - (b.reviewedAt ? 1 : 0));
@@ -375,6 +383,8 @@ export default function Tareas() {
           <TabsTrigger value="pendiente">Pendientes ({tasksFiltradosBase?.filter((t: any) => t.status === "pendiente").length || 0})</TabsTrigger>
           <TabsTrigger value="en_progreso">En Progreso ({tasksFiltradosBase?.filter((t: any) => t.status === "en_progreso").length || 0})</TabsTrigger>
           <TabsTrigger value="completada">Completadas ({tasksFiltradosBase?.filter((t: any) => t.status === "completada").length || 0})</TabsTrigger>
+          <TabsTrigger value="devuelta" className="text-orange-700">Devueltas ({tasksFiltradosBase?.filter((t: any) => t.reviewStatus === "correccion").length || 0})</TabsTrigger>
+          <TabsTrigger value="por_completar" className="text-blue-700">Por completar ({tasksFiltradosBase?.filter((t: any) => t.reviewStatus === "completar").length || 0})</TabsTrigger>
           <TabsTrigger value="vencida">Vencidas ({tasksFiltradosBase?.filter((t: any) => t.status === "vencida").length || 0})</TabsTrigger>
           <TabsTrigger value="cancelada">Canceladas ({tasksFiltradosBase?.filter((t: any) => t.status === "cancelada").length || 0})</TabsTrigger>
         </TabsList>
@@ -465,6 +475,15 @@ export default function Tareas() {
                                 title={`Devuelta para corrección${task.reviewedByName ? ` por ${task.reviewedByName}` : ""}`}
                               >
                                 <RotateCcw className="w-3 h-3 mr-1" /> Corregir: {task.reviewNotes}
+                              </Badge>
+                            )}
+                            {task.status !== "completada" && task.reviewStatus === "completar" && (
+                              <Badge
+                                variant="outline"
+                                className="bg-blue-50 text-blue-700 border-blue-200"
+                                title={`Falta una acción más${task.reviewedByName ? `, indicado por ${task.reviewedByName}` : ""}`}
+                              >
+                                <ClipboardList className="w-3 h-3 mr-1" /> Completar: {task.reviewNotes}
                               </Badge>
                             )}
                             {!isAdmin && task.status !== "completada" && task.status !== "cancelada" && task.assignedToId === user?.id && (
@@ -731,11 +750,13 @@ export default function Tareas() {
 
               {/* Review/approval section — visible to the collaborator once an admin reviews it */}
               {detailTask.reviewedAt && (
-                <Card className={detailTask.reviewStatus === "correccion" ? "bg-orange-50 border-orange-200" : "bg-blue-50 border-blue-200"}>
+                <Card className={detailTask.reviewStatus === "correccion" ? "bg-orange-50 border-orange-200" : detailTask.reviewStatus === "completar" ? "bg-blue-50 border-blue-200" : "bg-green-50 border-green-200"}>
                   <CardContent className="p-3">
-                    <p className={`text-sm font-medium flex items-center gap-2 ${detailTask.reviewStatus === "correccion" ? "text-orange-800" : "text-blue-800"}`}>
+                    <p className={`text-sm font-medium flex items-center gap-2 ${detailTask.reviewStatus === "correccion" ? "text-orange-800" : detailTask.reviewStatus === "completar" ? "text-blue-800" : "text-green-800"}`}>
                       {detailTask.reviewStatus === "correccion" ? (
                         <><RotateCcw className="h-4 w-4" /> Devuelta para corrección</>
+                      ) : detailTask.reviewStatus === "completar" ? (
+                        <><ClipboardList className="h-4 w-4" /> Falta una acción más para completar</>
                       ) : (
                         <><CheckCircle2 className="h-4 w-4" /> Aprobado por el revisor</>
                       )}
@@ -753,6 +774,11 @@ export default function Tareas() {
                   </CardContent>
                 </Card>
               )}
+
+              {/* Historial completo — cada aprobación/corrección/envío a completar
+                  anterior queda guardado de forma permanente (nunca se borra ni se
+                  sobrescribe), aunque arriba solo se vea el estado más reciente. */}
+              <TaskHistorySection taskId={detailTask.id} />
 
               {/* Attachments section */}
               <div>
@@ -808,5 +834,50 @@ export default function Tareas() {
       <RecurringTasksDialog open={showRecurringDialog} onOpenChange={setShowRecurringDialog} />
     </div>
     </DashboardLayout>
+  );
+}
+
+const ETIQUETA_EVENTO_HISTORIAL: Record<string, string> = {
+  creada: "Tarea creada",
+  completada: "Marcada como completada",
+  correccion_solicitada: "Devuelta para corrección",
+  completar_solicitado: "Enviada a completar (una acción más)",
+  aprobada: "Aprobada",
+  reabierta: "Reabierta",
+  cancelada: "Cancelada",
+};
+
+/** Historial COMPLETO de una tarea — cada aprobación, corrección o envío
+ * a completar queda guardado de forma permanente (nunca se sobrescribe),
+ * a diferencia del campo `reviewNotes` de la tarea (que solo guarda el
+ * ÚLTIMO comentario). Sin esto, un ciclo de corrección→completar→corrección
+ * hacía parecer que los comentarios anteriores se habían perdido, cuando
+ * en realidad seguían guardados — solo que no se mostraban. */
+function TaskHistorySection({ taskId }: { taskId: number }) {
+  const { data: historial, isLoading } = trpc.tasks.getHistory.useQuery({ id: taskId });
+
+  if (isLoading) return null;
+  if (!historial || historial.length === 0) return null;
+
+  return (
+    <Card>
+      <CardContent className="p-3">
+        <p className="text-sm font-medium mb-2">Historial completo</p>
+        <div className="space-y-2 max-h-[220px] overflow-y-auto">
+          {historial.map((h: any) => (
+            <div key={h.id} className="text-xs border-l-2 border-muted pl-2">
+              <div className="flex items-center justify-between">
+                <span className="font-medium">{ETIQUETA_EVENTO_HISTORIAL[h.eventType] || h.eventType}</span>
+                <span className="text-muted-foreground">
+                  {new Date(h.createdAt).toLocaleString("es-CO", { dateStyle: "medium", timeStyle: "short" })}
+                </span>
+              </div>
+              {h.userName && <p className="text-muted-foreground">por {h.userName}</p>}
+              {h.notes && <p className="mt-0.5 whitespace-pre-wrap">{h.notes}</p>}
+            </div>
+          ))}
+        </div>
+      </CardContent>
+    </Card>
   );
 }

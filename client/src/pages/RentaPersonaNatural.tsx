@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import DashboardLayout from "@/components/DashboardLayout";
+import CommentsSection from "@/components/CommentsSection";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -375,13 +376,8 @@ function ClientesRentaTab({ anioGravable, onIrALiquidacion }: { anioGravable: nu
   };
 
   const handleToggleNoObligado = (c: any, checked: boolean) => {
-    if (checked) {
-      const comentario = window.prompt(`¿Por qué ${c.nombre} no está obligado a declarar? (queda visible en el listado)`, c.comentarioNoObligado || "");
-      if (comentario === null) return; // canceló, no se marca
-      updateMutation.mutate({ id: c.id, noObligado: checked, comentarioNoObligado: comentario });
-    } else {
-      updateMutation.mutate({ id: c.id, noObligado: checked });
-    }
+    updateMutation.mutate({ id: c.id, noObligado: checked });
+    if (checked) toast.info(`Marca por qué en los comentarios de ${c.nombre}, en Liquidación`);
   };
 
   const handleToggleActivo = (c: any) => {
@@ -684,6 +680,17 @@ function LiquidacionTab({ anioGravable, rentaClienteIdInicial }: { anioGravable:
             </div>
           )}
           <DriveCard key={`drive-${rentaClienteId}`} rentaClienteId={rentaClienteId} anioGravable={anioGravable} soloLectura={soloLectura} />
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Comentarios de este cliente</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-sm text-muted-foreground mb-3">
+                Úsalo, por ejemplo, para explicar por qué se marcó como "no obligado" en el listado.
+              </p>
+              <CommentsSection entityType="renta_cliente" entityId={rentaClienteId} />
+            </CardContent>
+          </Card>
           <Card>
             <CardHeader>
               <CardTitle className="text-base flex items-center gap-2">
