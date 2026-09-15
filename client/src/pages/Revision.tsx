@@ -511,6 +511,26 @@ export default function Revision() {
                         </p>
                       )}
                     </div>
+                  ) : selectedItem.reviewStatus === "correccion" || selectedItem.reviewStatus === "completar" ? (
+                    // Ya se tomó una decisión sobre esta tarea (devuelta o
+                    // enviada a completar) — aquí solo se viene a CONSULTAR
+                    // qué se pidió, no a tomar otra acción encima. El
+                    // colaborador es quien la retoma desde su lado.
+                    <div className={selectedItem.reviewStatus === "correccion" ? "bg-orange-50 border border-orange-200 rounded-md p-3" : "bg-blue-50 border border-blue-200 rounded-md p-3"}>
+                      <p className={`text-sm font-medium flex items-center gap-2 ${selectedItem.reviewStatus === "correccion" ? "text-orange-800" : "text-blue-800"}`}>
+                        {selectedItem.reviewStatus === "correccion" ? <><RotateCcw className="h-4 w-4" /> Devuelta para corrección — pendiente de que se retome</> : <><ClipboardList className="h-4 w-4" /> Enviada a completar — pendiente de la acción final</>}
+                      </p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {new Date(selectedItem.reviewedAt).toLocaleString("es-CO", { dateStyle: "medium", timeStyle: "short" })}
+                        {selectedItem.reviewedByName && ` por ${selectedItem.reviewedByName}`}
+                      </p>
+                      {selectedItem.reviewNotes && (
+                        <p className="text-sm mt-2">
+                          <span className="text-muted-foreground">Lo que se pidió: </span>
+                          {selectedItem.reviewNotes}
+                        </p>
+                      )}
+                    </div>
                   ) : (
                     <div className="space-y-2">
                       <Label>Observaciones (obligatorias para corregir, opcionales para aprobar)</Label>

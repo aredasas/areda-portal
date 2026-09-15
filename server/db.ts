@@ -1432,7 +1432,14 @@ export async function getCompletedItemsForReview(filters: ReviewFilters) {
     vista === "devueltas" ? [eq(tasks.reviewStatus, "correccion")]
     : vista === "por_completar" ? [eq(tasks.reviewStatus, "completar")]
     : [eq(tasks.status, "completada")];
-  if (monthRange) taskConditions.push(gte(tasks.completedAt, monthRange.start), lte(tasks.completedAt, monthRange.end));
+  // El filtro de mes se basa en `completedAt` — para "devueltas",
+  // requestTaskCorrection() lo pone en NULL (la tarea ya no está
+  // completada), así que comparar contra un rango de fechas SIEMPRE
+  // daba falso y la lista salía vacía sin importar qué se devolviera.
+  // Para ambas vistas nuevas tiene más sentido ver TODO lo pendiente
+  // de esa categoría, sin restringir por mes — son trabajo activo, no
+  // un archivo histórico.
+  if (monthRange && vista === "pendientes") taskConditions.push(gte(tasks.completedAt, monthRange.start), lte(tasks.completedAt, monthRange.end));
   if (filters.clientId) taskConditions.push(eq(tasks.clientId, filters.clientId));
   if (filters.assignedToId) taskConditions.push(eq(tasks.assignedToId, filters.assignedToId));
   if (filters.managerId) taskConditions.push(eq(clients.managerId, filters.managerId));
@@ -1472,7 +1479,7 @@ export async function getCompletedItemsForReview(filters: ReviewFilters) {
     const deadlineConditions =
       vista === "devueltas" ? [eq(taxDeadlines.reviewStatus, "correccion")]
       : [eq(taxDeadlines.status, "completado")];
-    if (monthRange) deadlineConditions.push(gte(taxDeadlines.completedAt, monthRange.start), lte(taxDeadlines.completedAt, monthRange.end));
+    if (monthRange && vista === "pendientes") deadlineConditions.push(gte(taxDeadlines.completedAt, monthRange.start), lte(taxDeadlines.completedAt, monthRange.end));
     if (filters.clientId) deadlineConditions.push(eq(taxDeadlines.clientId, filters.clientId));
     if (filters.obligationId) deadlineConditions.push(eq(taxDeadlines.obligationId, filters.obligationId));
     if (filters.managerId) deadlineConditions.push(eq(clients.managerId, filters.managerId));
