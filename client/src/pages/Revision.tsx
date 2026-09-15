@@ -408,11 +408,31 @@ export default function Revision() {
                         <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200 mt-1">
                           <ThumbsUp className="h-3 w-3 mr-1" /> Aprobado
                         </Badge>
+                      ) : item.reviewStatus === "correccion" ? (
+                        <Badge variant="outline" className="bg-orange-50 text-orange-700 border-orange-200 mt-1">
+                          <RotateCcw className="h-3 w-3 mr-1" /> Devuelta
+                        </Badge>
+                      ) : item.reviewStatus === "completar" ? (
+                        <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200 mt-1">
+                          <ClipboardList className="h-3 w-3 mr-1" /> Por completar
+                        </Badge>
                       ) : (
                         <Badge variant="outline" className="bg-gray-100 text-gray-600 border-gray-300 mt-1">
                           Sin revisar
                         </Badge>
                       )}
+                      {/* Días sin resolver — para dar control real sobre lo
+                          que "queda en el aire": una devuelta o por-completar
+                          hace más de 5 días se resalta para que salte a la
+                          vista, en vez de perderse entre las demás. */}
+                      {(item.reviewStatus === "correccion" || item.reviewStatus === "completar") && item.reviewedAt && (() => {
+                        const dias = Math.floor((Date.now() - new Date(item.reviewedAt).getTime()) / (1000 * 60 * 60 * 24));
+                        return (
+                          <p className={`text-xs mt-0.5 ${dias >= 5 ? "text-red-600 font-medium" : "text-muted-foreground"}`}>
+                            {dias === 0 ? "Hoy" : dias === 1 ? "Hace 1 día" : `Hace ${dias} días`}{dias >= 5 ? " — sin resolver" : ""}
+                          </p>
+                        );
+                      })()}
                     </div>
                   </div>
                 ))}
@@ -564,7 +584,7 @@ export default function Revision() {
                           ))}
                         </div>
                       )}
-                      <div className="flex gap-2">
+                      <div className="flex flex-col sm:flex-row gap-2">
                         <Button
                           onClick={handleApprove}
                           disabled={approveTask.isPending || approveDeadline.isPending || requestTaskCorrection.isPending || requestDeadlineCorrection.isPending}
