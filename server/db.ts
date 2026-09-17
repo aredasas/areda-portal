@@ -829,7 +829,7 @@ async function agregarComentarioDeRevision(
 
 /** Comment counts for several items at once (e.g. every task in a list) —
  * one query instead of one per row. */
-export async function getCommentCounts(entityType: "task" | "deadline", entityIds: number[]) {
+export async function getCommentCounts(entityType: "task" | "deadline" | "renta_cliente", entityIds: number[]) {
   const db = await getDb();
   if (!db || entityIds.length === 0) return {} as Record<number, number>;
   const rows = await db.select({

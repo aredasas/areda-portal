@@ -2774,12 +2774,13 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
         .query(async ({ input, ctx }) => {
           assertRentaPNAccess(ctx.user.role);
           const filas = await db.getRentaClientes(input.anioGravable, input.incluirInactivos);
+          const conteoComentarios = await db.getCommentCounts("renta_cliente", filas.map(c => c.id));
           const conVencimiento = await Promise.all(filas.map(async (c) => {
             const vencimiento = c.noObligado ? null : await db.getVencimientoRentaPN(c.cedula, c.anioGravable);
             const diasRestantes = vencimiento
               ? Math.ceil((vencimiento.getTime() - Date.now()) / (1000 * 60 * 60 * 24))
               : null;
-            return { ...c, vencimiento, diasRestantes };
+            return { ...c, vencimiento, diasRestantes, cantidadComentarios: conteoComentarios[c.id] || 0 };
           }));
           // Orden: primero los obligados y pendientes (por menos días
           // restantes), luego los ya terminados, y al final los no

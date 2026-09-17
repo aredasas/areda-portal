@@ -33,6 +33,35 @@ const redondearPesosDian = (valorExacto: number) => Math.round(valorExacto / 100
  * en el PDF de anexos, justo debajo de esa partida. El ícono se rellena
  * cuando ya hay un comentario guardado, para que se note de un vistazo
  * cuáles partidas ya tienen una nota sin tener que abrir cada una. */
+/** Ícono de comentario junto a un cliente en el listado — mismo patrón
+ * visual que `ComentarioItemBoton`, pero abre el HILO completo de
+ * comentarios (CommentsSection) en vez de un solo texto editable, ya
+ * que aquí puede haber varios comentarios (ej. distintas personas
+ * explicando o actualizando por qué el cliente quedó "no obligado"). */
+function ComentarioClienteBoton({ clienteId, cantidadComentarios }: { clienteId: number; cantidadComentarios: number }) {
+  const [abierto, setAbierto] = useState(false);
+  const tieneComentario = cantidadComentarios > 0;
+
+  return (
+    <Popover open={abierto} onOpenChange={setAbierto}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="ghost" size="icon"
+          className={`h-7 w-7 shrink-0 ${tieneComentario ? "text-amber-600" : "text-muted-foreground"}`}
+          title={tieneComentario ? `Ver comentarios (${cantidadComentarios})` : "Agregar un comentario"}
+        >
+          <MessageSquare className="w-3.5 h-3.5" fill={tieneComentario ? "currentColor" : "none"} />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-80" align="end">
+        {/* Solo se monta (y dispara su consulta) cuando el popover está
+            realmente abierto. */}
+        {abierto && <CommentsSection entityType="renta_cliente" entityId={clienteId} />}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 function ComentarioItemBoton({ itemId, comentarioActual, soloLectura }: { itemId: number; comentarioActual?: string | null; soloLectura?: boolean }) {
   const utils = trpc.useUtils();
   const [abierto, setAbierto] = useState(false);
@@ -465,9 +494,12 @@ function ClientesRentaTab({ anioGravable, onIrALiquidacion }: { anioGravable: nu
                       {c.terminado ? (
                         <TerminadoBadge fileKey={c.declaracionFileKey} />
                       ) : c.noObligado ? (
-                        <button onClick={() => onIrALiquidacion(c.id)} title={c.comentarioNoObligado ? `Motivo: ${c.comentarioNoObligado}\n\nVer la consulta de exógena en Liquidación` : "Ver la consulta de exógena en Liquidación"}>
-                          <Badge variant="outline" className="hover:bg-muted cursor-pointer gap-1">No obligado</Badge>
-                        </button>
+                        <div className="flex items-center gap-1">
+                          <button onClick={() => onIrALiquidacion(c.id)} title="Ver la consulta de exógena en Liquidación">
+                            <Badge variant="outline" className="hover:bg-muted cursor-pointer gap-1">No obligado</Badge>
+                          </button>
+                          <ComentarioClienteBoton clienteId={c.id} cantidadComentarios={c.cantidadComentarios || 0} />
+                        </div>
                       ) : c.tieneExogena ? (
                         <button onClick={() => onIrALiquidacion(c.id)}>
                           <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100 cursor-pointer gap-1">
@@ -680,17 +712,6 @@ function LiquidacionTab({ anioGravable, rentaClienteIdInicial }: { anioGravable:
             </div>
           )}
           <DriveCard key={`drive-${rentaClienteId}`} rentaClienteId={rentaClienteId} anioGravable={anioGravable} soloLectura={soloLectura} />
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Comentarios de este cliente</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-sm text-muted-foreground mb-3">
-                Úsalo, por ejemplo, para explicar por qué se marcó como "no obligado" en el listado.
-              </p>
-              <CommentsSection entityType="renta_cliente" entityId={rentaClienteId} />
-            </CardContent>
-          </Card>
           <Card>
             <CardHeader>
               <CardTitle className="text-base flex items-center gap-2">
