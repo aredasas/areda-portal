@@ -396,7 +396,7 @@ export default function Tareas() {
                       <TableHead>Fecha Límite</TableHead>
                       <TableHead>Prioridad</TableHead>
                       <TableHead>Estado</TableHead>
-                      <TableHead className="text-right">Acciones</TableHead>
+                      <TableHead className="text-right sticky right-0 bg-background z-10 shadow-[-4px_0_4px_-4px_rgba(0,0,0,0.15)]">Acciones</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -450,8 +450,8 @@ export default function Tareas() {
                             </Badge>
                           )}
                         </TableCell>
-                        <TableCell className="text-right">
-                          <div className="flex gap-1 justify-end">
+                        <TableCell className="text-right sticky right-0 bg-background z-10 shadow-[-4px_0_4px_-4px_rgba(0,0,0,0.15)]">
+                          <div className="flex gap-1 justify-end flex-wrap max-w-[280px] ml-auto">
                             <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleViewDetail(task)} title="Ver detalle">
                               <Eye className="w-4 h-4" />
                             </Button>
@@ -461,19 +461,21 @@ export default function Tareas() {
                             {task.status !== "completada" && task.reviewStatus === "correccion" && (
                               <Badge
                                 variant="outline"
-                                className="bg-orange-50 text-orange-700 border-orange-200"
-                                title={`Devuelta para corrección${task.reviewedByName ? ` por ${task.reviewedByName}` : ""}`}
+                                className="bg-orange-50 text-orange-700 border-orange-200 max-w-[140px] cursor-help"
+                                title={`Devuelta para corrección${task.reviewedByName ? ` por ${task.reviewedByName}` : ""}${task.reviewNotes ? `: ${task.reviewNotes}` : ""}`}
                               >
-                                <RotateCcw className="w-3 h-3 mr-1" /> Corregir: {task.reviewNotes}
+                                <RotateCcw className="w-3 h-3 mr-1 shrink-0" />
+                                <span className="truncate min-w-0">Corregir{task.reviewNotes ? `: ${task.reviewNotes}` : ""}</span>
                               </Badge>
                             )}
                             {task.status !== "completada" && task.reviewStatus === "completar" && (
                               <Badge
                                 variant="outline"
-                                className="bg-blue-50 text-blue-700 border-blue-200"
-                                title={`Falta una acción más${task.reviewedByName ? `, indicado por ${task.reviewedByName}` : ""}`}
+                                className="bg-blue-50 text-blue-700 border-blue-200 max-w-[140px] cursor-help"
+                                title={`Falta una acción más${task.reviewedByName ? `, indicado por ${task.reviewedByName}` : ""}${task.reviewNotes ? `: ${task.reviewNotes}` : ""}`}
                               >
-                                <ClipboardList className="w-3 h-3 mr-1" /> Completar: {task.reviewNotes}
+                                <ClipboardList className="w-3 h-3 mr-1 shrink-0" />
+                                <span className="truncate min-w-0">Completar{task.reviewNotes ? `: ${task.reviewNotes}` : ""}</span>
                               </Badge>
                             )}
                             {!isAdmin && task.status !== "completada" && task.status !== "cancelada" && task.assignedToId === user?.id && (
