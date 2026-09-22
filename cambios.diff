@@ -1,0 +1,106 @@
+--- areda-portal-pristine/client/src/pages/RentaPersonaNatural.tsx	2026-09-22 09:42:23.969599514 -0500
++++ areda-portal/client/src/pages/RentaPersonaNatural.tsx	2026-09-22 09:42:03.710020104 -0500
+@@ -196,6 +196,11 @@
+  * Detalle y un Valor arma el PDF con el mismo formato que Arlex ya
+  * usaba — numeración propia con prefijo "R25" empezando en 1. */
+ function CuentasCobroTab({ anioGravable }: { anioGravable: number }) {
++  const { user } = useAuth();
++  // El ícono de borrar una cuenta de cobro queda visible solo para Arlex
++  // (misma cédula que ya restringe Asistencia y la limpieza de datos de
++  // Liquidación) — no para cualquier otro administrador del módulo.
++  const puedeEliminar = user?.cedula === "5820262";
+   const utils = trpc.useUtils();
+   const clientesQuery = trpc.renta.clientes.list.useQuery({ anioGravable });
+   const listaQuery = trpc.renta.cuentasCobro.listar.useQuery();
+@@ -231,6 +236,19 @@
+     onError: (err) => toast.error(err.message || "No se pudo generar la cuenta de cobro"),
+   });
+ 
++  const eliminarMutation = trpc.renta.cuentasCobro.eliminar.useMutation({
++    onSuccess: () => {
++      toast.success("Cuenta de cobro eliminada");
++      utils.renta.cuentasCobro.listar.invalidate();
++    },
++    onError: (err) => toast.error(err.message || "No se pudo eliminar la cuenta de cobro"),
++  });
++
++  const handleEliminar = (cta: any) => {
++    if (!window.confirm(`¿Eliminar la cuenta de cobro ${cta.prefijo} - ${String(cta.numero).padStart(4, "0")} de ${cta.clienteNombre}? Esta acción no se puede deshacer.`)) return;
++    eliminarMutation.mutate({ id: cta.id });
++  };
++
+   const fmt = (n: number) => `$${Math.round(n).toLocaleString("es-CO")}`;
+ 
+   const handleGuardar = () => {
+@@ -329,6 +347,17 @@
+                       <Download className="w-3.5 h-3.5" />
+                     </Button>
+                   )}
++                  {puedeEliminar && (
++                    <Button
++                      size="sm" variant="outline"
++                      className="shrink-0 h-8 text-red-600 hover:bg-red-50 hover:text-red-700"
++                      onClick={() => handleEliminar(cta)}
++                      disabled={eliminarMutation.isPending}
++                      title="Eliminar cuenta de cobro"
++                    >
++                      <Trash2 className="w-3.5 h-3.5" />
++                    </Button>
++                  )}
+                 </div>
+               ))}
+             </div>
+--- areda-portal-pristine/server/db.ts	2026-09-22 09:42:23.981351318 -0500
++++ areda-portal/server/db.ts	2026-09-22 09:43:50.158017670 -0500
+@@ -2614,6 +2614,17 @@
+   await db.update(rentaCuentasCobro).set({ fileKey }).where(eq(rentaCuentasCobro.id, id));
+ }
+ 
++/** Borra una cuenta de cobro puntual (solo el registro — el PDF ya
++ * generado se conserva en el storage, igual que el resto de archivos de
++ * la app). Restringido a Arlex a nivel de router (ver
++ * ASISTENCIA_AUTHORIZED_CEDULA en routers.ts) — esta función no
++ * duplica esa validación. */
++export async function eliminarRentaCuentaCobro(id: number): Promise<void> {
++  const db = await getDb();
++  if (!db) return;
++  await db.delete(rentaCuentasCobro).where(eq(rentaCuentasCobro.id, id));
++}
++
+ /** Borra TODOS los datos cargados en la pestaña Liquidación (exógena,
+  * declaración anterior, dependientes, ingresos/deducciones de cada
+  * cédula, y el historial de borradores/anexos generados) — de TODOS los
+--- areda-portal-pristine/server/routers.ts	2026-09-22 09:42:23.982019641 -0500
++++ areda-portal/server/routers.ts	2026-09-22 09:41:47.218020482 -0500
+@@ -1,8 +1,9 @@
+ import { COOKIE_NAME } from "@shared/const";
+ import crypto from "crypto";
+ 
+-// Attendance/hours data ("Asistencia") is restricted to this one specific
+-// admin by explicit business request — not all admins should see it.
++// Cédula de Arlex — se reutiliza para restringir a él puntualmente
++// funciones que no deben quedar abiertas a cualquier administrador
++// (Asistencia, y eliminar cuentas de cobro en Renta PN).
+ const ASISTENCIA_AUTHORIZED_CEDULA = "5820262";
+ 
+ // Módulo Renta PN — restringido a administradores (cualquiera, no solo
+@@ -3124,6 +3125,19 @@
+           const signedUrl = await storageGetSignedUrl(fileKey);
+           return { id, numero, signedUrl };
+         }),
++      // Borrar una cuenta de cobro ya generada — restringido a Arlex
++      // puntualmente (misma cédula que ASISTENCIA_AUTHORIZED_CEDULA),
++      // no a cualquier administrador del módulo Renta PN.
++      eliminar: protectedProcedure
++        .input(z.object({ id: z.number() }))
++        .mutation(async ({ input, ctx }) => {
++          assertRentaPNAccess(ctx.user.role);
++          if (ctx.user.cedula !== ASISTENCIA_AUTHORIZED_CEDULA) {
++            throw new TRPCError({ code: "FORBIDDEN", message: "No autorizado para eliminar cuentas de cobro." });
++          }
++          await db.eliminarRentaCuentaCobro(input.id);
++          return { success: true };
++        }),
+     }),
+     liquidacion: router({
+       // Los topes/catálogo de deducciones se exponen para que el frontend

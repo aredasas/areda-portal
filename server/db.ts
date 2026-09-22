@@ -2614,6 +2614,17 @@ export async function actualizarFileKeyCuentaCobro(id: number, fileKey: string):
   await db.update(rentaCuentasCobro).set({ fileKey }).where(eq(rentaCuentasCobro.id, id));
 }
 
+/** Borra una cuenta de cobro puntual (solo el registro — el PDF ya
+ * generado se conserva en el storage, igual que el resto de archivos de
+ * la app). Restringido a Arlex a nivel de router (ver
+ * ASISTENCIA_AUTHORIZED_CEDULA en routers.ts) — esta función no
+ * duplica esa validación. */
+export async function eliminarRentaCuentaCobro(id: number): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.delete(rentaCuentasCobro).where(eq(rentaCuentasCobro.id, id));
+}
+
 /** Borra TODOS los datos cargados en la pestaña Liquidación (exógena,
  * declaración anterior, dependientes, ingresos/deducciones de cada
  * cédula, y el historial de borradores/anexos generados) — de TODOS los

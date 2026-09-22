@@ -196,6 +196,11 @@ function TerminadoBadge({ fileKey }: { fileKey: string | null }) {
  * Detalle y un Valor arma el PDF con el mismo formato que Arlex ya
  * usaba — numeración propia con prefijo "R25" empezando en 1. */
 function CuentasCobroTab({ anioGravable }: { anioGravable: number }) {
+  const { user } = useAuth();
+  // El ícono de borrar una cuenta de cobro queda visible solo para Arlex
+  // (misma cédula que ya restringe Asistencia y la limpieza de datos de
+  // Liquidación) — no para cualquier otro administrador del módulo.
+  const puedeEliminar = user?.cedula === "5820262";
   const utils = trpc.useUtils();
   const clientesQuery = trpc.renta.clientes.list.useQuery({ anioGravable });
   const listaQuery = trpc.renta.cuentasCobro.listar.useQuery();
@@ -230,6 +235,19 @@ function CuentasCobroTab({ anioGravable }: { anioGravable: number }) {
     },
     onError: (err) => toast.error(err.message || "No se pudo generar la cuenta de cobro"),
   });
+
+  const eliminarMutation = trpc.renta.cuentasCobro.eliminar.useMutation({
+    onSuccess: () => {
+      toast.success("Cuenta de cobro eliminada");
+      utils.renta.cuentasCobro.listar.invalidate();
+    },
+    onError: (err) => toast.error(err.message || "No se pudo eliminar la cuenta de cobro"),
+  });
+
+  const handleEliminar = (cta: any) => {
+    if (!window.confirm(`¿Eliminar la cuenta de cobro ${cta.prefijo} - ${String(cta.numero).padStart(4, "0")} de ${cta.clienteNombre}? Esta acción no se puede deshacer.`)) return;
+    eliminarMutation.mutate({ id: cta.id });
+  };
 
   const fmt = (n: number) => `$${Math.round(n).toLocaleString("es-CO")}`;
 
@@ -327,6 +345,17 @@ function CuentasCobroTab({ anioGravable }: { anioGravable: number }) {
                   {cta.signedUrl && (
                     <Button size="sm" variant="outline" className="shrink-0 h-8" onClick={() => window.open(cta.signedUrl, "_blank")}>
                       <Download className="w-3.5 h-3.5" />
+                    </Button>
+                  )}
+                  {puedeEliminar && (
+                    <Button
+                      size="sm" variant="outline"
+                      className="shrink-0 h-8 text-red-600 hover:bg-red-50 hover:text-red-700"
+                      onClick={() => handleEliminar(cta)}
+                      disabled={eliminarMutation.isPending}
+                      title="Eliminar cuenta de cobro"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
                     </Button>
                   )}
                 </div>

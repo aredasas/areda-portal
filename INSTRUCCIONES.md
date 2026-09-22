@@ -1,58 +1,63 @@
-# Fix: Menú Tareas – fila muy ancha por la observación de corrección
+# Fix: ícono para eliminar cuentas de cobro (Renta PN → pestaña CTA), solo para Arlex
 
-## Problema reportado
-Cuando una tarea se devuelve "para corrección" o "para completar", la observación
-(`task.reviewNotes`) se mostraba completa dentro del badge, sin límite de ancho.
-Esto hacía que la fila de la tabla se estirara muchísimo, empujando los botones
-de acción (Editar, Subir soporte, Cancelar, etc.) muy lejos hacia la derecha.
-Como la barra de desplazamiento horizontal pertenece a todo el contenedor de la
-tabla, terminaba ubicada al final de todo el listado (abajo del todo), siendo
-incómodo encontrarla para poder ver esos botones.
+## Qué se agregó
+En la pestaña **CTA** de Renta Persona Natural, cada cuenta de cobro generada
+ahora muestra un ícono de eliminar (🗑) al final de la fila, junto al botón de
+descarga. Al hacer clic pide confirmación y borra el registro definitivamente.
 
-## Solución aplicada
-Archivo modificado: `client/src/pages/Tareas.tsx`
+**El ícono solo aparece para Arlex** — no para cualquier otro administrador
+que también tenga acceso al módulo Renta PN. Se usó la misma cédula con la
+que ya está restringida la pestaña "Asistencia" y la "Zona de riesgo" de
+limpiar datos de Liquidación, así que no se creó ningún mecanismo nuevo de
+identificación.
 
-1. **Observación truncada dentro del badge**: el texto de `reviewNotes` ahora
-   se corta con `truncate` y un ancho máximo (`max-w-[140px]`) dentro del badge.
-   El texto completo sigue disponible pasando el mouse por encima (`title` con
-   tooltip nativo del navegador), incluyendo ahora también el propio texto de
-   la observación (antes el tooltip solo mostraba quién la escribió).
+## Dónde quedó la restricción (dos capas, no solo visual)
+1. **Frontend** (`RentaPersonaNatural.tsx`): el botón no se renderiza si el
+   usuario logueado no tiene la cédula de Arlex — así ni siquiera lo ve otro
+   administrador.
+2. **Backend** (`routers.ts`, endpoint `renta.cuentasCobro.eliminar`): aunque
+   alguien intente llamar la API directamente, el servidor vuelve a validar
+   la misma cédula y rechaza la solicitud si no coincide. Esta es la
+   protección real — la del frontend es solo para que la opción ni se
+   muestre.
 
-2. **Columna "Acciones" siempre visible (sticky)**: tanto el encabezado como
-   cada celda de la columna "Acciones" ahora usan `sticky right-0`, por lo que
-   quedan ancladas al borde derecho de la tabla y permanecen visibles sin
-   necesidad de desplazarse horizontalmente, sin importar cuánto contenido
-   tengan las demás columnas. Se agregó una sombra sutil a la izquierda de la
-   columna para diferenciarla visualmente del resto de la fila al hacer scroll.
+## Archivos modificados
+- `client/src/pages/RentaPersonaNatural.tsx` — botón "Eliminar" en la lista
+  de cuentas de cobro (visible solo para Arlex), con confirmación antes de
+  borrar.
+- `server/routers.ts` — nuevo endpoint `renta.cuentasCobro.eliminar`,
+  restringido a la cédula de Arlex.
+- `server/db.ts` — nueva función `eliminarRentaCuentaCobro(id)`.
 
-3. Los botones de esa columna ahora pueden pasar a una segunda línea
-   (`flex-wrap`) dentro de un ancho máximo, en vez de estirarse indefinidamente
-   hacia la derecha.
+Se incluye `cambios.diff` con el detalle línea por línea si quieres revisarlo
+antes de aplicar.
 
-## Resultado
-- La fila ya no se estira de forma descontrolada por observaciones largas.
-- Los botones de acción (Ver detalle, Editar, Subir soporte, Reabrir, Cancelar)
-  quedan siempre visibles en el borde derecho de la tabla, sin tener que buscar
-  la barra de desplazamiento al final del listado.
-- La observación completa se sigue pudiendo consultar dejando el mouse sobre
-  el badge correspondiente.
+## Importante
+- Solo se borra el **registro** de la cuenta de cobro (deja de aparecer en el
+  listado y se libera su número de folio para reutilizarse). El PDF ya
+  generado queda igual en el almacenamiento — no se borra el archivo, igual
+  que pasa con el resto de documentos de la aplicación.
+- La acción es irreversible: una vez confirmado el borrado, no hay forma de
+  recuperar el registro desde la aplicación.
+- No requiere ninguna migración de base de datos — no se tocó el esquema.
 
 ## Validación realizada
 - `tsc --noEmit`: mismo número de errores preexistentes (33) antes y después
   del cambio — no se introdujeron errores nuevos de TypeScript.
-- `diff` contra el repositorio original: solo se modificó `Tareas.tsx`, sin
-  cambios accidentales en otros archivos.
-- Se incluye el diff completo (`Tareas.tsx.diff`) para revisión.
+- `diff` contra el repositorio original: solo se modificaron los 3 archivos
+  listados arriba, sin cambios accidentales en ningún otro lugar.
 
 ## Cómo aplicar
-1. Reemplaza el archivo `client/src/pages/Tareas.tsx` de tu repositorio por el
-   que está en este paquete (misma ruta: `client/src/pages/Tareas.tsx`).
+1. Reemplaza estos 3 archivos en tu repositorio por los de este paquete
+   (mismas rutas):
+   - `client/src/pages/RentaPersonaNatural.tsx`
+   - `server/db.ts`
+   - `server/routers.ts`
 2. Confirma los cambios y súbelos:
    ```
-   git add client/src/pages/Tareas.tsx
-   git commit -m "Fix Tareas: truncar observacion de correccion y fijar columna de acciones"
+   git add client/src/pages/RentaPersonaNatural.tsx server/db.ts server/routers.ts
+   git commit -m "Fead Renta PN, icono para eliminar cuentas de cobro restringido a Arlex"
    git push
    ```
-3. Railway desplegará automáticamente al detectar el push.
-
-No se requieren cambios de base de datos ni variables de entorno nuevas.
+3. Railway desplegará automáticamente al detectar el push. No hace falta
+   correr ninguna migración en la consola de Railway.

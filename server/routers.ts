@@ -1,8 +1,9 @@
 import { COOKIE_NAME } from "@shared/const";
 import crypto from "crypto";
 
-// Attendance/hours data ("Asistencia") is restricted to this one specific
-// admin by explicit business request — not all admins should see it.
+// Cédula de Arlex — se reutiliza para restringir a él puntualmente
+// funciones que no deben quedar abiertas a cualquier administrador
+// (Asistencia, y eliminar cuentas de cobro en Renta PN).
 const ASISTENCIA_AUTHORIZED_CEDULA = "5820262";
 
 // Módulo Renta PN — restringido a administradores (cualquiera, no solo
@@ -3123,6 +3124,19 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           });
           const signedUrl = await storageGetSignedUrl(fileKey);
           return { id, numero, signedUrl };
+        }),
+      // Borrar una cuenta de cobro ya generada — restringido a Arlex
+      // puntualmente (misma cédula que ASISTENCIA_AUTHORIZED_CEDULA),
+      // no a cualquier administrador del módulo Renta PN.
+      eliminar: protectedProcedure
+        .input(z.object({ id: z.number() }))
+        .mutation(async ({ input, ctx }) => {
+          assertRentaPNAccess(ctx.user.role);
+          if (ctx.user.cedula !== ASISTENCIA_AUTHORIZED_CEDULA) {
+            throw new TRPCError({ code: "FORBIDDEN", message: "No autorizado para eliminar cuentas de cobro." });
+          }
+          await db.eliminarRentaCuentaCobro(input.id);
+          return { success: true };
         }),
     }),
     liquidacion: router({
