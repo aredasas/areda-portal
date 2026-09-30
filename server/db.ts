@@ -1,7 +1,7 @@
 import { eq, and, desc, asc, like, sql, inArray, gte, lte, or, ne, isNull } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { alias } from "drizzle-orm/mysql-core";
-import { InsertUser, users, clients, InsertClient, taxObligations, InsertTaxObligation, clientObligations, InsertClientObligation, taxDeadlines, InsertTaxDeadline, tasks, InsertTask, taskAttachments, InsertTaskAttachment, deadlineAttachments, InsertDeadlineAttachment, appSettings, InsertAppSetting, dianCalendar, InsertDianCalendar, clientDriveSubfolders, timeEntries, InsertTimeEntry, comments, InsertComment, historyEvents, notifications, workLocationEntries, taskRecurrences, InsertTaskRecurrence, boardPosts, boardAttachments, rentaClientes, InsertRentaCliente, rentaExogena, InsertRentaExogena, rentaExogenaItems, InsertRentaExogenaItem, rentaDeclaracionAnterior, InsertRentaDeclaracionAnterior, rentaLiquidacionItems, InsertRentaLiquidacionItem, rentaDependientes, InsertRentaDependiente, rentaReportes, InsertRentaReporte, rentaCuentasCobro, InsertRentaCuentaCobro } from "../drizzle/schema";
+import { InsertUser, users, clients, InsertClient, taxObligations, InsertTaxObligation, clientObligations, InsertClientObligation, taxDeadlines, InsertTaxDeadline, tasks, InsertTask, taskAttachments, InsertTaskAttachment, deadlineAttachments, InsertDeadlineAttachment, appSettings, InsertAppSetting, dianCalendar, InsertDianCalendar, clientDriveSubfolders, timeEntries, InsertTimeEntry, comments, InsertComment, historyEvents, notifications, workLocationEntries, taskRecurrences, InsertTaskRecurrence, boardPosts, boardAttachments, rentaClientes, InsertRentaCliente, rentaExogena, InsertRentaExogena, rentaExogenaItems, InsertRentaExogenaItem, rentaDeclaracionAnterior, InsertRentaDeclaracionAnterior, rentaLiquidacionItems, InsertRentaLiquidacionItem, rentaDependientes, InsertRentaDependiente, rentaReportes, InsertRentaReporte, rentaCuentasCobro, InsertRentaCuentaCobro, cuentasCobroClientes, InsertCuentaCobroCliente } from "../drizzle/schema";
 import { ENV } from './_core/env';
 import { bogotaTodayUTCMidnight } from "./dateUtils";
 import { categorizar as categorizarExogena } from "./rentaDb";
@@ -2623,6 +2623,55 @@ export async function eliminarRentaCuentaCobro(id: number): Promise<void> {
   const db = await getDb();
   if (!db) return;
   await db.delete(rentaCuentasCobro).where(eq(rentaCuentasCobro.id, id));
+}
+
+// ---------------------------------------------------------------------
+// Cuentas de cobro — CLIENTES GENERALES (distinto de rentaCuentasCobro,
+// que es solo para clientes de Renta Persona Natural). Prefijo propio
+// "AP", pestaña nueva dentro del menú Clientes.
+// ---------------------------------------------------------------------
+
+/** Lista TODAS las cuentas de cobro de clientes generales, más recientes
+ * primero — para la pestaña "Cuentas de Cobro" del menú Clientes. */
+export async function getCuentasCobroClientes() {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select({
+    id: cuentasCobroClientes.id, clientId: cuentasCobroClientes.clientId,
+    prefijo: cuentasCobroClientes.prefijo, numero: cuentasCobroClientes.numero,
+    fecha: cuentasCobroClientes.fecha, detalle: cuentasCobroClientes.detalle, valor: cuentasCobroClientes.valor,
+    fileKey: cuentasCobroClientes.fileKey, createdAt: cuentasCobroClientes.createdAt,
+    clienteNombre: clients.razonSocial, clienteNit: clients.nit, clienteDV: clients.digitoVerificacion,
+  }).from(cuentasCobroClientes)
+    .leftJoin(clients, eq(cuentasCobroClientes.clientId, clients.id))
+    .orderBy(desc(cuentasCobroClientes.createdAt));
+}
+
+/** El próximo número a usar para un prefijo dado. El consecutivo "AP"
+ * viene del sistema anterior (FoxPro) — ya iba en 638 antes de existir
+ * esta tabla, así que ese es el piso mínimo (pedido explícito de Arlex:
+ * "vamos en el número 638, arrancar con el 639"). */
+export async function getSiguienteNumeroCuentaCobroCliente(prefijo: string): Promise<number> {
+  const db = await getDb();
+  if (!db) return 639;
+  const PISO_AP = 638;
+  const filas = await db.select({ numero: cuentasCobroClientes.numero }).from(cuentasCobroClientes)
+    .where(eq(cuentasCobroClientes.prefijo, prefijo)).orderBy(desc(cuentasCobroClientes.numero)).limit(1);
+  const ultimoUsado = filas[0]?.numero ?? PISO_AP;
+  return Math.max(ultimoUsado, PISO_AP) + 1;
+}
+
+export async function guardarCuentaCobroCliente(data: Omit<InsertCuentaCobroCliente, "id" | "createdAt">): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new Error("Base de datos no disponible");
+  const result = await db.insert(cuentasCobroClientes).values(data);
+  return Number((result as any).insertId ?? (result as any)[0]?.insertId);
+}
+
+export async function eliminarCuentaCobroCliente(id: number): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  await db.delete(cuentasCobroClientes).where(eq(cuentasCobroClientes.id, id));
 }
 
 /** Borra TODOS los datos cargados en la pestaña Liquidación (exógena,

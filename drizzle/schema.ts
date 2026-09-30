@@ -1176,3 +1176,26 @@ export const oficinaRevisiones = mysqlTable("oficinaRevisiones", {
 }));
 export type OficinaRevision = typeof oficinaRevisiones.$inferSelect;
 export type InsertOficinaRevision = typeof oficinaRevisiones.$inferInsert;
+
+/** Cuentas de cobro para clientes GENERALES (empresas, distinto de las de
+ * Renta Persona Natural en rentaCuentasCobro) — prefijo propio "AP",
+ * consecutivo que continúa el que se llevaba en el sistema anterior
+ * (FoxPro), ya iba en 638 antes de existir esta tabla (ver
+ * getSiguienteNumeroCuentaCobroCliente en db.ts). */
+export const cuentasCobroClientes = mysqlTable("cuentasCobroClientes", {
+  id: int("id").autoincrement().primaryKey(),
+  clientId: int("clientId").notNull(),
+  prefijo: varchar("prefijo", { length: 10 }).default("AP").notNull(),
+  numero: int("numero").notNull(),
+  fecha: timestamp("fecha").defaultNow().notNull(),
+  detalle: text("detalle").notNull(),
+  valor: double("valor").notNull(),
+  fileKey: varchar("fileKey", { length: 500 }),
+  generadoPorId: int("generadoPorId").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (table) => ({
+  clientIdx: index("cuentasCobroClientes_client_idx").on(table.clientId),
+  numeroIdx: uniqueIndex("cuentasCobroClientes_numero_idx").on(table.prefijo, table.numero),
+}));
+export type CuentaCobroCliente = typeof cuentasCobroClientes.$inferSelect;
+export type InsertCuentaCobroCliente = typeof cuentasCobroClientes.$inferInsert;

@@ -104,6 +104,7 @@ import { generarAnexoIva, generarAnexoIvaPdf } from "./informesIvaAnexo";
 import * as rentaDb from "./rentaDb";
 import { storagePut, storageGetSignedUrl, storageGetBuffer } from "./storage";
 import { generarCuentaCobroPdf } from "./rentaCuentaCobro";
+import { generarCuentaCobroClientePdf } from "./clienteCuentaCobroPdf";
 import * as oficinaDb from "./oficinaDb";
 import { invokeLLM } from "./_core/llm";
 import { isDriveConfigured, extractFolderIdFromUrl, testFolderAccess, listSubfoldersRecursive, listAllFilesRecursive, uploadFileToDrive, resolveUploadFolder } from "./googleDrive";
@@ -602,6 +603,68 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
           };
         }
       }),
+    // ---- Cuentas de cobro de clientes GENERALES (prefijo "AP") — misma
+    // dinámica que la pestaña CTA de Renta PN, pero para cualquier
+    // cliente de la firma. Solo admins, igual que el resto del menú
+    // Clientes; eliminar queda restringido a Arlex puntualmente, igual
+    // que en Renta PN. ----
+    cuentasCobro: router({
+      listar: adminProcedure.query(async () => {
+        const filas = await db.getCuentasCobroClientes();
+        return Promise.all(filas.map(async (f) => ({
+          ...f,
+          signedUrl: f.fileKey ? await storageGetSignedUrl(f.fileKey) : null,
+        })));
+      }),
+      siguienteNumero: adminProcedure
+        .input(z.object({ prefijo: z.string().default("AP") }))
+        .query(async ({ input }) => {
+          return { numero: await db.getSiguienteNumeroCuentaCobroCliente(input.prefijo) };
+        }),
+      guardar: adminProcedure
+        .input(z.object({
+          clientId: z.number(),
+          prefijo: z.string().default("AP"),
+          detalle: z.string().min(1),
+          valor: z.number().positive(),
+        }))
+        .mutation(async ({ input, ctx }) => {
+          const cliente = await db.getClientById(input.clientId);
+          if (!cliente) throw new Error("Cliente no encontrado.");
+
+          const numero = await db.getSiguienteNumeroCuentaCobroCliente(input.prefijo);
+          const fecha = new Date();
+
+          const buffer = await generarCuentaCobroClientePdf({
+            prefijo: input.prefijo, numero, fecha,
+            clienteNombre: cliente.razonSocial, clienteNit: cliente.nit, clienteDigitoVerificacion: cliente.digitoVerificacion,
+            clienteDireccion: cliente.direccion, clienteTelefono: cliente.telefono,
+            detalle: input.detalle, valor: input.valor,
+          });
+          const key = `clientes/cuentas-cobro/${input.prefijo}_${numero}_${Date.now()}.pdf`;
+          const { key: fileKey } = await storagePut(key, buffer, "application/pdf");
+
+          const id = await db.guardarCuentaCobroCliente({
+            clientId: input.clientId, prefijo: input.prefijo, numero, fecha,
+            detalle: input.detalle, valor: input.valor,
+            fileKey, generadoPorId: ctx.user.id,
+          });
+          const signedUrl = await storageGetSignedUrl(fileKey);
+          return { id, numero, signedUrl };
+        }),
+      eliminar: protectedProcedure
+        .input(z.object({ id: z.number() }))
+        .mutation(async ({ input, ctx }) => {
+          if (ctx.user.role !== "admin") {
+            throw new TRPCError({ code: "FORBIDDEN", message: "No autorizado" });
+          }
+          if (ctx.user.cedula !== ASISTENCIA_AUTHORIZED_CEDULA) {
+            throw new TRPCError({ code: "FORBIDDEN", message: "No autorizado para eliminar cuentas de cobro." });
+          }
+          await db.eliminarCuentaCobroCliente(input.id);
+          return { success: true };
+        }),
+    }),
   }),
 
   obligations: router({
