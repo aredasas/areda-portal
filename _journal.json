@@ -1,0 +1,454 @@
+{
+  "version": "7",
+  "dialect": "mysql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "5",
+      "when": 1782840300848,
+      "tag": "0000_slippery_lord_hawal",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "5",
+      "when": 1782840645766,
+      "tag": "0001_sour_captain_midlands",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1782852103223,
+      "tag": "0002_great_spiral",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "5",
+      "when": 1783050091308,
+      "tag": "0003_add_client_drive_folder",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "5",
+      "when": 1783201246915,
+      "tag": "0004_seed_tax_obligations",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "5",
+      "when": 1783382914166,
+      "tag": "0005_dian_calendar_flexibility",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "5",
+      "when": 1783385496217,
+      "tag": "0006_add_semestral_frequency",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "5",
+      "when": 1783450263737,
+      "tag": "0007_add_fixed_due_dates",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "5",
+      "when": 1783466940957,
+      "tag": "0008_deadline_status_evidence",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "5",
+      "when": 1783467606214,
+      "tag": "0009_client_drive_subfolders",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "5",
+      "when": 1783468872825,
+      "tag": "0010_task_completed_by",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "5",
+      "when": 1783471000877,
+      "tag": "0011_task_cancelled_status",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "5",
+      "when": 1783471667335,
+      "tag": "0012_deadline_attachments",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "5",
+      "when": 1783529239275,
+      "tag": "0013_review_approval",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "5",
+      "when": 1783562589516,
+      "tag": "0014_time_entries",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "5",
+      "when": 1783611088267,
+      "tag": "0015_comments",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "5",
+      "when": 1783646035721,
+      "tag": "0016_review_status_and_history",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "5",
+      "when": 1783649974907,
+      "tag": "0017_notifications",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "5",
+      "when": 1783651077663,
+      "tag": "0018_notification_client_id",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "5",
+      "when": 1783682301683,
+      "tag": "0019_work_location_entries",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "5",
+      "when": 1783693501824,
+      "tag": "0020_task_recurrences",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "5",
+      "when": 1784670486652,
+      "tag": "0021_informes_y_tablero",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "5",
+      "when": 1784818667750,
+      "tag": "0022_catalogo_cuentas_cliente",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "5",
+      "when": 1784859089412,
+      "tag": "0023_renta_clientes",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "5",
+      "when": 1784859886849,
+      "tag": "0024_renta_exogena",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "5",
+      "when": 1784861653243,
+      "tag": "0025_renta_liquidacion",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "5",
+      "when": 1784863149716,
+      "tag": "0026_dependientes_cedula",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "5",
+      "when": 1784865929181,
+      "tag": "0027_renta_reportes",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "5",
+      "when": 1784867142047,
+      "tag": "0028_liquidacion_granular",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "5",
+      "when": 1784914724488,
+      "tag": "0029_retencion_anticipo",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "5",
+      "when": 1785038915028,
+      "tag": "0030_renta_drive_revision",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "5",
+      "when": 1785125373888,
+      "tag": "0031_ganancia_ocasional",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "5",
+      "when": 1785250647174,
+      "tag": "0032_ampliar_centro_costo",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "5",
+      "when": 1785253075367,
+      "tag": "0033_renta_activo",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "5",
+      "when": 1785333079201,
+      "tag": "0034_descuentos_tributarios",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "5",
+      "when": 1785507676670,
+      "tag": "0035_limite_general",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "5",
+      "when": 1785536538808,
+      "tag": "0036_orden_limite_general",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "5",
+      "when": 1785540236652,
+      "tag": "0037_solicitud_docs_estado",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "5",
+      "when": 1785540578561,
+      "tag": "0038_calculo_automatico_25",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "5",
+      "when": 1786413516099,
+      "tag": "0039_dependientes_tipo_deduccion",
+      "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "5",
+      "when": 1786997674262,
+      "tag": "0040_categoria_retencion",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "5",
+      "when": 1787153929540,
+      "tag": "0041_comentarios",
+      "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "5",
+      "when": 1788196491439,
+      "tag": "0042_dispositivo_ubicacion",
+      "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "5",
+      "when": 1788454949606,
+      "tag": "0043_iva_conciliacion",
+      "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "5",
+      "when": 1788457481241,
+      "tag": "0044_clasificacion_cuentas_iva",
+      "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "5",
+      "when": 1788472347687,
+      "tag": "0045_vigencia_recurrentes",
+      "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "5",
+      "when": 1788484345979,
+      "tag": "0046_tipos_documento_dian",
+      "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "5",
+      "when": 1788491164604,
+      "tag": "0047_facturado_y_division_cuenta",
+      "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "5",
+      "when": 1788633700517,
+      "tag": "0048_comprobantes_excluidos",
+      "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "5",
+      "when": 1788644087830,
+      "tag": "0049_config_cuentas_iva",
+      "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "5",
+      "when": 1788732694815,
+      "tag": "0050_cuenta_mayor_iva",
+      "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "5",
+      "when": 1788743608266,
+      "tag": "0051_compras_tipos_excluidos",
+      "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "5",
+      "when": 1788793178239,
+      "tag": "0052_totales_por_tipo",
+      "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "5",
+      "when": 1789082494761,
+      "tag": "0053_devoluciones_iva",
+      "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "5",
+      "when": 1789092889290,
+      "tag": "0054_iva_transitorio_cuentas",
+      "breakpoints": true
+    },
+    {
+      "idx": 55,
+      "version": "5",
+      "when": 1789098154710,
+      "tag": "0055_clasificacion_cuentas_iva",
+      "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "5",
+      "when": 1789149178467,
+      "tag": "0056_primera_declaracion",
+      "breakpoints": true
+    },
+    {
+      "idx": 57,
+      "version": "5",
+      "when": 1789152956893,
+      "tag": "0057_categorias_devolucion_mercancia",
+      "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "5",
+      "when": 1789217413710,
+      "tag": "0058_renta_cuentas_cobro",
+      "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "5",
+      "when": 1789406412136,
+      "tag": "0059_renta_comentario_no_obligado",
+      "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "5",
+      "when": 1789429791951,
+      "tag": "0060_comments_renta_y_task_completar",
+      "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "5",
+      "when": 1789480771491,
+      "tag": "0061_deadlines_completar",
+      "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "5",
+      "when": 1790627970346,
+      "tag": "0062_colossal_victor_mancha",
+      "breakpoints": true
+    },
+    {
+      "idx": 63,
+      "version": "5",
+      "when": 1790783042189,
+      "tag": "0063_slow_loki",
+      "breakpoints": true
+    }
+  ]
+}

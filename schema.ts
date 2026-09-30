@@ -1,0 +1,1201 @@
+import { int, mysqlEnum, mysqlTable, text, timestamp, varchar, boolean, json, double, decimal, index, uniqueIndex } from "drizzle-orm/mysql-core";
+
+/**
+ * Users table - Colaboradores de la firma
+ * Roles: admin, contador_senior, contador_junior, asistente
+ * Auth: username (cédula o nombre de usuario) + password hash
+ */
+export const users = mysqlTable("users", {
+  id: int("id").autoincrement().primaryKey(),
+  openId: varchar("openId", { length: 64 }).notNull().unique(),
+  /** Username for local auth - can be cédula number or custom username */
+  username: varchar("username", { length: 64 }).unique(),
+  /** Bcrypt password hash for local auth */
+  passwordHash: varchar("passwordHash", { length: 255 }),
+  name: text("name"),
+  email: varchar("email", { length: 320 }),
+  cedula: varchar("cedula", { length: 20 }),
+  loginMethod: varchar("loginMethod", { length: 64 }),
+  role: mysqlEnum("role", ["admin", "contador_senior", "contador_junior", "asistente"]).default("asistente").notNull(),
+  isActive: boolean("isActive").default(true).notNull(),
+  phone: varchar("phone", { length: 20 }),
+  position: varchar("position", { length: 100 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull(),
+});
+
+export type User = typeof users.$inferSelect;
+export type InsertUser = typeof users.$inferInsert;
+
+/**
+ * Clients table - Clientes de la firma contable
+ * Includes managerId for the assigned collaborator
+ */
+export const clients = mysqlTable("clients", {
+  id: int("id").autoincrement().primaryKey(),
+  razonSocial: varchar("razonSocial", { length: 255 }).notNull(),
+  nit: varchar("nit", { length: 20 }).notNull(),
+  digitoVerificacion: varchar("digitoVerificacion", { length: 1 }),
+  direccion: text("direccion"),
+  ciudad: varchar("ciudad", { length: 100 }),
+  departamento: varchar("departamento", { length: 100 }),
+  telefono: varchar("telefono", { length: 20 }),
+  email: varchar("email", { length: 320 }),
+  actividadEconomica: varchar("actividadEconomica", { length: 255 }),
+  codigoCIIU: varchar("codigoCIIU", { length: 10 }),
+  representanteLegal: varchar("representanteLegal", { length: 255 }),
+  rutFileUrl: text("rutFileUrl"),
+  rutFileKey: varchar("rutFileKey", { length: 255 }),
+  /** Manager: collaborator assigned as responsible for this client */
+  managerId: int("managerId"),
+  /** URL of the Google Drive folder where this client's supporting documents are stored */
+  driveFolderUrl: text("driveFolderUrl"),
+  isActive: boolean("isActive").default(true).notNull(),
+  notes: text("notes"),
+  createdById: int("createdById"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type Client = typeof clients.$inferSelect;
+export type InsertClient = typeof clients.$inferInsert;
+
+/**
+ * Tax obligations catalog - Obligaciones tributarias colombianas predefinidas
+ */
+export const taxObligations = mysqlTable("taxObligations", {
+  id: int("id").autoincrement().primaryKey(),
+  code: varchar("code", { length: 20 }).notNull().unique(),
+  name: varchar("name", { length: 100 }).notNull(),
+  description: text("description"),
+  frequency: mysqlEnum("frequency", ["mensual", "bimestral", "cuatrimestral", "semestral", "anual"]).notNull(),
+  /** For "anual" obligations paid in installments (e.g. Renta Grandes
+   * Contribuyentes = 3 cuotas, Personas Jurídicas = 2 cuotas). 1 = single payment. */
+  installments: int("installments").default(1).notNull(),
+  /** JSON array of "MM-DD" dates (e.g. ["03-31"] or ["05-15","09-14"]) for
+   * obligations with a fixed annual due date that does NOT depend on the
+   * client's NIT and doesn't come from the DIAN calendar — e.g. renovación
+   * de Cámara de Comercio, reportes a Supersalud o Supersociedades. When
+   * set, deadline generation uses these dates directly for every client
+   * with this obligation, skipping the NIT-based DIAN calendar lookup. */
+  fixedDueDates: text("fixedDueDates"),
+  isActive: boolean("isActive").default(true).notNull(),
+});
+
+export type TaxObligation = typeof taxObligations.$inferSelect;
+export type InsertTaxObligation = typeof taxObligations.$inferInsert;
+
+/**
+ * Client-obligation relationship - Obligaciones asignadas a cada cliente
+ */
+export const clientObligations = mysqlTable("clientObligations", {
+  id: int("id").autoincrement().primaryKey(),
+  clientId: int("clientId").notNull(),
+  obligationId: int("obligationId").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type ClientObligation = typeof clientObligations.$inferSelect;
+export type InsertClientObligation = typeof clientObligations.$inferInsert;
+
+/**
+ * Tax deadlines - Vencimientos tributarios generados automáticamente
+ */
+export const taxDeadlines = mysqlTable("taxDeadlines", {
+  id: int("id").autoincrement().primaryKey(),
+  clientId: int("clientId").notNull(),
+  obligationId: int("obligationId").notNull(),
+  period: varchar("period", { length: 20 }).notNull(),
+  dueDate: timestamp("dueDate").notNull(),
+  lastDigitNit: varchar("lastDigitNit", { length: 10 }),
+  status: mysqlEnum("status", ["pendiente", "en_progreso", "completado", "vencido"]).default("pendiente").notNull(),
+  completedAt: timestamp("completedAt"),
+  completedById: int("completedById"),
+  /** Supporting document the collaborator uploads when completing this deadline */
+  evidenceFileUrl: text("evidenceFileUrl"),
+  evidenceFileKey: text("evidenceFileKey"),
+  /** Name of the subfolder (inside the client's single Drive folder link)
+   * where the evidence was saved — free text, since the app doesn't browse
+   * the real Drive folder structure. See clientDriveSubfolders below. */
+  driveSubfolder: varchar("driveSubfolder", { length: 150 }),
+  /** Set once an admin reviews a completed deadline — approving it,
+   * sending it back for correction, or marking that it needs ONE MORE
+   * action before being truly done (same idea as tasks: doesn't reopen
+   * the whole thing, just adds a final step). */
+  reviewStatus: mysqlEnum("reviewStatus", ["aprobado", "correccion", "completar"]),
+  reviewNotes: text("reviewNotes"),
+  reviewedById: int("reviewedById"),
+  reviewedAt: timestamp("reviewedAt"),
+  notes: text("notes"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type TaxDeadline = typeof taxDeadlines.$inferSelect;
+export type InsertTaxDeadline = typeof taxDeadlines.$inferInsert;
+
+/**
+ * Tasks - Tareas manuales asignadas a colaboradores
+ * Now supports attachments, evidence for completion, and reopening
+ */
+export const tasks = mysqlTable("tasks", {
+  id: int("id").autoincrement().primaryKey(),
+  title: varchar("title", { length: 255 }).notNull(),
+  description: text("description"),
+  clientId: int("clientId").notNull(),
+  assignedToId: int("assignedToId"),
+  createdById: int("createdById").notNull(),
+  dueDate: timestamp("dueDate"),
+  status: mysqlEnum("status", ["pendiente", "en_progreso", "completada", "vencida", "cancelada"]).default("pendiente").notNull(),
+  priority: mysqlEnum("priority", ["baja", "media", "alta", "urgente"]).default("media").notNull(),
+  /** Whether this task was auto-generated from tax deadlines */
+  isAutoGenerated: boolean("isAutoGenerated").default(false).notNull(),
+  /** Reference to the tax deadline that generated this task (if auto-generated) */
+  taxDeadlineId: int("taxDeadlineId"),
+  /** Reference to the recurrence rule that generated this task, if it came
+   * from a recurring task template rather than being created one-off. */
+  recurrenceId: int("recurrenceId"),
+  completedAt: timestamp("completedAt"),
+  /** Who completed the task — needed to show a proper audit trail to admins */
+  completedById: int("completedById"),
+  /** Evidence file URL required to complete the task */
+  evidenceFileUrl: text("evidenceFileUrl"),
+  evidenceFileKey: varchar("evidenceFileKey", { length: 255 }),
+  /** Name of the subfolder (inside the client's single Drive folder link)
+   * where the evidence was saved — free text, since the app doesn't browse
+   * the real Drive folder structure. See clientDriveSubfolders below. */
+  driveSubfolder: varchar("driveSubfolder", { length: 150 }),
+  /** Notes when completing the task */
+  completionNotes: text("completionNotes"),
+  /** Set once an admin reviews a completed task — either approving it,
+   * sending it back for correction, or marking that it needs ONE MORE
+   * action to be truly done (ej. un documento que se envió a firmar ya
+   * volvió firmado — "completar" no reinicia el trabajo, solo le agrega
+   * un paso más antes de cerrarse). */
+  reviewStatus: mysqlEnum("reviewStatus", ["aprobado", "correccion", "completar"]),
+  reviewNotes: text("reviewNotes"),
+  reviewedById: int("reviewedById"),
+  reviewedAt: timestamp("reviewedAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type Task = typeof tasks.$inferSelect;
+export type InsertTask = typeof tasks.$inferInsert;
+
+/**
+ * Remembers the subfolder names collaborators have used per client, so the
+ * next person completing a task/deadline for that client can pick from a
+ * dropdown instead of retyping (and risking a slightly different spelling
+ * that would look like a different folder).
+ */
+export const clientDriveSubfolders = mysqlTable("clientDriveSubfolders", {
+  id: int("id").autoincrement().primaryKey(),
+  clientId: int("clientId").notNull(),
+  name: varchar("name", { length: 150 }).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type ClientDriveSubfolder = typeof clientDriveSubfolders.$inferSelect;
+export type InsertClientDriveSubfolder = typeof clientDriveSubfolders.$inferInsert;
+
+/**
+ * Time entries - Self-reported clock-in/out marks (replaces the in-person
+ * biometric register). Each collaborator marks their own start of day, lunch
+ * break out/in, and end of day. Fully transparent — the collaborator marks
+ * it themselves, nothing is inferred or tracked automatically.
+ */
+export const timeEntries = mysqlTable("timeEntries", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").notNull(),
+  type: mysqlEnum("type", ["inicio", "salida_almuerzo", "regreso_almuerzo", "fin"]).notNull(),
+  timestamp: timestamp("timestamp").defaultNow().notNull(),
+  /** Inferido en el servidor a partir del encabezado User-Agent del
+   * navegador — no requiere permiso del usuario, siempre está disponible. */
+  deviceType: mysqlEnum("deviceType", ["pc", "movil", "tablet", "desconocido"]),
+  /** Ubicación GPS del navegador al momento de marcar — requiere que el
+   * colaborador acepte el permiso de ubicación; quedan null si lo rechaza
+   * o su dispositivo no lo soporta. Precisión en metros, cuando el
+   * navegador la reporta. */
+  latitude: decimal("latitude", { precision: 10, scale: 7 }),
+  longitude: decimal("longitude", { precision: 10, scale: 7 }),
+  locationAccuracy: int("locationAccuracy"),
+});
+
+export type TimeEntry = typeof timeEntries.$inferSelect;
+export type InsertTimeEntry = typeof timeEntries.$inferInsert;
+
+/**
+ * Task attachments - Files attached to tasks (Excel, Word, PDF, etc.)
+ */
+export const taskAttachments = mysqlTable("taskAttachments", {
+  id: int("id").autoincrement().primaryKey(),
+  taskId: int("taskId").notNull(),
+  fileName: varchar("fileName", { length: 255 }).notNull(),
+  fileUrl: text("fileUrl").notNull(),
+  fileKey: varchar("fileKey", { length: 255 }).notNull(),
+  contentType: varchar("contentType", { length: 100 }),
+  fileSize: int("fileSize"),
+  uploadedById: int("uploadedById").notNull(),
+  /** True when this was uploaded as evidence while completing the task
+   * (so it can be safely cleared on reopen, without touching general
+   * reference attachments an admin added separately). */
+  isEvidence: boolean("isEvidence").default(false).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type TaskAttachment = typeof taskAttachments.$inferSelect;
+export type InsertTaskAttachment = typeof taskAttachments.$inferInsert;
+
+/** Same idea as taskAttachments, but for tax deadlines — lets a collaborator
+ * attach several supporting files when completing a deadline, instead of
+ * just one. */
+export const deadlineAttachments = mysqlTable("deadlineAttachments", {
+  id: int("id").autoincrement().primaryKey(),
+  deadlineId: int("deadlineId").notNull(),
+  fileName: varchar("fileName", { length: 255 }).notNull(),
+  fileUrl: text("fileUrl").notNull(),
+  fileKey: varchar("fileKey", { length: 255 }).notNull(),
+  contentType: varchar("contentType", { length: 100 }),
+  fileSize: int("fileSize"),
+  uploadedById: int("uploadedById").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type DeadlineAttachment = typeof deadlineAttachments.$inferSelect;
+export type InsertDeadlineAttachment = typeof deadlineAttachments.$inferInsert;
+
+/**
+ * App settings - Configurable settings (Drive folder URL, DIAN calendar, etc.)
+ */
+export const appSettings = mysqlTable("appSettings", {
+  id: int("id").autoincrement().primaryKey(),
+  key: varchar("key", { length: 100 }).notNull().unique(),
+  value: text("value"),
+  description: varchar("description", { length: 255 }),
+  updatedById: int("updatedById"),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type AppSetting = typeof appSettings.$inferSelect;
+export type InsertAppSetting = typeof appSettings.$inferInsert;
+
+/**
+ * DIAN Calendar entries - Custom uploaded calendar entries by admin
+ * Each entry represents a specific deadline date for a specific obligation and NIT digit
+ */
+export const dianCalendar = mysqlTable("dianCalendar", {
+  id: int("id").autoincrement().primaryKey(),
+  year: int("year").notNull(),
+  obligationCode: varchar("obligationCode", { length: 20 }).notNull(),
+  period: varchar("period", { length: 20 }).notNull(),
+  lastDigitNit: varchar("lastDigitNit", { length: 10 }).notNull(),
+  dueDate: timestamp("dueDate").notNull(),
+  uploadedById: int("uploadedById"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type DianCalendar = typeof dianCalendar.$inferSelect;
+export type InsertDianCalendar = typeof dianCalendar.$inferInsert;
+
+/**
+ * Comments — free-text notes on a specific task or deadline, so people can
+ * ask/flag things about that item directly ("revisa el adjunto, faltó algo")
+ * instead of a general chat. entityType+entityId together point at the
+ * task or deadline being discussed.
+ */
+export const comments = mysqlTable("comments", {
+  id: int("id").autoincrement().primaryKey(),
+  entityType: mysqlEnum("entityType", ["task", "deadline", "board_post", "renta_cliente"]).notNull(),
+  entityId: int("entityId").notNull(),
+  authorId: int("authorId").notNull(),
+  content: text("content").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type Comment = typeof comments.$inferSelect;
+export type InsertComment = typeof comments.$inferInsert;
+
+/**
+ * History events — an append-only audit trail per task/deadline: when it
+ * was created, completed, sent back for correction, approved, reopened,
+ * etc. Lets Revisión show the full lifecycle instead of just the current
+ * state, since a single item can go through several correction cycles.
+ */
+export const historyEvents = mysqlTable("historyEvents", {
+  id: int("id").autoincrement().primaryKey(),
+  entityType: mysqlEnum("entityType", ["task", "deadline"]).notNull(),
+  entityId: int("entityId").notNull(),
+  eventType: mysqlEnum("eventType", [
+    "creada",
+    "completada",
+    "correccion_solicitada",
+    "completar_solicitado",
+    "aprobada",
+    "reabierta",
+    "cancelada",
+  ]).notNull(),
+  userId: int("userId").notNull(),
+  notes: text("notes"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type HistoryEvent = typeof historyEvents.$inferSelect;
+export type InsertHistoryEvent = typeof historyEvents.$inferInsert;
+
+/**
+ * Notifications — lets a collaborator know something happened on a task or
+ * deadline they care about (someone commented, it was approved, or sent
+ * back for correction) without having to stumble onto it by chance.
+ */
+export const notifications = mysqlTable("notifications", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").notNull(),
+  type: mysqlEnum("type", ["comentario", "aprobada", "correccion_solicitada", "completar_solicitado", "tablero_post"]).notNull(),
+  entityType: mysqlEnum("entityType", ["task", "deadline", "board_post"]).notNull(),
+  entityId: int("entityId").notNull(),
+  /** So clicking a notification can jump straight to the right client's
+   * deadlines view, without an extra lookup. */
+  clientId: int("clientId"),
+  title: varchar("title", { length: 255 }).notNull(),
+  message: text("message"),
+  isRead: boolean("isRead").default(false).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type Notification = typeof notifications.$inferSelect;
+export type InsertNotification = typeof notifications.$inferInsert;
+
+/**
+ * Work location schedule — where a collaborator says they'll be during
+ * each hour of a 4-hour work block (morning: 8-12, afternoon: 2-6),
+ * declared when they mark "inicio" or "regreso_almuerzo". Each hour is
+ * either "in_house", a specific assigned client, or "libre" (on leave).
+ * One row per user+date+block; the 4 hourly choices live together as JSON
+ * since they're always filled in and read as a single unit.
+ */
+export const workLocationEntries = mysqlTable("workLocationEntries", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").notNull(),
+  date: varchar("date", { length: 10 }).notNull(), // "YYYY-MM-DD", collaborator's own calendar day
+  block: mysqlEnum("block", ["morning", "afternoon"]).notNull(),
+  /** JSON array of 4 entries, one per hour of the block:
+   * [{ type: "in_house" | "client" | "libre", clientId?: number }, ...] */
+  slots: text("slots").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type WorkLocationEntry = typeof workLocationEntries.$inferSelect;
+export type InsertWorkLocationEntry = typeof workLocationEntries.$inferInsert;
+
+/**
+ * Recurring task rules — a template that periodically generates real task
+ * rows (each an independently trackable/completable instance with its own
+ * evidence and history), instead of one task getting silently reset and
+ * overwritten every cycle.
+ */
+export const taskRecurrences = mysqlTable("taskRecurrences", {
+  id: int("id").autoincrement().primaryKey(),
+  title: varchar("title", { length: 255 }).notNull(),
+  description: text("description"),
+  clientId: int("clientId").notNull(),
+  assignedToId: int("assignedToId"),
+  priority: mysqlEnum("priority", ["baja", "media", "alta", "urgente"]).default("media").notNull(),
+  createdById: int("createdById").notNull(),
+  recurrenceType: mysqlEnum("recurrenceType", ["semanal", "quincenal", "mensual"]).notNull(),
+  /** For "semanal": day of week, 0=domingo..6=sábado.
+   * For "quincenal"/"mensual": day of month (1-31); quincenal repeats every
+   * 15 days from that anchor day, mensual repeats once a month on that day
+   * (capped to the last real day of shorter months). */
+  dayOfWeek: int("dayOfWeek"),
+  dayOfMonth: int("dayOfMonth"),
+  isActive: boolean("isActive").default(true).notNull(),
+  /** Vigencia opcional de la regla — si el mes actual no se solapa con
+   * este rango, la regla no genera ninguna tarea ese mes (pero sigue
+   * existiendo y puede volver a aplicar en un mes posterior dentro del
+   * rango). Null en cualquiera de los dos = sin límite en ese extremo.
+   * Formato "YYYY-MM-DD". Complementa a `isActive` (apagar/prender del
+   * todo) con un control más fino por fechas — ej. una regla que solo
+   * aplica de marzo a agosto de este año. */
+  startDate: varchar("startDate", { length: 10 }),
+  endDate: varchar("endDate", { length: 10 }),
+  /** Marks the most recent period a task was generated for, so re-running
+   * generation doesn't create duplicates within the same cycle. Format
+   * depends on recurrenceType: "2026-W28" (semanal, ISO week), a plain
+   * "YYYY-MM-DD" anchor date (quincenal), or "2026-07" (mensual). */
+  lastGeneratedPeriod: varchar("lastGeneratedPeriod", { length: 20 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type TaskRecurrence = typeof taskRecurrences.$inferSelect;
+export type InsertTaskRecurrence = typeof taskRecurrences.$inferInsert;
+
+/**
+ * ============================================================
+ * MÓDULO INFORMES — Financieros multi-cliente derivados del libro
+ * auxiliar/movimiento contable. Incluye el Estado de Resultados
+ * Mensual comparativo (ERM, el informe principal, por cliente,
+ * sin importar si tiene centros de costo) y el ERI por centro de
+ * costo (derivado, hoy solo aplica a clientes que sí los usan,
+ * como Colfamil). Restringido por ahora al usuario con cédula
+ * autorizada (ver INFORMES_AUTHORIZED_CEDULA en routers.ts).
+ * ============================================================
+ */
+
+/** Catálogo de centros de costo por cliente (código -> nombre real).
+ * Solo aplica a clientes que manejan centro de costo (ej. Colfamil);
+ * para el resto simplemente no se siembra ninguno. Se siembra una
+ * vez por cliente y luego es editable. */
+export const informesCentrosCosto = mysqlTable("informesCentrosCosto", {
+  id: int("id").autoincrement().primaryKey(),
+  clienteId: int("clienteId").notNull(),
+  codigo: varchar("codigo", { length: 40 }).notNull(),
+  nombre: varchar("nombre", { length: 120 }).notNull(),
+  activo: boolean("activo").default(true).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (table) => ({
+  clienteCodigoIdx: uniqueIndex("informesCentrosCosto_cliente_codigo_idx").on(table.clienteId, table.codigo),
+}));
+export type InformeCentroCosto = typeof informesCentrosCosto.$inferSelect;
+export type InsertInformeCentroCosto = typeof informesCentrosCosto.$inferInsert;
+
+/** Catálogo de cuentas PUC, a nivel de detalle completo (hasta el código
+ * exacto que traiga el libro auxiliar, típicamente 6+ dígitos — no se
+ * trunca). Es compartido entre clientes: el PUC colombiano es un
+ * estándar, así que la descripción de una cuenta no depende del cliente.
+ * El tipo (ingreso/costo/gasto/descuento_pp) se deriva del primer
+ * dígito, pero la descripción no viene en el libro auxiliar crudo, así
+ * que se completa una sola vez por IA la primera vez que aparece. */
+export const informesCuentasPuc = mysqlTable("informesCuentasPuc", {
+  id: int("id").autoincrement().primaryKey(),
+  cuenta: varchar("cuenta", { length: 12 }).notNull().unique(),
+  descripcion: varchar("descripcion", { length: 255 }),
+  tipo: mysqlEnum("tipo", ["ingreso", "costo", "gasto", "descuento_pp"]).notNull(),
+  clasificadoPorIA: boolean("clasificadoPorIA").default(false).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+export type InformeCuentaPuc = typeof informesCuentasPuc.$inferSelect;
+export type InsertInformeCuentaPuc = typeof informesCuentasPuc.$inferInsert;
+
+/** Catálogo de nombres de cuenta PROPIO de cada cliente — a diferencia de
+ * `informesCuentasPuc` (genérico, clasificado por IA, compartido entre
+ * todos los clientes), esto es el nombre real que ESE cliente le da a esa
+ * cuenta en su propia contabilidad. Se llena solo, automáticamente, cuando
+ * el libro auxiliar trae una columna de nombre de cuenta (ej. "Cuenta
+ * contable") — y el contador lo puede corregir o completar a mano para
+ * clientes cuyo archivo nunca trae nombre. Tiene prioridad sobre el
+ * catálogo genérico de IA al armar los reportes. */
+export const informesCuentasCliente = mysqlTable("informesCuentasCliente", {
+  id: int("id").autoincrement().primaryKey(),
+  clienteId: int("clienteId").notNull(),
+  cuenta: varchar("cuenta", { length: 12 }).notNull(),
+  nombre: varchar("nombre", { length: 255 }).notNull(),
+  origen: mysqlEnum("origen", ["archivo", "manual"]).default("archivo").notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+}, (table) => ({
+  clienteCuentaIdx: uniqueIndex("informesCuentasCliente_cliente_cuenta_idx").on(table.clienteId, table.cuenta),
+}));
+export type InformeCuentaCliente = typeof informesCuentasCliente.$inferSelect;
+export type InsertInformeCuentaCliente = typeof informesCuentasCliente.$inferInsert;
+
+/** Una fila por archivo de libro auxiliar/movimiento cargado (un
+ * cliente + mes). */
+export const informesCargas = mysqlTable("informesCargas", {
+  id: int("id").autoincrement().primaryKey(),
+  clienteId: int("clienteId").notNull(),
+  anio: int("anio").notNull(),
+  mes: int("mes").notNull(), // 1-12
+  nombreArchivo: varchar("nombreArchivo", { length: 255 }).notNull(),
+  fileKey: varchar("fileKey", { length: 500 }),
+  totalFilas: int("totalFilas"),
+  estado: mysqlEnum("estado", ["procesando", "completado", "error"]).default("procesando").notNull(),
+  mensajeError: text("mensajeError"),
+  cargadoPorId: int("cargadoPorId").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (table) => ({
+  clienteAnioMesIdx: index("informesCargas_cliente_anioMes_idx").on(table.clienteId, table.anio, table.mes),
+}));
+export type InformeCarga = typeof informesCargas.$inferSelect;
+export type InsertInformeCarga = typeof informesCargas.$inferInsert;
+
+/** Saldos agregados por cliente + mes + centro de costo + cuenta, a
+ * detalle completo (código de cuenta tal cual viene en el libro
+ * auxiliar, sin truncar a 4 dígitos). Esta es la tabla histórica que
+ * alimenta TODOS los informes derivados: cada carga mensual upsertea
+ * sus filas aquí, así el ERM, el ERI por centro, el punto de
+ * equilibrio y el pareto se calculan sobre lo ya cargado, sin
+ * reprocesar los archivos crudos.
+ * Para clientes sin centro de costo, centroCodigo queda "SC" siempre
+ * (no afecta al ERM, que suma todos los centros).
+ * La agregación a nivel de 4 dígitos (ej. 5105) para vistas resumidas
+ * se hace en tiempo de reporte (LEFT(cuenta, 4)), no al guardar. */
+export const informesSaldosMensuales = mysqlTable("informesSaldosMensuales", {
+  id: int("id").autoincrement().primaryKey(),
+  cargaId: int("cargaId").notNull(),
+  clienteId: int("clienteId").notNull(),
+  anio: int("anio").notNull(),
+  mes: int("mes").notNull(),
+  centroCodigo: varchar("centroCodigo", { length: 40 }).notNull(),
+  cuenta: varchar("cuenta", { length: 12 }).notNull(),
+  tipo: mysqlEnum("tipo", ["ingreso", "costo", "gasto", "descuento_pp"]).notNull(),
+  valor: double("valor").notNull(),
+}, (table) => ({
+  periodoCentroCuentaIdx: uniqueIndex("informesSaldos_periodo_centro_cuenta_idx")
+    .on(table.clienteId, table.anio, table.mes, table.centroCodigo, table.cuenta),
+  clienteAnioIdx: index("informesSaldos_cliente_anio_idx").on(table.clienteId, table.anio),
+}));
+export type InformeSaldoMensual = typeof informesSaldosMensuales.$inferSelect;
+export type InsertInformeSaldoMensual = typeof informesSaldosMensuales.$inferInsert;
+
+/** Un registro por reporte generado (para historial/descarga posterior).
+ * tipo: "ERM" = Estado de Resultados Mensual comparativo (el principal,
+ * por cliente, todo el año); "ERI" = por centro de costo (derivado). */
+export const informesReportes = mysqlTable("informesReportes", {
+  id: int("id").autoincrement().primaryKey(),
+  clienteId: int("clienteId").notNull(),
+  anio: int("anio").notNull(),
+  mes: int("mes"), // null en reportes anuales como el ERM
+  tipo: varchar("tipo", { length: 40 }).default("ERM").notNull(),
+  nivel: mysqlEnum("nivel", ["resumen", "detalle"]).default("resumen").notNull(),
+  fileKey: varchar("fileKey", { length: 500 }).notNull(),
+  /** Solo se llenan cuando tipo="DIAN" — el total de los documentos
+   * "Emitidos" y "Recibidos" según el archivo de la DIAN de ese mes, para
+   * poder comparar ingresos/compras de otros módulos (ej. conciliación de
+   * IVA) sin tener que volver a subir el archivo de la DIAN cada vez. */
+  totalEmitidoDian: double("totalEmitidoDian"),
+  totalRecibidoDian: double("totalRecibidoDian"),
+  /** Solo se llena cuando tipo="DIAN" — desglose por CADA tipo de
+   * documento (JSON: {tipoDocumentoDian, grupo, total}[]) del archivo de
+   * la DIAN de ese mes. Permite que otros pasos (ej. Paso 4 de IVA,
+   * "compras") comparen contra SOLO los tipos de documento que
+   * correspondan, en vez del total "Recibido" completo (que mezcla
+   * facturas de compra con documento soporte, nómina, etc.) — sin tener
+   * que volver a subir el archivo de la DIAN. */
+  totalesPorTipoJson: text("totalesPorTipoJson"),
+  generadoPorId: int("generadoPorId").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (table) => ({
+  clienteAnioIdx: index("informesReportes_cliente_anio_idx").on(table.clienteId, table.anio),
+}));
+export type InformeReporte = typeof informesReportes.$inferSelect;
+export type InsertInformeReporte = typeof informesReportes.$inferInsert;
+
+/** Clasificación tributaria (para efectos de IVA) de una cuenta contable
+ * de un cliente — gravado 19%, gravado 5%, excluido, o no gravado (para
+ * ingresos); mismo enum sirve para compras. Se guarda POR CLIENTE, no por
+ * periodo, porque una cuenta casi siempre mantiene la misma clasificación
+ * de un periodo a otro — el usuario la confirma una vez y queda lista
+ * para los siguientes periodos, sin tener que reclasificar cada vez
+ * (aunque puede corregirla cuando quiera). */
+export const informesClasificacionCuentas = mysqlTable("informesClasificacionCuentas", {
+  id: int("id").autoincrement().primaryKey(),
+  clienteId: int("clienteId").notNull(),
+  cuenta: varchar("cuenta", { length: 12 }).notNull(),
+  clasificacion: mysqlEnum("clasificacion", ["gravado_19", "gravado_5", "excluido", "no_gravado"]).notNull(),
+  /** Si el valor de esta cuenta corresponde a ingreso facturado
+   * electrónicamente — solo lo facturado se compara contra el total
+   * "Emitido" de la DIAN (hay ingresos, como rendimientos financieros,
+   * que legítimamente nunca se facturan). Por defecto true, ya que la
+   * mayoría de cuentas de ingreso sí se facturan. */
+  facturado: boolean("facturado").default(true).notNull(),
+  actualizadoPorId: int("actualizadoPorId").notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (table) => ({
+  clienteCuentaIdx: uniqueIndex("informesClasificacionCuentas_cliente_cuenta_idx").on(table.clienteId, table.cuenta),
+}));
+export type InformeClasificacionCuenta = typeof informesClasificacionCuentas.$inferSelect;
+
+/** Cuando una sola cuenta de ingreso mezcla varias tarifas de IVA (ej.
+ * parte gravada al 19% y parte excluida, sin cuentas separadas para
+ * cada una) — permite partir el valor de esa cuenta, PARA UN PERIODO
+ * ESPECÍFICO (el valor cambia cada mes, a diferencia de la clasificación
+ * de una cuenta simple que se reutiliza entre periodos), en dos o más
+ * partes, cada una con su propia tarifa y si está facturada o no. Si
+ * una cuenta tiene divisiones para un periodo, esas reemplazan a su
+ * clasificación simple SOLO en ese periodo. */
+export const informesDivisionesCuentaIva = mysqlTable("informesDivisionesCuentaIva", {
+  id: int("id").autoincrement().primaryKey(),
+  clienteId: int("clienteId").notNull(),
+  anio: int("anio").notNull(),
+  periodicidad: mysqlEnum("periodicidad", ["bimestral", "cuatrimestral", "anual"]).notNull(),
+  periodo: int("periodo").notNull(),
+  cuenta: varchar("cuenta", { length: 12 }).notNull(),
+  orden: int("orden").notNull(),
+  etiqueta: varchar("etiqueta", { length: 100 }),
+  valor: double("valor").notNull(),
+  clasificacion: mysqlEnum("clasificacion", ["gravado_19", "gravado_5", "excluido", "no_gravado"]).notNull(),
+  facturado: boolean("facturado").default(true).notNull(),
+  actualizadoPorId: int("actualizadoPorId").notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (table) => ({
+  clientePeriodoCuentaOrdenIdx: uniqueIndex("informesDivisionesCuentaIva_idx").on(table.clienteId, table.anio, table.periodicidad, table.periodo, table.cuenta, table.orden),
+}));
+export type InformeDivisionCuentaIva = typeof informesDivisionesCuentaIva.$inferSelect;
+
+/** Configuración, POR CLIENTE, de qué representa cada tipo de documento
+ * que aparece en el archivo de la DIAN — es rara la vez que un cliente
+ * empieza a usar un tipo de documento nuevo, así que se configura una
+ * vez y se recuerda para todas las conciliaciones futuras (comparación
+ * DIAN, comparación por tercero, conciliación de IVA). "categoria"
+ * decide si ese tipo de documento representa un ingreso, la nómina, un
+ * gasto de honorarios/servicios, otro gasto, o si no debe usarse en
+ * absoluto en estas comparaciones. "tiposComprobanteContable" (JSON de
+ * strings, ej. ["CN","CP"]) es opcional — el tipo de comprobante que se
+ * usa en la contabilidad para esas mismas transacciones, para poder
+ * cruzar más adelante si hay comprobantes contables sin su documento
+ * electrónico correspondiente, o viceversa. */
+export const informesTiposDocumentoConfig = mysqlTable("informesTiposDocumentoConfig", {
+  id: int("id").autoincrement().primaryKey(),
+  clienteId: int("clienteId").notNull(),
+  tipoDocumentoDian: varchar("tipoDocumentoDian", { length: 100 }).notNull(),
+  grupo: mysqlEnum("grupo", ["Emitido", "Recibido"]).notNull(),
+  categoria: mysqlEnum("categoria", ["ingreso", "nomina", "honorarios_servicios", "otro_gasto", "compras_mercancia", "devolucion_venta", "devolucion_compra", "excluir"]).notNull(),
+  tiposComprobanteContable: text("tiposComprobanteContable"),
+  actualizadoPorId: int("actualizadoPorId").notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (table) => ({
+  clienteTipoGrupoIdx: uniqueIndex("informesTiposDocumentoConfig_cliente_tipo_grupo_idx").on(table.clienteId, table.tipoDocumentoDian, table.grupo),
+}));
+export type InformeTipoDocumentoConfig = typeof informesTiposDocumentoConfig.$inferSelect;
+
+/** Tipos de comprobante contable (del libro auxiliar) que este cliente
+ * decidió excluir POR COMPLETO de la conciliación DIAN — distinto de
+ * "excluir" en `informesTiposDocumentoConfig` (que excluye un tipo de
+ * documento DE LA DIAN). Aquí se excluye desde el lado de la
+ * CONTABILIDAD: comprobantes que nunca van a tener un documento
+ * electrónico correspondiente (ajustes internos, apertura de saldos,
+ * etc.) y que de lo contrario aparecerían como "no clasificados" o como
+ * un falso faltante en la comparación. */
+export const informesComprobantesExcluidos = mysqlTable("informesComprobantesExcluidos", {
+  id: int("id").autoincrement().primaryKey(),
+  clienteId: int("clienteId").notNull(),
+  tipoComprobante: varchar("tipoComprobante", { length: 20 }).notNull(),
+  actualizadoPorId: int("actualizadoPorId").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (table) => ({
+  clienteTipoIdx: uniqueIndex("informesComprobantesExcluidos_cliente_tipo_idx").on(table.clienteId, table.tipoComprobante),
+}));
+export type InformeComprobanteExcluido = typeof informesComprobantesExcluidos.$inferSelect;
+
+/** Tipos de comprobante que este cliente excluye ESPECÍFICAMENTE del
+ * Paso 4 de IVA (clasificación de compras, cuentas 14 y 62) — distinto
+ * de `informesComprobantesExcluidos` (que excluye de la Comparación
+ * DIAN por completo). Las cuentas 14 y 62 también reciben asientos de
+ * costo de venta (traspaso interno de inventario a costo cuando se
+ * vende), que no son compras reales y no deben sumarse a la base de
+ * IVA — el usuario marca aquí qué tipo(s) de comprobante son esos
+ * asientos internos, para que se excluyan del cálculo. */
+export const informesComprasTiposExcluidos = mysqlTable("informesComprasTiposExcluidos", {
+  id: int("id").autoincrement().primaryKey(),
+  clienteId: int("clienteId").notNull(),
+  tipoComprobante: varchar("tipoComprobante", { length: 20 }).notNull(),
+  actualizadoPorId: int("actualizadoPorId").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (table) => ({
+  clienteTipoIdx: uniqueIndex("informesComprasTiposExcluidos_cliente_tipo_idx").on(table.clienteId, table.tipoComprobante),
+}));
+export type InformeCompraTipoExcluido = typeof informesComprasTiposExcluidos.$inferSelect;
+
+/** Lista de cuentas que, JUNTAS, conforman el IVA transitorio de este
+ * cliente — a diferencia de generado/descontable (una sola cuenta por
+ * tarifa), el transitorio suele repartirse en VARIAS cuentas (ej. por
+ * centro de costo o tipo de gasto), así que se permite configurar
+ * cualquier cantidad. El saldo final es la suma de todas. */
+export const informesIvaTransitorioCuentas = mysqlTable("informesIvaTransitorioCuentas", {
+  id: int("id").autoincrement().primaryKey(),
+  clienteId: int("clienteId").notNull(),
+  cuenta: varchar("cuenta", { length: 20 }).notNull(),
+  actualizadoPorId: int("actualizadoPorId").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (table) => ({
+  clienteCuentaIdx: uniqueIndex("informesIvaTransitorioCuentas_cliente_cuenta_idx").on(table.clienteId, table.cuenta),
+}));
+export type InformeIvaTransitorioCuenta = typeof informesIvaTransitorioCuentas.$inferSelect;
+
+/** Clasificación, POR CLIENTE, de CADA cuenta de IVA (24xx) en su
+ * categoría correspondiente — generado 19%/5%, descontable 19%/5%,
+ * transitorio, y las devoluciones. A diferencia del modelo anterior
+ * (una sola cuenta configurada por rol), aquí CADA cuenta se clasifica
+ * individualmente, y VARIAS cuentas pueden compartir la misma
+ * categoría (el sistema suma todas las que compartan una) — igual
+ * criterio que ya se usa para clasificar las cuentas de ingreso.
+ * Reemplaza el uso de `informesConfigCuentasIva` para estos roles
+ * (esa tabla se sigue usando solo para "cuenta_mayor"). */
+export const informesClasificacionCuentasIva = mysqlTable("informesClasificacionCuentasIva", {
+  id: int("id").autoincrement().primaryKey(),
+  clienteId: int("clienteId").notNull(),
+  cuenta: varchar("cuenta", { length: 20 }).notNull(),
+  categoria: mysqlEnum("categoria", [
+    "generado_19", "generado_5", "descontable_19", "descontable_5", "transitorio",
+    "generado_devolucion_compra_19", "generado_devolucion_compra_5",
+    "descontable_devolucion_venta_19", "descontable_devolucion_venta_5",
+  ]).notNull(),
+  actualizadoPorId: int("actualizadoPorId").notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (table) => ({
+  clienteCuentaIdx: uniqueIndex("informesClasificacionCuentasIva_cliente_cuenta_idx").on(table.clienteId, table.cuenta),
+}));
+export type InformeClasificacionCuentaIva = typeof informesClasificacionCuentasIva.$inferSelect;
+
+/** Configuración, POR CLIENTE, de qué cuenta contable corresponde a cada
+ * rol de IVA — generado 19%/5% (Fase 3), descontable 19%/5% (Fase 5), y
+ * transitorio (Fase 6). En la mayoría de los casos es una sub-cuenta de
+ * la 2408, pero se deja como texto libre porque el PUC de cada cliente
+ * puede variar. Se reutiliza entre periodos, igual que la clasificación
+ * de cuentas de ingreso. */
+export const informesConfigCuentasIva = mysqlTable("informesConfigCuentasIva", {
+  id: int("id").autoincrement().primaryKey(),
+  clienteId: int("clienteId").notNull(),
+  tipoIva: mysqlEnum("tipoIva", [
+    "generado_19", "generado_5", "descontable_19", "descontable_5", "transitorio", "cuenta_mayor",
+    // IVA generado en devoluciones EN COMPRA — al devolver mercancía a un
+    // proveedor, se revierte (como si fuera una venta) el IVA descontable
+    // que se había tomado por esa compra.
+    "generado_devolucion_compra_19", "generado_devolucion_compra_5",
+    // IVA descontable en devoluciones EN VENTA — al recibir de vuelta
+    // mercancía de un cliente, se revierte (como un descontable) el IVA
+    // generado que se había cobrado por esa venta.
+    "descontable_devolucion_venta_19", "descontable_devolucion_venta_5",
+  ]).notNull(),
+  cuenta: varchar("cuenta", { length: 12 }).notNull(),
+  actualizadoPorId: int("actualizadoPorId").notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (table) => ({
+  clienteTipoIvaIdx: uniqueIndex("informesConfigCuentasIva_cliente_tipo_idx").on(table.clienteId, table.tipoIva),
+}));
+export type InformeConfigCuentaIva = typeof informesConfigCuentasIva.$inferSelect;
+
+/** Expediente de trabajo de la conciliación de IVA de un cliente para un
+ * periodo (bimestral/cuatrimestral/anual) — se va llenando paso a paso:
+ * clasificación de ingresos por tarifa, IVA generado, compras, IVA
+ * descontable, IVA transitorio, y la proporcionalidad del Art. 490 E.T.
+ * Cada paso se guarda como JSON libre en `estadoJson` a medida que el
+ * usuario confirma esa parte — así puede salir y retomar donde quedó. */
+export const informesIvaConciliacion = mysqlTable("informesIvaConciliacion", {
+  id: int("id").autoincrement().primaryKey(),
+  clienteId: int("clienteId").notNull(),
+  anio: int("anio").notNull(),
+  periodicidad: mysqlEnum("periodicidad", ["bimestral", "cuatrimestral", "anual"]).notNull(),
+  periodo: int("periodo").notNull(), // código del periodo: 1-6 bimestral, 1-3 cuatrimestral, 1 anual
+  estadoJson: text("estadoJson"),
+  actualizadoPorId: int("actualizadoPorId").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (table) => ({
+  clientePeriodoIdx: uniqueIndex("informesIvaConciliacion_cliente_periodo_idx").on(table.clienteId, table.anio, table.periodicidad, table.periodo),
+}));
+export type InformeIvaConciliacion = typeof informesIvaConciliacion.$inferSelect;
+export type InsertInformeIvaConciliacion = typeof informesIvaConciliacion.$inferInsert;
+
+/**
+ * ============================================================
+ * TABLERO — mensajes generales para todo el equipo (no atados a una
+ * tarea o cliente puntual): aclaraciones de proceso, documentos para
+ * estudio, avisos. Cualquier usuario puede publicar y comentar; queda
+ * el historial completo. Cada publicación se etiqueta como "General"
+ * (obligacionId null) o con una obligación tributaria específica (ej.
+ * IVA), para poder filtrar después "qué se ha dicho de IVA".
+ * Los comentarios de cada publicación reutilizan la tabla `comments`
+ * genérica (entityType="board_post"), igual que tareas y vencimientos.
+ * ============================================================
+ */
+export const boardPosts = mysqlTable("boardPosts", {
+  id: int("id").autoincrement().primaryKey(),
+  authorId: int("authorId").notNull(),
+  content: text("content").notNull(),
+  /** null = "General"; si no, referencia a una obligación tributaria
+   * (IVA, Renta, ICA, etc.) para poder filtrar el tablero por tema. */
+  obligationId: int("obligationId"),
+  pinned: boolean("pinned").default(false).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (table) => ({
+  obligationIdx: index("boardPosts_obligation_idx").on(table.obligationId),
+}));
+export type BoardPost = typeof boardPosts.$inferSelect;
+export type InsertBoardPost = typeof boardPosts.$inferInsert;
+
+/** Documentos adjuntos a una publicación del tablero (ej. un PDF de IVA
+ * para lectura) — mismo patrón que taskAttachments. */
+export const boardAttachments = mysqlTable("boardAttachments", {
+  id: int("id").autoincrement().primaryKey(),
+  postId: int("postId").notNull(),
+  fileName: varchar("fileName", { length: 255 }).notNull(),
+  fileUrl: text("fileUrl").notNull(),
+  fileKey: varchar("fileKey", { length: 255 }).notNull(),
+  contentType: varchar("contentType", { length: 100 }),
+  fileSize: int("fileSize"),
+  uploadedById: int("uploadedById").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+export type BoardAttachment = typeof boardAttachments.$inferSelect;
+export type InsertBoardAttachment = typeof boardAttachments.$inferInsert;
+
+// ==================== RENTA PERSONA NATURAL (módulo separado) ====================
+// Clientes propios de este módulo — separados de los clientes generales
+// (`clients`). Solo nombre + cédula; el vencimiento se calcula en vivo
+// contra el calendario ya cargado en Configuración (dianCalendar), por
+// últimos dígitos de cédula, no se guarda una fecha fija aquí.
+
+export const rentaClientes = mysqlTable("rentaClientes", {
+  id: int("id").autoincrement().primaryKey(),
+  nombre: varchar("nombre", { length: 255 }).notNull(),
+  cedula: varchar("cedula", { length: 20 }).notNull(),
+  /** Año gravable que se está declarando (ej. 2025, se declara en 2026). */
+  anioGravable: int("anioGravable").notNull(),
+  /** Marcado cuando se revisó y NO está obligado a declarar — se ubica al
+   * final del listado en vez de ordenarse por vencimiento. */
+  noObligado: boolean("noObligado").default(false).notNull(),
+  /** Por qué se marcó como no obligado — visible en el listado general.
+   * Distinto de `comentariosGenerales` (esa es una nota de la
+   * liquidación que sale impresa en el PDF de anexos; esta es solo
+   * para explicar la decisión de no obligado, y no imprime nada). */
+  comentarioNoObligado: text("comentarioNoObligado"),
+  /** Se pone en true cuando en la pestaña de liquidación se sube el
+   * Formulario 210 con el sello de "recibido" — la renta queda finalizada. */
+  terminado: boolean("terminado").default(false).notNull(),
+  createdById: int("createdById"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  /** Carpeta de Drive con los soportes que envía el cliente (ej. el Excel
+   * de la exógena) — mismo patrón que `clients.driveFolderUrl`, pero para
+   * clientes de renta, que son una tabla aparte. */
+  driveFolderUrl: text("driveFolderUrl"),
+  /** Flujo de revisión: null = sin solicitar, "solicitada" = pendiente de
+   * aprobación (aparece en la pestaña Revisión), "aprobada" = habilita el
+   * botón de subir la declaración final, "rechazada" = vuelve a
+   * liquidación con el comentario de qué corregir. */
+  estadoRevision: mysqlEnum("estadoRevision", ["solicitada", "aprobada", "rechazada"]),
+  revisionSolicitadaPorId: int("revisionSolicitadaPorId"),
+  revisionSolicitadaAt: timestamp("revisionSolicitadaAt"),
+  revisionComentario: text("revisionComentario"),
+  /** Archivo de la declaración ya presentada con el sello/marca de agua
+   * de "recibido" — se sube una vez aprobada la revisión. */
+  declaracionFileKey: varchar("declaracionFileKey", { length: 500 }),
+  /** Cliente inactivo — ya no aparece por defecto en el listado, sin
+   * borrar su historial. */
+  activo: boolean("activo").default(true).notNull(),
+  /** Último estado marcado en la Solicitud de Documentos al Cliente
+   * (JSON: {seleccionados, documentosExtra, observaciones}) — se guarda
+   * al cerrar el diálogo para no perder lo marcado la próxima vez que
+   * se abra. Null si nunca se ha usado para este cliente. */
+  solicitudDocumentosEstado: text("solicitudDocumentosEstado"),
+  /** Nota libre del contador sobre la liquidación en general (no ligada a
+   * un ítem específico) — se imprime al final del PDF de anexos. */
+  comentariosGenerales: text("comentariosGenerales"),
+}, (table) => ({
+  cedulaAnioIdx: uniqueIndex("rentaClientes_cedula_anio_idx").on(table.cedula, table.anioGravable),
+}));
+export type RentaCliente = typeof rentaClientes.$inferSelect;
+export type InsertRentaCliente = typeof rentaClientes.$inferInsert;
+
+/** Un archivo de exógena procesado para un cliente de renta — uno vigente
+ * por cliente (al subir uno nuevo, reemplaza al anterior). Guarda los 5
+ * "Topes" que la propia DIAN ya calcula (útiles para el chequeo de
+ * obligado a declarar) y el archivo original en storage. */
+export const rentaExogena = mysqlTable("rentaExogena", {
+  id: int("id").autoincrement().primaryKey(),
+  rentaClienteId: int("rentaClienteId").notNull(),
+  nombreArchivo: varchar("nombreArchivo", { length: 255 }).notNull(),
+  fileKey: varchar("fileKey", { length: 500 }).notNull(),
+  topeIngresos: double("topeIngresos"),
+  topePatrimonio: double("topePatrimonio"),
+  topeConsumoTC: double("topeConsumoTC"),
+  topeMovimiento: double("topeMovimiento"),
+  topeCompras: double("topeCompras"),
+  uploadedById: int("uploadedById"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (table) => ({
+  rentaClienteIdx: uniqueIndex("rentaExogena_rentaCliente_idx").on(table.rentaClienteId),
+}));
+export type RentaExogena = typeof rentaExogena.$inferSelect;
+export type InsertRentaExogena = typeof rentaExogena.$inferInsert;
+
+/** Cada línea individual del archivo de exógena, con el renglón del
+ * Formulario 210 ya extraído de la columna "Uso declaración Sugerida" de
+ * la propia DIAN — sirve tanto para el resumen automático como de base
+ * para los detalles de activos/pasivos/ingresos más adelante. */
+export const rentaExogenaItems = mysqlTable("rentaExogenaItems", {
+  id: int("id").autoincrement().primaryKey(),
+  rentaExogenaId: int("rentaExogenaId").notNull(),
+  nitTercero: varchar("nitTercero", { length: 20 }),
+  nombreTercero: varchar("nombreTercero", { length: 255 }),
+  detalle: text("detalle"),
+  valor: double("valor").notNull(),
+  renglon: varchar("renglon", { length: 10 }), // ej. "R32", "R29" — null si la fila no trae uno
+  categoria: mysqlEnum("categoria", ["ingreso", "patrimonio", "deuda", "retencion", "otro"]).default("otro").notNull(),
+  infoAdicional: text("infoAdicional"),
+}, (table) => ({
+  rentaExogenaIdx: index("rentaExogenaItems_rentaExogena_idx").on(table.rentaExogenaId),
+}));
+export type RentaExogenaItem = typeof rentaExogenaItems.$inferSelect;
+export type InsertRentaExogenaItem = typeof rentaExogenaItems.$inferInsert;
+
+/** Datos de la declaración del año anterior — necesarios para el cálculo
+ * del anticipo de renta del año que se está liquidando. Se guardan en una
+ * tabla aparte (no directo en rentaClientes) para no seguir agregando
+ * columnas ahí cada vez que se necesite un dato más de este tipo. */
+export const rentaDeclaracionAnterior = mysqlTable("rentaDeclaracionAnterior", {
+  id: int("id").autoincrement().primaryKey(),
+  rentaClienteId: int("rentaClienteId").notNull(),
+  /** Marca que esta es la PRIMERA declaración de renta de esta persona
+   * — cuando está marcado, no existe un patrimonio líquido del año
+   * anterior con el cual comparar (Arts. 236-239 E.T.), así que la
+   * comparación patrimonial no se calcula y no genera la alerta de
+   * incremento patrimonial sin justificar. */
+  primeraDeclaracion: boolean("primeraDeclaracion").default(false).notNull(),
+  patrimonioLiquidoAnioAnterior: double("patrimonioLiquidoAnioAnterior"),
+  impuestoNetoAnioAnterior: double("impuestoNetoAnioAnterior"),
+  saldoAFavorAnterior: double("saldoAFavorAnterior"),
+  /** Anticipo de renta que la declaración del año anterior ya liquidó
+   * PARA el año que se está trabajando ahora (ej. en la declaración de
+   * 2024 se liquidó un anticipo "para 2025") — se resta al calcular el
+   * impuesto a pagar/saldo a favor de este año. */
+  anticipoAnioActual: double("anticipoAnioActual"),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (table) => ({
+  rentaClienteIdx: uniqueIndex("rentaDeclaracionAnterior_rentaCliente_idx").on(table.rentaClienteId),
+}));
+export type RentaDeclaracionAnterior = typeof rentaDeclaracionAnterior.$inferSelect;
+export type InsertRentaDeclaracionAnterior = typeof rentaDeclaracionAnterior.$inferInsert;
+
+/** Ítems de la liquidación de un cliente de renta — activos, pasivos,
+ * ingresos por cédula, deducciones, y rentas exentas. Una sola tabla para
+ * las 4 secciones (en vez de 4 tablas separadas), diferenciadas por
+ * `seccion`. `origen` distingue lo importado automáticamente desde la
+ * exógena de lo digitado a mano; `exogenaItemId` conserva la trazabilidad
+ * hacia el ítem original cuando aplica. */
+export const rentaLiquidacionItems = mysqlTable("rentaLiquidacionItems", {
+  id: int("id").autoincrement().primaryKey(),
+  rentaClienteId: int("rentaClienteId").notNull(),
+  /** "cedula" agrupa todo lo que va dentro de una de las 6 sub-rentas (ver
+   * `cedula` abajo) — activo/pasivo quedan aparte porque el patrimonio no
+   * es cedular. */
+  seccion: mysqlEnum("seccion", ["activo", "pasivo", "cedula", "descuento_tributario"]).notNull(),
+  /** Las 6 sub-rentas reales del Formulario 210 — "trabajo" (relación
+   * laboral, casillas 32-42) y "trabajo_honorarios" (sin relación laboral,
+   * con costos/gastos, casillas 43-57) son DISTINTAS entre sí aunque
+   * ambas hagan parte de la Cédula General; lo mismo capital (58-73) y
+   * no_laboral (74-88). Pensiones y dividendos van aparte. Null para
+   * activos y pasivos. */
+  cedula: mysqlEnum("cedula", ["trabajo", "trabajo_honorarios", "capital", "no_laboral", "pensiones", "dividendos", "ganancia_ocasional"]),
+  /** A qué categoría de casilla corresponde este valor dentro de su
+   * cédula — determina en qué renglón del borrador se suma. Null para
+   * activos/pasivos. */
+  tipoValor: mysqlEnum("tipoValor", [
+    "ingreso_bruto", "ingreso_no_constitutivo", "costo_deduccion_procedente", "renta_exenta", "deduccion", "retencion",
+  ]),
+  /** Para renta_exenta/deduccion: el tipo específico del catálogo (para
+   * validar contra su tope individual 2025) — ej. "renta_exenta_25_laboral",
+   * "salud_prepagada". Null para el resto. */
+  tipoDeduccion: varchar("tipoDeduccion", { length: 60 }),
+  /** Solo para cedula="ganancia_ocasional": qué tipo de ganancia ocasional
+   * es (determina la tarifa: 20% loterías/rifas/apuestas, 15% el resto). */
+  tipoGananciaOcasional: varchar("tipoGananciaOcasional", { length: 60 }),
+  /** Solo para deducción/renta exenta de la Cédula General: si el
+   * contador marca esta partida como la que debe absorber el ajuste
+   * cuando el conjunto supere el tope del 40%/1.340 UVT, en vez de que
+   * el sistema decida automáticamente cuál cédula recortar primero. */
+  limiteGeneral: boolean("limiteGeneral").default(false).notNull(),
+  /** Momento (epoch ms) en que se marcó esta partida como "límite
+   * general" — el reparto del ajuste es SECUENCIAL según este orden (la
+   * primera marcada se agota primero hasta llegar a 0, y solo si no
+   * alcanza pasa a la siguiente), no proporcional entre todas a la vez;
+   * así el asesor controla exactamente cuál partida se sacrifica
+   * primero. Null si no está marcada. */
+  limiteGeneralOrden: double("limiteGeneralOrden"),
+  /** Solo para renta_exenta_25_laboral en la cédula de trabajo: si está
+   * en true, el "valor" digitado se ignora y el 25% se calcula solo
+   * (sobre el ingreso ya depurado de INCRNGO, deducciones y demás
+   * rentas exentas de esa cédula) — se recalcula cada vez que cambia
+   * cualquiera de esas otras partidas. */
+  calculoAutomatico: boolean("calculoAutomatico").default(false).notNull(),
+  concepto: varchar("concepto", { length: 255 }).notNull(),
+  valor: double("valor").notNull(),
+  origen: mysqlEnum("origen", ["exogena", "manual"]).default("manual").notNull(),
+  exogenaItemId: int("exogenaItemId"),
+  /** Nota libre del contador sobre esta partida (ej. de dónde sale el
+   * soporte, por qué se tomó ese valor, qué falta verificar) — se
+   * imprime junto al ítem en el PDF de anexos. */
+  comentario: text("comentario"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (table) => ({
+  rentaClienteIdx: index("rentaLiquidacionItems_rentaCliente_idx").on(table.rentaClienteId),
+}));
+export type RentaLiquidacionItem = typeof rentaLiquidacionItems.$inferSelect;
+export type InsertRentaLiquidacionItem = typeof rentaLiquidacionItems.$inferInsert;
+
+/** Dependientes económicos del cliente de renta — nombre + tipo y número
+ * de documento, para el registro y el anexo ejecutivo (la deducción por
+ * dependientes es un valor fijo si hay al menos uno, no aumenta por cada
+ * dependiente adicional). */
+export const rentaDependientes = mysqlTable("rentaDependientes", {
+  id: int("id").autoincrement().primaryKey(),
+  rentaClienteId: int("rentaClienteId").notNull(),
+  nombre: varchar("nombre", { length: 255 }).notNull(),
+  tipoDocumento: varchar("tipoDocumento", { length: 10 }).notNull(),
+  numeroDocumento: varchar("numeroDocumento", { length: 20 }).notNull(),
+  /** Cuál deducción corresponde a este dependiente: "diez_por_ciento" (el
+   * 10% de ingresos general, Art. 387 E.T. — uno solo por cliente, no
+   * aumenta con más dependientes) o "adicional_72uvt" (72 UVT por ESTE
+   * dependiente en particular, Art. 336 núm. 3 E.T., fuera del límite del
+   * 40%, máx. 4). Null en dependientes cargados antes de este cambio. */
+  tipoDeduccion: varchar("tipoDeduccion", { length: 20 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+export type RentaDependiente = typeof rentaDependientes.$inferSelect;
+export type InsertRentaDependiente = typeof rentaDependientes.$inferInsert;
+
+/** Historial de borradores del Formulario 210 generados para un cliente
+ * de renta — mismo patrón que informesReportes. */
+export const rentaReportes = mysqlTable("rentaReportes", {
+  id: int("id").autoincrement().primaryKey(),
+  rentaClienteId: int("rentaClienteId").notNull(),
+  tipo: varchar("tipo", { length: 40 }).default("BORRADOR_210").notNull(),
+  fileKey: varchar("fileKey", { length: 500 }).notNull(),
+  generadoPorId: int("generadoPorId").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (table) => ({
+  rentaClienteIdx: index("rentaReportes_rentaCliente_idx").on(table.rentaClienteId),
+}));
+export type RentaReporte = typeof rentaReportes.$inferSelect;
+export type InsertRentaReporte = typeof rentaReportes.$inferInsert;
+
+/** Cuentas de cobro que Arlex le pasa a cada cliente de Renta por la
+ * asesoría — un consecutivo propio de la aplicación (prefijo "R25" +
+ * número, empezando en 1), independiente del que llevaba antes en
+ * FoxPro. `totalIngresosReferencia` es una FOTO del total de ingresos
+ * brutos declarados en la Renta del cliente al momento de generar la
+ * cuenta — solo de referencia (para decidir el valor a cobrar), no es
+ * el valor cobrado en sí (ese es `valor`, siempre digitado a mano). */
+export const rentaCuentasCobro = mysqlTable("rentaCuentasCobro", {
+  id: int("id").autoincrement().primaryKey(),
+  rentaClienteId: int("rentaClienteId").notNull(),
+  prefijo: varchar("prefijo", { length: 10 }).default("R25").notNull(),
+  numero: int("numero").notNull(),
+  fecha: timestamp("fecha").defaultNow().notNull(),
+  detalle: text("detalle").notNull(),
+  valor: double("valor").notNull(),
+  totalIngresosReferencia: double("totalIngresosReferencia"),
+  fileKey: varchar("fileKey", { length: 500 }),
+  generadoPorId: int("generadoPorId").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (table) => ({
+  rentaClienteIdx: index("rentaCuentasCobro_rentaCliente_idx").on(table.rentaClienteId),
+  numeroIdx: uniqueIndex("rentaCuentasCobro_numero_idx").on(table.prefijo, table.numero),
+}));
+export type RentaCuentaCobro = typeof rentaCuentasCobro.$inferSelect;
+export type InsertRentaCuentaCobro = typeof rentaCuentasCobro.$inferInsert;
+
+
+/** ---- Módulo Oficina — agentes de IA para Arlex (menú restringido a su
+ * cédula, no a "admin" en general — ver assertOficinaAccess en routers.ts).
+ * Primer agente: "Estadista de Tareas" (analiza tasks/taxDeadlines de
+ * Areda Work, sin acceso externo). Agentes de correo y de desarrollo se
+ * suman en entregas posteriores, reutilizando este mismo esquema. */
+
+/** Un agente de la Oficina — su perfil configurable y su estado visible
+ * en la escena (libre = sin pendientes; esperando = tiene solicitudes sin
+ * atender, mano levantada en la UI; error = su última revisión falló). */
+export const oficinaAgentes = mysqlTable("oficinaAgentes", {
+  id: int("id").autoincrement().primaryKey(),
+  /** Identificador estable interno (ej. "estadista_tareas") — el nombre
+   * visible sí lo puede cambiar Arlex desde Configuración. */
+  slug: varchar("slug", { length: 40 }).notNull().unique(),
+  nombre: varchar("nombre", { length: 100 }).notNull(),
+  tipo: mysqlEnum("tipo", ["estadista_tareas", "correo", "desarrollo"]).notNull(),
+  estado: mysqlEnum("estado", ["libre", "trabajando", "esperando", "error"]).default("libre").notNull(),
+  personalidad: text("personalidad"),
+  objetivo: text("objetivo"),
+  especialidad: text("especialidad"),
+  criterioTerminado: text("criterioTerminado"),
+  esfuerzo: mysqlEnum("esfuerzo", ["low", "medium", "high"]).default("medium").notNull(),
+  /** false = "próximamente", ocupa un escritorio pero no se puede abrir
+   * todavía (agentes de correo/desarrollo antes de su propia entrega). */
+  activo: boolean("activo").default(true).notNull(),
+  ultimaRevisionAt: timestamp("ultimaRevisionAt"),
+  ultimoErrorMensaje: text("ultimoErrorMensaje"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+export type OficinaAgente = typeof oficinaAgentes.$inferSelect;
+export type InsertOficinaAgente = typeof oficinaAgentes.$inferInsert;
+
+/** Historial de chat de Arlex con cada agente — conversación simple de
+ * turnos (no hay sesión persistente tipo Codex; cada mensaje reenvía el
+ * historial reciente como contexto al invocar la IA). */
+export const oficinaMensajes = mysqlTable("oficinaMensajes", {
+  id: int("id").autoincrement().primaryKey(),
+  agenteId: int("agenteId").notNull(),
+  rol: mysqlEnum("rol", ["user", "assistant"]).notNull(),
+  contenido: text("contenido").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (table) => ({
+  agenteIdx: index("oficinaMensajes_agente_idx").on(table.agenteId),
+}));
+export type OficinaMensaje = typeof oficinaMensajes.$inferSelect;
+export type InsertOficinaMensaje = typeof oficinaMensajes.$inferInsert;
+
+/** Algo que un agente detectó y necesita que Arlex vea/decida — una tarea
+ * represada, un correo publicitario para borrar (entregas futuras), etc.
+ * Mientras haya alguna "pendiente" de un agente, este queda con la mano
+ * levantada y dispara la notificación de voz. `tipo`+`refId` identifican
+ * el hallazgo de forma estable para no duplicarlo en cada revisión. */
+export const oficinaSolicitudes = mysqlTable("oficinaSolicitudes", {
+  id: int("id").autoincrement().primaryKey(),
+  agenteId: int("agenteId").notNull(),
+  tipo: varchar("tipo", { length: 60 }).notNull(),
+  refId: int("refId"),
+  titulo: varchar("titulo", { length: 255 }).notNull(),
+  detalle: text("detalle"),
+  severidad: mysqlEnum("severidad", ["info", "atencion", "urgente"]).default("info").notNull(),
+  estado: mysqlEnum("estado", ["pendiente", "atendida", "descartada"]).default("pendiente").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  resueltaAt: timestamp("resueltaAt"),
+}, (table) => ({
+  agenteIdx: index("oficinaSolicitudes_agente_idx").on(table.agenteId),
+  tipoRefIdx: index("oficinaSolicitudes_tipoRef_idx").on(table.tipo, table.refId),
+}));
+export type OficinaSolicitud = typeof oficinaSolicitudes.$inferSelect;
+export type InsertOficinaSolicitud = typeof oficinaSolicitudes.$inferInsert;
+
+/** Bitácora de cada corrida de análisis de un agente (manual por ahora,
+ * vía "Revisar ahora" — la revisión automática por cron se conecta en una
+ * entrega posterior). */
+export const oficinaRevisiones = mysqlTable("oficinaRevisiones", {
+  id: int("id").autoincrement().primaryKey(),
+  agenteId: int("agenteId").notNull(),
+  iniciadaAt: timestamp("iniciadaAt").defaultNow().notNull(),
+  finalizadaAt: timestamp("finalizadaAt"),
+  estado: mysqlEnum("estado", ["ok", "error"]).default("ok").notNull(),
+  resumen: text("resumen"),
+  solicitudesCreadas: int("solicitudesCreadas").default(0).notNull(),
+  error: text("error"),
+}, (table) => ({
+  agenteIdx: index("oficinaRevisiones_agente_idx").on(table.agenteId),
+}));
+export type OficinaRevision = typeof oficinaRevisiones.$inferSelect;
+export type InsertOficinaRevision = typeof oficinaRevisiones.$inferInsert;
+
+/** Cuentas de cobro para clientes GENERALES (empresas, distinto de las de
+ * Renta Persona Natural en rentaCuentasCobro) — prefijo propio "AP",
+ * consecutivo que continúa el que se llevaba en el sistema anterior
+ * (FoxPro), ya iba en 638 antes de existir esta tabla (ver
+ * getSiguienteNumeroCuentaCobroCliente en db.ts). */
+export const cuentasCobroClientes = mysqlTable("cuentasCobroClientes", {
+  id: int("id").autoincrement().primaryKey(),
+  clientId: int("clientId").notNull(),
+  prefijo: varchar("prefijo", { length: 10 }).default("AP").notNull(),
+  numero: int("numero").notNull(),
+  fecha: timestamp("fecha").defaultNow().notNull(),
+  detalle: text("detalle").notNull(),
+  valor: double("valor").notNull(),
+  fileKey: varchar("fileKey", { length: 500 }),
+  generadoPorId: int("generadoPorId").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (table) => ({
+  clientIdx: index("cuentasCobroClientes_client_idx").on(table.clientId),
+  numeroIdx: uniqueIndex("cuentasCobroClientes_numero_idx").on(table.prefijo, table.numero),
+}));
+export type CuentaCobroCliente = typeof cuentasCobroClientes.$inferSelect;
+export type InsertCuentaCobroCliente = typeof cuentasCobroClientes.$inferInsert;
