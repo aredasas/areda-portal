@@ -1087,3 +1087,92 @@ export const rentaCuentasCobro = mysqlTable("rentaCuentasCobro", {
 export type RentaCuentaCobro = typeof rentaCuentasCobro.$inferSelect;
 export type InsertRentaCuentaCobro = typeof rentaCuentasCobro.$inferInsert;
 
+
+/** ---- Módulo Oficina — agentes de IA para Arlex (menú restringido a su
+ * cédula, no a "admin" en general — ver assertOficinaAccess en routers.ts).
+ * Primer agente: "Estadista de Tareas" (analiza tasks/taxDeadlines de
+ * Areda Work, sin acceso externo). Agentes de correo y de desarrollo se
+ * suman en entregas posteriores, reutilizando este mismo esquema. */
+
+/** Un agente de la Oficina — su perfil configurable y su estado visible
+ * en la escena (libre = sin pendientes; esperando = tiene solicitudes sin
+ * atender, mano levantada en la UI; error = su última revisión falló). */
+export const oficinaAgentes = mysqlTable("oficinaAgentes", {
+  id: int("id").autoincrement().primaryKey(),
+  /** Identificador estable interno (ej. "estadista_tareas") — el nombre
+   * visible sí lo puede cambiar Arlex desde Configuración. */
+  slug: varchar("slug", { length: 40 }).notNull().unique(),
+  nombre: varchar("nombre", { length: 100 }).notNull(),
+  tipo: mysqlEnum("tipo", ["estadista_tareas", "correo", "desarrollo"]).notNull(),
+  estado: mysqlEnum("estado", ["libre", "trabajando", "esperando", "error"]).default("libre").notNull(),
+  personalidad: text("personalidad"),
+  objetivo: text("objetivo"),
+  especialidad: text("especialidad"),
+  criterioTerminado: text("criterioTerminado"),
+  esfuerzo: mysqlEnum("esfuerzo", ["low", "medium", "high"]).default("medium").notNull(),
+  /** false = "próximamente", ocupa un escritorio pero no se puede abrir
+   * todavía (agentes de correo/desarrollo antes de su propia entrega). */
+  activo: boolean("activo").default(true).notNull(),
+  ultimaRevisionAt: timestamp("ultimaRevisionAt"),
+  ultimoErrorMensaje: text("ultimoErrorMensaje"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+export type OficinaAgente = typeof oficinaAgentes.$inferSelect;
+export type InsertOficinaAgente = typeof oficinaAgentes.$inferInsert;
+
+/** Historial de chat de Arlex con cada agente — conversación simple de
+ * turnos (no hay sesión persistente tipo Codex; cada mensaje reenvía el
+ * historial reciente como contexto al invocar la IA). */
+export const oficinaMensajes = mysqlTable("oficinaMensajes", {
+  id: int("id").autoincrement().primaryKey(),
+  agenteId: int("agenteId").notNull(),
+  rol: mysqlEnum("rol", ["user", "assistant"]).notNull(),
+  contenido: text("contenido").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (table) => ({
+  agenteIdx: index("oficinaMensajes_agente_idx").on(table.agenteId),
+}));
+export type OficinaMensaje = typeof oficinaMensajes.$inferSelect;
+export type InsertOficinaMensaje = typeof oficinaMensajes.$inferInsert;
+
+/** Algo que un agente detectó y necesita que Arlex vea/decida — una tarea
+ * represada, un correo publicitario para borrar (entregas futuras), etc.
+ * Mientras haya alguna "pendiente" de un agente, este queda con la mano
+ * levantada y dispara la notificación de voz. `tipo`+`refId` identifican
+ * el hallazgo de forma estable para no duplicarlo en cada revisión. */
+export const oficinaSolicitudes = mysqlTable("oficinaSolicitudes", {
+  id: int("id").autoincrement().primaryKey(),
+  agenteId: int("agenteId").notNull(),
+  tipo: varchar("tipo", { length: 60 }).notNull(),
+  refId: int("refId"),
+  titulo: varchar("titulo", { length: 255 }).notNull(),
+  detalle: text("detalle"),
+  severidad: mysqlEnum("severidad", ["info", "atencion", "urgente"]).default("info").notNull(),
+  estado: mysqlEnum("estado", ["pendiente", "atendida", "descartada"]).default("pendiente").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  resueltaAt: timestamp("resueltaAt"),
+}, (table) => ({
+  agenteIdx: index("oficinaSolicitudes_agente_idx").on(table.agenteId),
+  tipoRefIdx: index("oficinaSolicitudes_tipoRef_idx").on(table.tipo, table.refId),
+}));
+export type OficinaSolicitud = typeof oficinaSolicitudes.$inferSelect;
+export type InsertOficinaSolicitud = typeof oficinaSolicitudes.$inferInsert;
+
+/** Bitácora de cada corrida de análisis de un agente (manual por ahora,
+ * vía "Revisar ahora" — la revisión automática por cron se conecta en una
+ * entrega posterior). */
+export const oficinaRevisiones = mysqlTable("oficinaRevisiones", {
+  id: int("id").autoincrement().primaryKey(),
+  agenteId: int("agenteId").notNull(),
+  iniciadaAt: timestamp("iniciadaAt").defaultNow().notNull(),
+  finalizadaAt: timestamp("finalizadaAt"),
+  estado: mysqlEnum("estado", ["ok", "error"]).default("ok").notNull(),
+  resumen: text("resumen"),
+  solicitudesCreadas: int("solicitudesCreadas").default(0).notNull(),
+  error: text("error"),
+}, (table) => ({
+  agenteIdx: index("oficinaRevisiones_agente_idx").on(table.agenteId),
+}));
+export type OficinaRevision = typeof oficinaRevisiones.$inferSelect;
+export type InsertOficinaRevision = typeof oficinaRevisiones.$inferInsert;

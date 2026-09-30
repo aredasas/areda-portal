@@ -3,8 +3,18 @@ import crypto from "crypto";
 
 // Cédula de Arlex — se reutiliza para restringir a él puntualmente
 // funciones que no deben quedar abiertas a cualquier administrador
-// (Asistencia, y eliminar cuentas de cobro en Renta PN).
+// (Asistencia, eliminar cuentas de cobro en Renta PN, y todo el módulo
+// Oficina — ver assertOficinaAccess).
 const ASISTENCIA_AUTHORIZED_CEDULA = "5820262";
+
+// Módulo Oficina — a diferencia de Renta PN (cualquier admin) o Asistencia
+// (una cédula puntual pero rol libre), este menú completo es SOLO para
+// Arlex por pedido explícito suyo: "solo visible al usuario Arlex".
+function assertOficinaAccess(cedula: string | null | undefined) {
+  if (cedula !== ASISTENCIA_AUTHORIZED_CEDULA) {
+    throw new TRPCError({ code: "FORBIDDEN", message: "No autorizado para el módulo Oficina" });
+  }
+}
 
 // Módulo Renta PN — restringido a administradores (cualquiera, no solo
 // una cédula puntual) por pedido explícito de Arlex.
@@ -94,6 +104,7 @@ import { generarAnexoIva, generarAnexoIvaPdf } from "./informesIvaAnexo";
 import * as rentaDb from "./rentaDb";
 import { storagePut, storageGetSignedUrl, storageGetBuffer } from "./storage";
 import { generarCuentaCobroPdf } from "./rentaCuentaCobro";
+import * as oficinaDb from "./oficinaDb";
 import { invokeLLM } from "./_core/llm";
 import { isDriveConfigured, extractFolderIdFromUrl, testFolderAccess, listSubfoldersRecursive, listAllFilesRecursive, uploadFileToDrive, resolveUploadFolder } from "./googleDrive";
 import { sdk } from "./_core/sdk";
@@ -3431,6 +3442,77 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           await db.eliminarDependiente(input.id);
           return { success: true };
         }),
+    }),
+  }),
+
+  // ---- Módulo Oficina — agentes de IA, solo para Arlex ----
+  // Primera entrega: solo el agente "Estadista de Tareas" (tipo
+  // "estadista_tareas") está activo y operativo. Los agentes de correo y
+  // desarrollo existen como filas (escritorios "próximamente" en la UI)
+  // pero sus propios endpoints se agregan cuando se conecten.
+  oficina: router({
+    agentes: router({
+      list: protectedProcedure.query(async ({ ctx }) => {
+        assertOficinaAccess(ctx.user.cedula);
+        return oficinaDb.listarAgentes();
+      }),
+      actualizar: protectedProcedure
+        .input(z.object({
+          id: z.number(),
+          nombre: z.string().min(1).optional(),
+          personalidad: z.string().optional(),
+          objetivo: z.string().optional(),
+          especialidad: z.string().optional(),
+          criterioTerminado: z.string().optional(),
+          esfuerzo: z.enum(["low", "medium", "high"]).optional(),
+        }))
+        .mutation(async ({ input, ctx }) => {
+          assertOficinaAccess(ctx.user.cedula);
+          const { id, ...data } = input;
+          await oficinaDb.actualizarAgente(id, data);
+          return { success: true };
+        }),
+    }),
+    chat: router({
+      listar: protectedProcedure
+        .input(z.object({ agenteId: z.number() }))
+        .query(async ({ input, ctx }) => {
+          assertOficinaAccess(ctx.user.cedula);
+          return oficinaDb.listarMensajes(input.agenteId);
+        }),
+      enviar: protectedProcedure
+        .input(z.object({ agenteId: z.number(), mensaje: z.string().min(1) }))
+        .mutation(async ({ input, ctx }) => {
+          assertOficinaAccess(ctx.user.cedula);
+          return oficinaDb.enviarMensajeChat(input.agenteId, input.mensaje);
+        }),
+    }),
+    solicitudes: router({
+      listar: protectedProcedure
+        .input(z.object({ agenteId: z.number().optional() }))
+        .query(async ({ input, ctx }) => {
+          assertOficinaAccess(ctx.user.cedula);
+          return oficinaDb.listarSolicitudes(input.agenteId);
+        }),
+      resolver: protectedProcedure
+        .input(z.object({ id: z.number(), accion: z.enum(["atender", "descartar"]) }))
+        .mutation(async ({ input, ctx }) => {
+          assertOficinaAccess(ctx.user.cedula);
+          await oficinaDb.resolverSolicitud(input.id, input.accion);
+          return { success: true };
+        }),
+    }),
+    estadista: router({
+      ultimaRevision: protectedProcedure
+        .input(z.object({ agenteId: z.number() }))
+        .query(async ({ input, ctx }) => {
+          assertOficinaAccess(ctx.user.cedula);
+          return oficinaDb.ultimaRevision(input.agenteId);
+        }),
+      revisarAhora: protectedProcedure.mutation(async ({ ctx }) => {
+        assertOficinaAccess(ctx.user.cedula);
+        return oficinaDb.revisarAhoraEstadista();
+      }),
     }),
   }),
 });

@@ -13,6 +13,7 @@ import Documentos from "./pages/Documentos";
 import Configuracion from "./pages/Configuracion";
 import Revision from "./pages/Revision";
 import Asistencia from "./pages/Asistencia";
+import Oficina from "./pages/Oficina";
 import Informes from "./pages/Informes";
 import RentaPersonaNatural from "./pages/RentaPersonaNatural";
 import Tablero from "./pages/Tablero";
@@ -31,6 +32,7 @@ function Router() {
       <Route path={"/configuracion"} component={Configuracion} />
       <Route path={"/revision"} component={Revision} />
       <Route path={"/asistencia"} component={Asistencia} />
+      <Route path={"/oficina"} component={Oficina} />
       <Route path={"/informes"} component={Informes} />
       <Route path={"/renta-persona-natural"} component={RentaPersonaNatural} />
       <Route path={"/tablero"} component={Tablero} />

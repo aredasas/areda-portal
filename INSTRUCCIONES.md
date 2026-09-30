@@ -1,63 +1,111 @@
-# Fix: ícono para eliminar cuentas de cobro (Renta PN → pestaña CTA), solo para Arlex
+# Módulo Oficina — Fase 1: Estadista de Tareas
 
-## Qué se agregó
-En la pestaña **CTA** de Renta Persona Natural, cada cuenta de cobro generada
-ahora muestra un ícono de eliminar (🗑) al final de la fila, junto al botón de
-descarga. Al hacer clic pide confirmación y borra el registro definitivamente.
+Primera entrega del módulo **Oficina** que hablamos: un menú nuevo, **visible
+solo para tu usuario** (cédula 5.820.262 — el mismo control que ya usan
+Asistencia y "eliminar cuenta de cobro"), con la escena gráfica del kit de
+Pulpo Starter y el primer agente funcionando de verdad: el **Estadista de
+Tareas**.
 
-**El ícono solo aparece para Arlex** — no para cualquier otro administrador
-que también tenga acceso al módulo Renta PN. Se usó la misma cédula con la
-que ya está restringida la pestaña "Asistencia" y la "Zona de riesgo" de
-limpiar datos de Liquidación, así que no se creó ningún mecanismo nuevo de
-identificación.
+Los otros dos agentes (Correo y Monitor de Desarrollo) ya aparecen como
+escritorios "próximamente" en la oficina, para que la escena se vea completa,
+pero todavía no hacen nada — van en la siguiente entrega, como acordamos.
 
-## Dónde quedó la restricción (dos capas, no solo visual)
-1. **Frontend** (`RentaPersonaNatural.tsx`): el botón no se renderiza si el
-   usuario logueado no tiene la cédula de Arlex — así ni siquiera lo ve otro
-   administrador.
-2. **Backend** (`routers.ts`, endpoint `renta.cuentasCobro.eliminar`): aunque
-   alguien intente llamar la API directamente, el servidor vuelve a validar
-   la misma cédula y rechaza la solicitud si no coincide. Esta es la
-   protección real — la del frontend es solo para que la opción ni se
-   muestre.
+## Qué puedes hacer ya
 
-## Archivos modificados
-- `client/src/pages/RentaPersonaNatural.tsx` — botón "Eliminar" en la lista
-  de cuentas de cobro (visible solo para Arlex), con confirmación antes de
-  borrar.
-- `server/routers.ts` — nuevo endpoint `renta.cuentasCobro.eliminar`,
-  restringido a la cédula de Arlex.
-- `server/db.ts` — nueva función `eliminarRentaCuentaCobro(id)`.
-
-Se incluye `cambios.diff` con el detalle línea por línea si quieres revisarlo
-antes de aplicar.
-
-## Importante
-- Solo se borra el **registro** de la cuenta de cobro (deja de aparecer en el
-  listado y se libera su número de folio para reutilizarse). El PDF ya
-  generado queda igual en el almacenamiento — no se borra el archivo, igual
-  que pasa con el resto de documentos de la aplicación.
-- La acción es irreversible: una vez confirmado el borrado, no hay forma de
-  recuperar el registro desde la aplicación.
-- No requiere ninguna migración de base de datos — no se tocó el esquema.
-
-## Validación realizada
-- `tsc --noEmit`: mismo número de errores preexistentes (33) antes y después
-  del cambio — no se introdujeron errores nuevos de TypeScript.
-- `diff` contra el repositorio original: solo se modificaron los 3 archivos
-  listados arriba, sin cambios accidentales en ningún otro lugar.
+1. Entra a **Oficina** en el menú lateral (solo tú la ves).
+2. Verás la oficina con el escritorio del Estadista al frente. Haz clic
+   sobre el personaje o el escritorio para abrir su ventana, con 3 pestañas:
+   - **Chat**: puedes preguntarle directamente, ej. *"¿qué tareas están
+     represadas ahora mismo?"* — responde con IA (Claude, la misma que ya usa
+     el resto del portal) basándose en los hallazgos reales de la última
+     revisión.
+   - **Solicitudes**: historial de todo lo que este agente ha encontrado.
+   - **Configuración**: puedes cambiarle el nombre, la personalidad, el
+     objetivo, la especialidad, y su "esfuerzo de razonamiento" (Piensa
+     poco / Equilibrado / Piensa mucho) — igual que planteaba el kit
+     original.
+3. Botón **"Revisar ahora"**: corre el análisis en el momento. Revisa TODAS
+   las tareas activas de Areda Work y detecta:
+   - **Vencidas**: no completadas y con fecha límite ya pasada.
+   - **Represadas**: devueltas para corrección o para completar, y sin
+     movimiento hace más de 5 días — se quedaron "colgadas".
+   - **Olvidadas**: sin fecha límite, pendientes o en progreso, sin tocarse
+     hace más de 10 días.
+   - Además calcula el **% de cumplimiento a tiempo por colaborador**
+     (se lo puedes preguntar en el chat, o pedírselo en el resumen).
+4. Cada hallazgo nuevo aparece como una **solicitud pendiente** — el
+   personaje levanta la mano en la oficina y también se ve en el panel de
+   abajo. Puedes marcarla como **atendida** (✓) o **descartarla** (✗). Si el
+   problema sigue existiendo en la próxima revisión, vuelve a aparecer —
+   atender o descartar aquí no cambia nada en Tareas, es solo para que no te
+   pierdas el hallazgo.
+5. **Notificaciones de voz**: botón arriba a la derecha, "Voz
+   desactivada/activada". Actívalo y, mientras dejes esa pestaña de Areda
+   Work abierta (aunque esté minimizada o en segundo plano), el navegador
+   leerá en voz alta cada hallazgo NUEVO que aparezca — sin costo ni cuenta
+   externa, usa la voz integrada de Chrome. Por ahora solo suena si tienes la
+   pestaña abierta cuando "Revisar ahora" se ejecuta (todavía no hay revisión
+   automática en segundo plano — ver "Pendiente" abajo).
 
 ## Cómo aplicar
-1. Reemplaza estos 3 archivos en tu repositorio por los de este paquete
-   (mismas rutas):
-   - `client/src/pages/RentaPersonaNatural.tsx`
-   - `server/db.ts`
+
+1. Reemplaza/agrega estos archivos en tu repositorio (mismas rutas):
+   - `drizzle/schema.ts`
+   - `drizzle/0062_colossal_victor_mancha.sql` (archivo nuevo)
+   - `drizzle/meta/0062_snapshot.json` (archivo nuevo)
+   - `drizzle/meta/_journal.json`
    - `server/routers.ts`
-2. Confirma los cambios y súbelos:
+   - `server/oficinaDb.ts` (archivo nuevo)
+   - `client/src/App.tsx`
+   - `client/src/components/DashboardLayout.tsx`
+   - `client/src/pages/Oficina.tsx` (archivo nuevo)
+   - `client/public/oficina/*.png` (9 imágenes nuevas — la carpeta completa)
+2. Confirma y sube los cambios:
    ```
-   git add client/src/pages/RentaPersonaNatural.tsx server/db.ts server/routers.ts
-   git commit -m "Fead Renta PN, icono para eliminar cuentas de cobro restringido a Arlex"
+   git add drizzle client/src/App.tsx client/src/components/DashboardLayout.tsx client/src/pages/Oficina.tsx client/public/oficina server/routers.ts server/oficinaDb.ts
+   git commit -m "Modulo Oficina: agente Estadista de Tareas (fase 1)"
    git push
    ```
-3. Railway desplegará automáticamente al detectar el push. No hace falta
-   correr ninguna migración en la consola de Railway.
+3. **Corre la migración en la consola de Railway** (crea las 4 tablas nuevas —
+   no toca ninguna tabla existente):
+   ```
+   npx drizzle-kit migrate
+   ```
+4. No hace falta ninguna variable de entorno nueva — el agente usa el mismo
+   `ANTHROPIC_API_KEY` que ya está configurado y que usa el resto del portal
+   (Asistente IA, extracción DIAN, etc.).
+
+## Validación realizada
+
+- `tsc --noEmit`: mismo número de errores preexistentes (33) antes y después
+  — no se introdujo ningún error nuevo.
+- `vite build`: compila limpio, sin advertencias nuevas.
+- Migración generada con `drizzle-kit generate`: 100% aditiva — solo crea
+  tablas nuevas (`oficinaAgentes`, `oficinaMensajes`, `oficinaSolicitudes`,
+  `oficinaRevisiones`), no modifica ninguna existente.
+- `diff` contra el repositorio original: confirma que solo cambiaron los
+  archivos listados arriba, sin tocar nada del resto de la aplicación.
+- No pude levantar una base de datos real en este entorno para probar el
+  flujo de punta a punta contra MySQL (sin acceso a Docker/apt aquí) — la
+  lógica se revisó a mano con cuidado, pero te recomiendo darle "Revisar
+  ahora" una primera vez después de desplegar y confirmar que los hallazgos
+  se vean coherentes con lo que tienes hoy en Tareas.
+
+## Qué falta (siguiente entrega, como acordamos)
+
+- **Revisión automática programada** (cron): por ahora el análisis solo
+  corre cuando tú le das "Revisar ahora". El backend ya tiene el patrón para
+  un job periódico (igual al que ya usan los recordatorios de vencimientos),
+  pero registrar ese cron contra tu servidor de Railway ya desplegado es un
+  paso aparte que prefiero hacer una vez confirmes que esta primera versión
+  funciona bien — así no dejamos algo corriendo solo sin que lo hayas visto
+  primero.
+- **Agente de Correo** (contacto@ e ibague@aredasas.com): pendiente de que
+  actives la delegación de dominio en Google Workspace para el Service
+  Account, como quedamos — te aviso cuando estemos listos para ese paso.
+- **Monitor de Desarrollo**: se conecta como tarea programada de Claude Code,
+  aparte de este módulo — entrega independiente.
+- Por ahora el Estadista analiza `tasks` (tareas) — si quieres que también
+  desglose `taxDeadlines` (vencimientos) por separado, dímelo y lo sumamos
+  (hoy los vencimientos con tarea generada automáticamente ya quedan
+  cubiertos indirectamente a través de esa tarea).
