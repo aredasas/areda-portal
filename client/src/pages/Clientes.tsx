@@ -11,8 +11,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Separator } from "@/components/ui/separator";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { trpc } from "@/lib/trpc";
-import { Building2, Plus, Upload, Loader2, Search, FileText, Sparkles, UserCheck, AlertCircle, FolderOpen } from "lucide-react";
+import { Building2, Plus, Upload, Loader2, Search, FileText, Sparkles, UserCheck, AlertCircle, FolderOpen, Receipt, Download, Trash2 } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
 import { toast } from "sonner";
 
@@ -301,6 +302,13 @@ export default function Clientes() {
         </Button>
       </div>
 
+      <Tabs defaultValue="clientes">
+        <TabsList>
+          <TabsTrigger value="clientes" className="gap-1.5"><Building2 className="w-3.5 h-3.5" /> Clientes</TabsTrigger>
+          <TabsTrigger value="cuentas_cobro" className="gap-1.5"><Receipt className="w-3.5 h-3.5" /> Cuentas de Cobro</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="clientes" className="mt-4 space-y-4">
       {/* Search */}
       <div className="flex items-center gap-4">
         <div className="relative max-w-sm flex-1">
@@ -383,6 +391,12 @@ export default function Clientes() {
           )}
         </CardContent>
       </Card>
+        </TabsContent>
+
+        <TabsContent value="cuentas_cobro" className="mt-4">
+          <CuentasCobroClientesTab />
+        </TabsContent>
+      </Tabs>
 
       {/* Client Form Dialog */}
       <Dialog open={showForm} onOpenChange={(open) => { if (!open) { setShowForm(false); resetForm(); } }}>
@@ -561,5 +575,159 @@ export default function Clientes() {
       </Dialog>
     </div>
     </DashboardLayout>
+  );
+}
+
+/** Pestaña "Cuentas de Cobro" — misma dinámica que la de Renta PN (CTA),
+ * pero para cualquier cliente general de la firma. Prefijo propio "AP",
+ * consecutivo que sigue el que se llevaba en el sistema anterior. */
+function CuentasCobroClientesTab() {
+  const { user } = useAuth();
+  // Igual que en Renta PN: cualquier admin puede generar, pero eliminar
+  // queda restringido a Arlex puntualmente.
+  const puedeEliminar = user?.cedula === "5820262";
+
+  const utils = trpc.useUtils();
+  const clientesQuery = trpc.clients.list.useQuery({ incluirInactivos: false });
+  const listaQuery = trpc.clients.cuentasCobro.listar.useQuery();
+
+  const clientesConCta = new Set((listaQuery.data || []).map((cta: any) => cta.clientId));
+
+  const [clientId, setClientId] = useState<string>("");
+  const [detalle, setDetalle] = useState("");
+  const [valor, setValor] = useState("");
+
+  const siguienteNumeroQuery = trpc.clients.cuentasCobro.siguienteNumero.useQuery({ prefijo: "AP" });
+
+  const clienteSeleccionado = (clientesQuery.data || []).find((c: any) => String(c.id) === clientId);
+
+  const guardarMutation = trpc.clients.cuentasCobro.guardar.useMutation({
+    onSuccess: (data) => {
+      toast.success(`Cuenta de cobro AP-${String(data.numero).padStart(4, "0")} generada`);
+      if (data.signedUrl) window.open(data.signedUrl, "_blank");
+      setDetalle(""); setValor("");
+      utils.clients.cuentasCobro.listar.invalidate();
+      utils.clients.cuentasCobro.siguienteNumero.invalidate();
+    },
+    onError: (err) => toast.error(err.message || "No se pudo generar la cuenta de cobro"),
+  });
+
+  const eliminarMutation = trpc.clients.cuentasCobro.eliminar.useMutation({
+    onSuccess: () => {
+      toast.success("Cuenta de cobro eliminada");
+      utils.clients.cuentasCobro.listar.invalidate();
+    },
+    onError: (err) => toast.error(err.message || "No se pudo eliminar la cuenta de cobro"),
+  });
+
+  const fmt = (n: number) => `$${Math.round(n).toLocaleString("es-CO")}`;
+
+  const handleGuardar = () => {
+    if (!clientId || !detalle.trim() || !valor) {
+      toast.error("Completa el cliente, el detalle y el valor");
+      return;
+    }
+    guardarMutation.mutate({
+      clientId: Number(clientId), prefijo: "AP",
+      detalle: detalle.trim(), valor: Number(valor),
+    });
+  };
+
+  const handleEliminar = (cta: any) => {
+    if (!window.confirm(`¿Eliminar la cuenta de cobro ${cta.prefijo} - ${String(cta.numero).padStart(4, "0")} de ${cta.clienteNombre}? Esta acción no se puede deshacer.`)) return;
+    eliminarMutation.mutate({ id: cta.id });
+  };
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardContent className="p-4 space-y-3">
+          <p className="text-base font-semibold flex items-center gap-1.5"><Receipt className="w-4 h-4" /> Generar cuenta de cobro</p>
+          <div className="grid sm:grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label className="text-xs">Cliente</Label>
+              <Select value={clientId} onValueChange={setClientId}>
+                <SelectTrigger className="h-9 text-sm"><SelectValue placeholder="Elegir cliente..." /></SelectTrigger>
+                <SelectContent>
+                  {(clientesQuery.data || []).map((c: any) => (
+                    <SelectItem key={c.id} value={String(c.id)}>
+                      {clientesConCta.has(c.id) ? "✓ " : ""}{c.razonSocial}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs">Próximo folio</Label>
+              <Input value={siguienteNumeroQuery.data ? `AP - ${String(siguienteNumeroQuery.data.numero).padStart(4, "0")}` : "..."} disabled className="h-9 text-sm bg-muted" />
+            </div>
+          </div>
+
+          {clientId && (
+            <div className="rounded-md border bg-muted/30 p-3 text-sm space-y-1">
+              <div className="flex justify-between"><span className="text-muted-foreground">Cliente</span><span className="font-medium">{clienteSeleccionado?.razonSocial}</span></div>
+              <div className="flex justify-between"><span className="text-muted-foreground">NIT</span><span>{clienteSeleccionado?.nit}{clienteSeleccionado?.digitoVerificacion ? `-${clienteSeleccionado.digitoVerificacion}` : ""}</span></div>
+              <div className="flex justify-between"><span className="text-muted-foreground">Dirección</span><span>{clienteSeleccionado?.direccion || "sin registrar"}</span></div>
+              <div className="flex justify-between"><span className="text-muted-foreground">Teléfono</span><span>{clienteSeleccionado?.telefono || "sin registrar"}</span></div>
+            </div>
+          )}
+
+          <div className="grid sm:grid-cols-3 gap-3">
+            <div className="sm:col-span-2 space-y-1.5">
+              <Label className="text-xs">Detalle</Label>
+              <Input value={detalle} onChange={(e) => setDetalle(e.target.value)} placeholder="Ej. Honorarios contables Septiembre 2026" className="h-9 text-sm" />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs">Valor</Label>
+              <Input type="number" value={valor} onChange={(e) => setValor(e.target.value)} placeholder="0" className="h-9 text-sm" />
+            </div>
+          </div>
+
+          <Button onClick={handleGuardar} disabled={guardarMutation.isPending} className="bg-[#EDA011] hover:bg-[#d48f0f] text-white">
+            {guardarMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Receipt className="w-4 h-4 mr-2" />}
+            Guardar y generar
+          </Button>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardContent className="p-4">
+          <p className="text-base font-semibold mb-3">Cuentas de cobro generadas</p>
+          {listaQuery.isLoading ? (
+            <div className="flex justify-center py-6"><Loader2 className="w-5 h-5 animate-spin" /></div>
+          ) : !listaQuery.data || listaQuery.data.length === 0 ? (
+            <p className="text-sm text-muted-foreground">Todavía no se ha generado ninguna cuenta de cobro.</p>
+          ) : (
+            <div className="space-y-2">
+              {listaQuery.data.map((cta: any) => (
+                <div key={cta.id} className="flex items-center justify-between gap-2 border-b pb-2 last:border-b-0 text-sm">
+                  <div className="flex-1 min-w-0">
+                    <p className="font-medium">{cta.prefijo} - {String(cta.numero).padStart(4, "0")} · {cta.clienteNombre}</p>
+                    <p className="text-xs text-muted-foreground truncate">{cta.detalle}</p>
+                  </div>
+                  <span className="shrink-0 text-sm font-medium">{fmt(cta.valor)}</span>
+                  {cta.signedUrl && (
+                    <Button size="sm" variant="outline" className="shrink-0 h-8" onClick={() => window.open(cta.signedUrl, "_blank")}>
+                      <Download className="w-3.5 h-3.5" />
+                    </Button>
+                  )}
+                  {puedeEliminar && (
+                    <Button
+                      size="sm" variant="outline"
+                      className="shrink-0 h-8 text-red-600 hover:bg-red-50 hover:text-red-700"
+                      onClick={() => handleEliminar(cta)}
+                      disabled={eliminarMutation.isPending}
+                      title="Eliminar cuenta de cobro"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </Button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
   );
 }
