@@ -1,0 +1,3675 @@
+import { COOKIE_NAME } from "@shared/const";
+import crypto from "crypto";
+
+// Cédula de Arlex — se reutiliza para restringir a él puntualmente
+// funciones que no deben quedar abiertas a cualquier administrador
+// (Asistencia, eliminar cuentas de cobro en Renta PN, y todo el módulo
+// Oficina — ver assertOficinaAccess).
+const ASISTENCIA_AUTHORIZED_CEDULA = "5820262";
+
+// Módulo Oficina — a diferencia de Renta PN (cualquier admin) o Asistencia
+// (una cédula puntual pero rol libre), este menú completo es SOLO para
+// Arlex por pedido explícito suyo: "solo visible al usuario Arlex".
+function assertOficinaAccess(cedula: string | null | undefined) {
+  if (cedula !== ASISTENCIA_AUTHORIZED_CEDULA) {
+    throw new TRPCError({ code: "FORBIDDEN", message: "No autorizado para el módulo Oficina" });
+  }
+}
+
+// Módulo Renta PN — restringido a administradores (cualquiera, no solo
+// una cédula puntual) por pedido explícito de Arlex.
+function assertRentaPNAccess(role: string | null | undefined) {
+  if (role !== "admin") {
+    throw new TRPCError({ code: "FORBIDDEN", message: "No autorizado para el módulo Renta PN" });
+  }
+}
+
+// Módulo Informes — visible para cualquier usuario autenticado; los que
+// no son administradores solo pueden operar sobre sus clientes asignados
+// (mismo campo `managerId` que usa el resto de la app). Se valida por
+// cliente en cada endpoint que reciba un clienteId.
+async function assertClienteAccesibleInformes(ctx: { user: { id: number; role: string | null } }, clienteId: number) {
+  if (ctx.user.role === "admin") return;
+  const cliente = await db.getClientById(clienteId);
+  if (!cliente || cliente.managerId !== ctx.user.id) {
+    throw new TRPCError({ code: "FORBIDDEN", message: "No tienes acceso a este cliente." });
+  }
+}
+
+/** Best-effort copy of evidence files into the client's Drive folder.
+ * R2 remains the source of truth for the app itself (viewing/downloading
+ * evidence always works even if this fails) — this just also places a copy
+ * where the firm already expects to find client documents. Never throws:
+ * callers fire this without awaiting, so a Drive hiccup never blocks
+ * completing a task or deadline. */
+async function pushEvidenceToDrive(
+  clientId: number,
+  subfolderName: string | undefined,
+  files: { url: string; key?: string; fileName: string; contentType?: string }[],
+  subfolderId?: string
+) {
+  if (!isDriveConfigured()) {
+    console.warn("[Google Drive] Saltado: las variables de entorno no están configuradas.");
+    return;
+  }
+  const client = await db.getClientById(clientId);
+  if (!client?.driveFolderUrl) {
+    console.warn(`[Google Drive] Saltado: el cliente ${clientId} no tiene driveFolderUrl configurado.`);
+    return;
+  }
+  const rootFolderId = extractFolderIdFromUrl(client.driveFolderUrl);
+  if (!rootFolderId) {
+    console.warn(`[Google Drive] Saltado: no se pudo extraer el ID de carpeta de la URL "${client.driveFolderUrl}".`);
+    return;
+  }
+
+  console.log(`[Google Drive] Subiendo ${files.length} archivo(s) para el cliente ${clientId}, carpeta raíz ${rootFolderId}, subcarpeta "${subfolderName || subfolderId || "(ninguna)"}"`);
+  // If the person picked an existing (possibly nested) folder from the real
+  // Drive listing, we already have its exact id — no need to search/create.
+  const targetFolderId = subfolderId || await resolveUploadFolder(rootFolderId, subfolderName);
+  console.log(`[Google Drive] Carpeta destino resuelta: ${targetFolderId}`);
+
+  for (const file of files) {
+    // file.url is a relative "/files/..." path meant for the browser, not a
+    // fetchable server-to-server URL — get a real signed R2 URL from the
+    // storage key instead (falling back to stripping the "/files/" prefix
+    // if the key wasn't passed through for some reason).
+    const storageKey = file.key || file.url.replace(/^\/files\//, "");
+    const signedUrl = await storageGetSignedUrl(storageKey);
+    const response = await fetch(signedUrl);
+    if (!response.ok) {
+      console.error(`[Google Drive] No se pudo descargar ${file.fileName} desde R2 (${response.status})`);
+      continue;
+    }
+    const buffer = Buffer.from(await response.arrayBuffer());
+    const uploaded = await uploadFileToDrive(targetFolderId, file.fileName, buffer, file.contentType || "application/octet-stream");
+    console.log(`[Google Drive] Subido correctamente: ${file.fileName} -> ${uploaded.webViewLink}`);
+  }
+}
+
+import { TRPCError } from "@trpc/server";
+import { getSessionCookieOptions } from "./_core/cookies";
+import { systemRouter } from "./_core/systemRouter";
+import { publicProcedure, protectedProcedure, adminProcedure, router } from "./_core/trpc";
+import { z } from "zod";
+import * as db from "./db";
+import * as informesDb from "./informesDb";
+import { generarReporteERI } from "./informesReportERI";
+import { generarReporteERM } from "./informesReportERM";
+import * as informesDian from "./informesDianDb";
+import * as informesGestionCliente from "./informesGestionClienteDb";
+import * as informesIva from "./informesIvaDb";
+import * as informesIvaCuentas from "./informesIvaCuentasDb";
+import { generarAnexoIva, generarAnexoIvaPdf } from "./informesIvaAnexo";
+import * as rentaDb from "./rentaDb";
+import { storagePut, storageGetSignedUrl, storageGetBuffer } from "./storage";
+import { generarCuentaCobroPdf } from "./rentaCuentaCobro";
+import { generarCuentaCobroClientePdf } from "./clienteCuentaCobroPdf";
+import * as oficinaDb from "./oficinaDb";
+import { invokeLLM } from "./_core/llm";
+import { isDriveConfigured, extractFolderIdFromUrl, testFolderAccess, listSubfoldersRecursive, listAllFilesRecursive, uploadFileToDrive, resolveUploadFolder } from "./googleDrive";
+import { sdk } from "./_core/sdk";
+import { ONE_YEAR_MS } from "@shared/const";
+import bcrypt from "bcryptjs";
+
+// In-memory job store for the DIAN calendar PDF extraction. Reading a full
+// calendar can take several minutes (one AI call per obligation, spaced out
+// to respect the API rate limit) — far too long for a single HTTP request to
+// survive proxies/load balancers. Instead, the request that starts the job
+// returns immediately with a jobId, and the client polls for progress.
+// Job data only needs to live for the few minutes the admin is waiting on
+// this screen, so in-memory (lost on restart) is an acceptable tradeoff here.
+type DianExtractionJob = {
+  status: "processing" | "completed" | "failed";
+  progress: { current: number; total: number; currentObligation: string };
+  result?: { entries: any[]; failedObligations: string[]; partialObligations: string[]; error: string | null };
+  error?: string;
+  startedAt: number;
+};
+
+const dianExtractionJobs = new Map<string, DianExtractionJob>();
+
+// Jobs older than this are dropped on next access so the map doesn't grow
+// unbounded if an admin never comes back to check on one.
+const JOB_MAX_AGE_MS = 30 * 60 * 1000; // 30 minutes
+
+function pruneOldExtractionJobs() {
+  const now = Date.now();
+  for (const [id, job] of dianExtractionJobs.entries()) {
+    if (now - job.startedAt > JOB_MAX_AGE_MS) dianExtractionJobs.delete(id);
+  }
+}
+
+async function runDianExtractionJob(jobId: string, fileKey: string, year: number) {
+  const job = dianExtractionJobs.get(jobId);
+  if (!job) return;
+
+  try {
+    const accessUrl = await storageGetSignedUrl(fileKey);
+    const activeObligations = await db.getAllTaxObligations();
+    job.progress.total = activeObligations.length;
+
+    const allEntries: any[] = [];
+    const failedObligations: string[] = [];
+    const partialObligations: string[] = [];
+
+    for (let i = 0; i < activeObligations.length; i++) {
+      const obl = activeObligations[i];
+      job.progress.current = i + 1;
+      job.progress.currentObligation = `${obl.code} (${obl.name})`;
+
+      const cuotasNote = obl.frequency === "anual" && obl.installments > 1 ? `, pagada en ${obl.installments} cuotas` : "";
+
+      const periodFormatHint = (() => {
+        switch (obl.frequency) {
+          case "mensual":
+            return `Mensual: un registro por cada mes ("${year}-01" a "${year}-12"), para cada dígito o rango de NIT que encuentre.`;
+          case "bimestral":
+            return `Bimestral: períodos "${year}-01-02", "${year}-03-04", "${year}-05-06", "${year}-07-08", "${year}-09-10", "${year}-11-12".`;
+          case "cuatrimestral":
+            return `Cuatrimestral: períodos "${year}-01-04", "${year}-05-08", "${year}-09-12".`;
+          case "semestral":
+            return `Semestral: períodos "${year}-01-06", "${year}-07-12".`;
+          case "anual":
+            return obl.installments > 1
+              ? `Anual con cuotas: use "${year}-cuota1", "${year}-cuota2"${obl.installments > 2 ? `, "${year}-cuota3"` : ""}, en el mismo orden en que aparecen las cuotas en el calendario (la primera cuota del año es cuota1, y así sucesivamente).`
+              : `Anual sin cuotas: un solo período, "${year}".`;
+          default:
+            return `Use "${year}" como período.`;
+        }
+      })();
+
+      let entries: any[] = [];
+      let lastError: unknown = null;
+
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        let jsonStr = "";
+        try {
+          const response = await invokeLLM({
+            max_tokens: 8000,
+            messages: [
+              {
+                role: "system",
+                content: `Eres un asistente experto en el calendario tributario de la DIAN (Colombia). Vas a recibir el PDF oficial del calendario tributario del año ${year}. Tu ÚNICA tarea es extraer las fechas de vencimiento de UNA sola obligación: "${obl.code}" (${obl.name}${cuotasNote}). Ignora completamente cualquier otra tabla u obligación del documento, aunque aparezcan cerca.
+
+Formato de agrupación por NIT — identifica cuál usa esta obligación específica en el documento:
+1. Un solo dígito del NIT (0 al 9): "lastDigitNit": "0" a "9", un registro por dígito.
+2. Últimos DOS dígitos del NIT en pares (ej. "01-02", "03-04"... "99-00"): "lastDigitNit": "01-02" (con guion, ambos dígitos con cero a la izquierda), un registro por cada par.
+3. Fecha única sin importar el NIT (tabla que diga "independientemente del número de identificación tributaria"): "lastDigitNit": "ALL", un solo registro.
+
+Formato del campo "period" para esta obligación: ${periodFormatHint}
+
+Nota: si una fecha cae en enero o febrero del año siguiente (ej. "Enero ${year + 1}"), regístrala igual bajo el año ${year}, ya que corresponde a ese período fiscal.
+
+Si NO encuentras la obligación "${obl.code}" en el documento, devuelve { "entries": [] }. NUNCA respondas con una explicación en texto — ni siquiera si no encuentras la obligación, tu respuesta completa debe ser solo el JSON.
+
+Devuelve ÚNICAMENTE un JSON con esta forma exacta, sin explicaciones ni markdown:
+{ "entries": [ { "obligationCode": "${obl.code}", "period": "...", "lastDigitNit": "...", "dueDate": "YYYY-MM-DD" } ] }`
+              },
+              {
+                role: "user",
+                content: [
+                  { type: "text" as const, text: `Extrae únicamente las fechas de "${obl.name}" (${obl.code}) del calendario tributario DIAN ${year}:` },
+                  { type: "file_url" as const, file_url: { url: accessUrl, mime_type: "application/pdf" } },
+                ],
+              },
+            ],
+          });
+
+          const rawContent = response.choices?.[0]?.message?.content || "";
+          const content = typeof rawContent === "string" ? rawContent : JSON.stringify(rawContent);
+          jsonStr = content;
+          if (content.includes("```")) {
+            const match = content.match(/```(?:json)?\s*([\s\S]*?)```/);
+            jsonStr = match ? match[1].trim() : content;
+          }
+
+          const parsed = JSON.parse(jsonStr);
+          entries = Array.isArray(parsed.entries) ? parsed.entries : [];
+          lastError = null;
+          break;
+        } catch (error) {
+          const salvaged = rescueEntriesFromTruncatedJson(jsonStr);
+          if (salvaged.length > 0) {
+            entries = salvaged;
+            lastError = null;
+            partialObligations.push(obl.code);
+            console.warn(`[DIAN Calendar Extraction] ${obl.code}: respuesta cortada, se rescataron ${salvaged.length} registros parciales.`);
+            break;
+          }
+
+          const lowerJson = jsonStr.toLowerCase();
+          const looksLikeNotFound = /no\s+(encontr|encuentr|aparece|est(a|á)\s+presente|se menciona|hay informaci)/i.test(lowerJson);
+          if (looksLikeNotFound) {
+            entries = [];
+            lastError = null;
+            console.warn(`[DIAN Calendar Extraction] ${obl.code}: la IA indicó que no encontró esta obligación en el documento.`);
+            break;
+          }
+
+          lastError = error;
+          const message = error instanceof Error ? error.message : String(error);
+          const isRateLimit = message.includes("429") || message.includes("rate_limit");
+          if (isRateLimit && attempt < 3) {
+            console.warn(`[DIAN Calendar Extraction] Rate limited on ${obl.code}, esperando antes de reintentar (intento ${attempt})...`);
+            await sleep(25000 * attempt);
+            continue;
+          }
+          break;
+        }
+      }
+
+      if (lastError) {
+        console.error(`[DIAN Calendar Extraction] Failed for ${obl.code}:`, lastError);
+        failedObligations.push(obl.code);
+      } else {
+        allEntries.push(...entries);
+      }
+
+      if (i < activeObligations.length - 1) {
+        await sleep(16000);
+      }
+    }
+
+    job.status = "completed";
+    job.result = {
+      entries: allEntries,
+      failedObligations,
+      partialObligations,
+      error: allEntries.length === 0
+        ? "No se pudo extraer ninguna fecha del PDF. Revise el archivo o intente con el formato CSV."
+        : null,
+    };
+  } catch (error) {
+    job.status = "failed";
+    job.error = error instanceof Error ? error.message : "Error inesperado procesando el PDF";
+    console.error("[DIAN Calendar Extraction] Job failed:", error);
+  }
+}
+
+export const appRouter = router({
+  system: systemRouter,
+
+  auth: router({
+    me: publicProcedure.query(opts => opts.ctx.user),
+    logout: publicProcedure.mutation(async ({ ctx }) => {
+      if (ctx.user?.id) {
+        await db.cleanupOldReadNotifications(ctx.user.id);
+      }
+      const cookieOptions = getSessionCookieOptions(ctx.req);
+      ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
+      return { success: true } as const;
+    }),
+    /** Local login with username (cédula or custom) + password */
+    localLogin: publicProcedure
+      .input(z.object({ username: z.string().min(1), password: z.string().min(1) }))
+      .mutation(async ({ input, ctx }) => {
+        const user = await db.getUserByUsername(input.username);
+        if (!user || !user.passwordHash) {
+          throw new Error("Usuario o contraseña incorrectos");
+        }
+        if (!user.isActive) {
+          throw new Error("Esta cuenta ha sido desactivada. Contacte al administrador.");
+        }
+        const valid = await bcrypt.compare(input.password, user.passwordHash);
+        if (!valid) {
+          throw new Error("Usuario o contraseña incorrectos");
+        }
+        // Create session
+        const sessionToken = await sdk.createSessionToken(user.openId, {
+          name: user.name || "",
+          expiresInMs: ONE_YEAR_MS,
+        });
+        const cookieOptions = getSessionCookieOptions(ctx.req);
+        ctx.res.cookie(COOKIE_NAME, sessionToken, { ...cookieOptions, maxAge: ONE_YEAR_MS });
+        // Update last signed in
+        await db.updateUser(user.id, { lastSignedIn: new Date() });
+        return { success: true, user: { id: user.id, name: user.name, role: user.role } };
+      }),
+    /** Change password (user can change their own) */
+    changePassword: protectedProcedure
+      .input(z.object({ currentPassword: z.string().min(1), newPassword: z.string().min(6) }))
+      .mutation(async ({ input, ctx }) => {
+        const user = await db.getUserById(ctx.user.id);
+        if (!user || !user.passwordHash) throw new Error("No se puede cambiar la contraseña");
+        const valid = await bcrypt.compare(input.currentPassword, user.passwordHash);
+        if (!valid) throw new Error("Contraseña actual incorrecta");
+        const hash = await bcrypt.hash(input.newPassword, 10);
+        await db.updateUserPassword(user.id, hash);
+        return { success: true };
+      }),
+  }),
+
+  collaborators: router({
+    list: protectedProcedure
+      .input(z.object({ role: z.string().optional(), isActive: z.boolean().optional() }).optional())
+      .query(async ({ input }) => {
+        return db.getUsersByFilters(input || {});
+      }),
+    create: adminProcedure
+      .input(z.object({
+        name: z.string().min(1),
+        email: z.string().optional(),
+        username: z.string().min(3),
+        password: z.string().min(6),
+        cedula: z.string().optional(),
+        role: z.enum(["admin", "contador_senior", "contador_junior", "asistente"]),
+        phone: z.string().optional(),
+        position: z.string().optional(),
+      }))
+      .mutation(async ({ input }) => {
+        // Check username uniqueness
+        const existing = await db.getUserByUsername(input.username);
+        if (existing) throw new Error("El nombre de usuario ya está en uso");
+        const passwordHash = await bcrypt.hash(input.password, 10);
+        const id = await db.createCollaborator({
+          name: input.name,
+          email: input.email,
+          username: input.username,
+          passwordHash,
+          cedula: input.cedula,
+          role: input.role,
+          phone: input.phone,
+          position: input.position,
+        });
+        return { id };
+      }),
+    update: adminProcedure
+      .input(z.object({
+        id: z.number(),
+        name: z.string().optional(),
+        email: z.string().optional(),
+        username: z.string().min(3).optional(),
+        cedula: z.string().optional(),
+        role: z.enum(["admin", "contador_senior", "contador_junior", "asistente"]).optional(),
+        phone: z.string().optional(),
+        position: z.string().optional(),
+      }))
+      .mutation(async ({ input }) => {
+        const { id, ...data } = input;
+        if (data.username) {
+          const existing = await db.getUserByUsername(data.username);
+          if (existing && existing.id !== id) throw new Error("El nombre de usuario ya está en uso");
+        }
+        await db.updateUser(id, data as any);
+        return { success: true };
+      }),
+    resetPassword: adminProcedure
+      .input(z.object({ id: z.number(), newPassword: z.string().min(6) }))
+      .mutation(async ({ input }) => {
+        const hash = await bcrypt.hash(input.newPassword, 10);
+        await db.updateUserPassword(input.id, hash);
+        return { success: true };
+      }),
+    deactivate: adminProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ input }) => {
+        await db.deactivateUser(input.id);
+        return { success: true };
+      }),
+    activate: adminProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ input }) => {
+        await db.activateUser(input.id);
+        return { success: true };
+      }),
+    getActive: protectedProcedure.query(async () => {
+      return db.getActiveUsers();
+    }),
+  }),
+
+  clients: router({
+    list: protectedProcedure
+      .input(z.object({ incluirInactivos: z.boolean().optional() }).optional())
+      .query(async ({ input, ctx }) => {
+        return db.getAllClients(ctx.user.role === "admin" ? undefined : ctx.user.id, input?.incluirInactivos);
+      }),
+    getById: protectedProcedure
+      .input(z.object({ id: z.number() }))
+      .query(async ({ input, ctx }) => {
+        const client = await db.getClientById(input.id);
+        if (client && ctx.user.role !== "admin" && client.managerId !== ctx.user.id) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "No tiene acceso a este cliente" });
+        }
+        return client;
+      }),
+    /** Subfolder names previously used inside this client's Drive folder,
+     * offered as a dropdown when uploading evidence so people reuse the
+     * exact same name instead of retyping a slightly different one. */
+    getDriveSubfolders: protectedProcedure
+      .input(z.object({ clientId: z.number() }))
+      .query(async ({ input }) => {
+        return db.getClientDriveSubfolders(input.clientId);
+      }),
+    create: adminProcedure
+      .input(z.object({
+        razonSocial: z.string().min(1),
+        nit: z.string().min(1),
+        digitoVerificacion: z.string().optional(),
+        direccion: z.string().optional(),
+        ciudad: z.string().optional(),
+        departamento: z.string().optional(),
+        telefono: z.string().optional(),
+        email: z.string().optional(),
+        actividadEconomica: z.string().optional(),
+        codigoCIIU: z.string().optional(),
+        representanteLegal: z.string().optional(),
+        rutFileUrl: z.string().optional(),
+        rutFileKey: z.string().optional(),
+        managerId: z.number().optional(),
+        driveFolderUrl: z.string().optional(),
+        notes: z.string().optional(),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        const id = await db.createClient({ ...input, createdById: ctx.user.id });
+        return { id };
+      }),
+    update: adminProcedure
+      .input(z.object({
+        id: z.number(),
+        razonSocial: z.string().optional(),
+        nit: z.string().optional(),
+        digitoVerificacion: z.string().optional(),
+        direccion: z.string().optional(),
+        ciudad: z.string().optional(),
+        departamento: z.string().optional(),
+        telefono: z.string().optional(),
+        email: z.string().optional(),
+        actividadEconomica: z.string().optional(),
+        codigoCIIU: z.string().optional(),
+        representanteLegal: z.string().optional(),
+        rutFileUrl: z.string().optional(),
+        rutFileKey: z.string().optional(),
+        managerId: z.number().nullable().optional(),
+        driveFolderUrl: z.string().optional(),
+        notes: z.string().optional(),
+      }))
+      .mutation(async ({ input }) => {
+        const { id, ...data } = input;
+        await db.updateClient(id, data);
+        return { success: true };
+      }),
+    deactivate: adminProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ input }) => {
+        await db.deactivateClient(input.id);
+        return { success: true };
+      }),
+    reactivate: adminProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ input }) => {
+        await db.reactivateClient(input.id);
+        return { success: true };
+      }),
+    uploadRut: protectedProcedure
+      .input(z.object({
+        fileName: z.string(),
+        fileBase64: z.string(),
+        contentType: z.string(),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        const buffer = Buffer.from(input.fileBase64, "base64");
+        const rawKey = `rut/${Date.now()}_${input.fileName}`;
+        const { url, key } = await storagePut(rawKey, buffer, input.contentType);
+        return { url, key };
+      }),
+    extractRutData: protectedProcedure
+      .input(z.object({ fileUrl: z.string(), fileKey: z.string().optional(), contentType: z.string().optional() }))
+      .mutation(async ({ input }) => {
+        try {
+          // Get a signed URL that the LLM can actually access
+          let accessUrl: string;
+          if (input.fileKey) {
+            accessUrl = await storageGetSignedUrl(input.fileKey);
+          } else if (input.fileUrl.startsWith("http")) {
+            accessUrl = input.fileUrl;
+          } else {
+            // Try to get signed URL from the key in the path
+            const key = input.fileUrl.replace(/^\/files\//, "");
+            accessUrl = await storageGetSignedUrl(key);
+          }
+          
+          const isPdf = input.contentType?.includes("pdf") || input.fileUrl.endsWith(".pdf") || input.fileKey?.endsWith(".pdf");
+          
+          // Build the content part based on file type
+          const fileContent: any = isPdf
+            ? { type: "file_url", file_url: { url: accessUrl, mime_type: "application/pdf" } }
+            : { type: "image_url", image_url: { url: accessUrl, detail: "high" } };
+
+          const response = await invokeLLM({
+            messages: [
+              {
+                role: "system",
+                content: `Eres un asistente experto en documentos tributarios colombianos. Tu tarea es extraer datos del RUT (Registro Único Tributario) de Colombia. Debes devolver ÚNICAMENTE un JSON válido con los siguientes campos (sin explicaciones adicionales):
+{
+  "razonSocial": "nombre o razón social del contribuyente",
+  "nit": "número de identificación tributaria sin dígito de verificación",
+  "digitoVerificacion": "dígito de verificación (un solo dígito)",
+  "direccion": "dirección completa",
+  "ciudad": "ciudad",
+  "departamento": "departamento",
+  "actividadEconomica": "descripción de la actividad económica principal",
+  "codigoCIIU": "código CIIU de la actividad económica",
+  "representanteLegal": "nombre del representante legal si aplica",
+  "email": "correo electrónico si aparece",
+  "telefono": "teléfono si aparece"
+}
+Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con el JSON, sin markdown ni texto adicional.`
+              },
+              {
+                role: "user",
+                content: [
+                  {
+                    type: "text" as const,
+                    text: "Extrae los datos del siguiente documento RUT colombiano:"
+                  },
+                  fileContent
+                ]
+              }
+            ],
+          });
+
+          const rawContent = response.choices?.[0]?.message?.content || "";
+          const content = typeof rawContent === "string" ? rawContent : JSON.stringify(rawContent);
+          // Parse JSON from response, handling possible markdown code blocks
+          let jsonStr = content;
+          if (content.includes("```")) {
+            const match = content.match(/```(?:json)?\s*([\s\S]*?)```/);
+            jsonStr = match ? match[1].trim() : content;
+          }
+          
+          const parsed = JSON.parse(jsonStr);
+          return {
+            razonSocial: parsed.razonSocial || "",
+            nit: parsed.nit || "",
+            digitoVerificacion: parsed.digitoVerificacion || "",
+            direccion: parsed.direccion || "",
+            ciudad: parsed.ciudad || "",
+            departamento: parsed.departamento || "",
+            actividadEconomica: parsed.actividadEconomica || "",
+            codigoCIIU: parsed.codigoCIIU || "",
+            representanteLegal: parsed.representanteLegal || "",
+            email: parsed.email || "",
+            telefono: parsed.telefono || "",
+            error: null,
+          };
+        } catch (error) {
+          console.error("[RUT Extraction] Failed:", error);
+          return {
+            razonSocial: "", nit: "", digitoVerificacion: "", direccion: "",
+            ciudad: "", departamento: "", actividadEconomica: "", codigoCIIU: "",
+            representanteLegal: "", email: "", telefono: "",
+            error: "No se pudo extraer los datos del RUT. Verifique que el archivo sea legible.",
+          };
+        }
+      }),
+    // ---- Cuentas de cobro de clientes GENERALES (prefijo "AP") — misma
+    // dinámica que la pestaña CTA de Renta PN, pero para cualquier
+    // cliente de la firma. Solo admins, igual que el resto del menú
+    // Clientes; eliminar queda restringido a Arlex puntualmente, igual
+    // que en Renta PN. ----
+    cuentasCobro: router({
+      listar: adminProcedure.query(async () => {
+        const filas = await db.getCuentasCobroClientes();
+        return Promise.all(filas.map(async (f) => ({
+          ...f,
+          signedUrl: f.fileKey ? await storageGetSignedUrl(f.fileKey) : null,
+        })));
+      }),
+      siguienteNumero: adminProcedure
+        .input(z.object({ prefijo: z.string().default("AP") }))
+        .query(async ({ input }) => {
+          return { numero: await db.getSiguienteNumeroCuentaCobroCliente(input.prefijo) };
+        }),
+      guardar: adminProcedure
+        .input(z.object({
+          clientId: z.number(),
+          prefijo: z.string().default("AP"),
+          detalle: z.string().min(1),
+          valor: z.number().positive(),
+        }))
+        .mutation(async ({ input, ctx }) => {
+          const cliente = await db.getClientById(input.clientId);
+          if (!cliente) throw new Error("Cliente no encontrado.");
+
+          const numero = await db.getSiguienteNumeroCuentaCobroCliente(input.prefijo);
+          const fecha = new Date();
+
+          const buffer = await generarCuentaCobroClientePdf({
+            prefijo: input.prefijo, numero, fecha,
+            clienteNombre: cliente.razonSocial, clienteNit: cliente.nit, clienteDigitoVerificacion: cliente.digitoVerificacion,
+            clienteDireccion: cliente.direccion, clienteTelefono: cliente.telefono,
+            detalle: input.detalle, valor: input.valor,
+          });
+          const key = `clientes/cuentas-cobro/${input.prefijo}_${numero}_${Date.now()}.pdf`;
+          const { key: fileKey } = await storagePut(key, buffer, "application/pdf");
+
+          const id = await db.guardarCuentaCobroCliente({
+            clientId: input.clientId, prefijo: input.prefijo, numero, fecha,
+            detalle: input.detalle, valor: input.valor,
+            fileKey, generadoPorId: ctx.user.id,
+          });
+          const signedUrl = await storageGetSignedUrl(fileKey);
+          return { id, numero, signedUrl };
+        }),
+      eliminar: protectedProcedure
+        .input(z.object({ id: z.number() }))
+        .mutation(async ({ input, ctx }) => {
+          if (ctx.user.role !== "admin") {
+            throw new TRPCError({ code: "FORBIDDEN", message: "No autorizado" });
+          }
+          if (ctx.user.cedula !== ASISTENCIA_AUTHORIZED_CEDULA) {
+            throw new TRPCError({ code: "FORBIDDEN", message: "No autorizado para eliminar cuentas de cobro." });
+          }
+          await db.eliminarCuentaCobroCliente(input.id);
+          return { success: true };
+        }),
+    }),
+  }),
+
+  obligations: router({
+    list: protectedProcedure.query(async () => {
+      return db.getAllTaxObligations();
+    }),
+    listAll: adminProcedure.query(async () => {
+      return db.getAllTaxObligationsForAdmin();
+    }),
+    create: adminProcedure
+      .input(z.object({
+        code: z.string().min(1),
+        name: z.string().min(1),
+        description: z.string().optional(),
+        frequency: z.enum(["mensual", "bimestral", "cuatrimestral", "semestral", "anual"]),
+        installments: z.number().min(1).max(12).optional(),
+        fixedDueDates: z.array(z.string().regex(/^\d{2}-\d{2}$/, "Formato debe ser MM-DD")).optional(),
+      }))
+      .mutation(async ({ input }) => {
+        const { fixedDueDates, ...rest } = input;
+        const id = await db.createTaxObligation({
+          ...rest,
+          description: input.description || null,
+          fixedDueDates: fixedDueDates && fixedDueDates.length > 0 ? JSON.stringify(fixedDueDates) : null,
+        });
+        return { id };
+      }),
+    update: adminProcedure
+      .input(z.object({
+        id: z.number(),
+        code: z.string().min(1).optional(),
+        name: z.string().min(1).optional(),
+        description: z.string().optional(),
+        frequency: z.enum(["mensual", "bimestral", "cuatrimestral", "semestral", "anual"]).optional(),
+        installments: z.number().min(1).max(12).optional(),
+        fixedDueDates: z.array(z.string().regex(/^\d{2}-\d{2}$/, "Formato debe ser MM-DD")).optional(),
+      }))
+      .mutation(async ({ input }) => {
+        const { id, fixedDueDates, ...rest } = input;
+        const data: any = { ...rest };
+        if (fixedDueDates !== undefined) {
+          data.fixedDueDates = fixedDueDates.length > 0 ? JSON.stringify(fixedDueDates) : null;
+        }
+        await db.updateTaxObligation(id, data);
+        return { success: true };
+      }),
+    setActive: adminProcedure
+      .input(z.object({ id: z.number(), isActive: z.boolean() }))
+      .mutation(async ({ input }) => {
+        await db.setTaxObligationActive(input.id, input.isActive);
+        return { success: true };
+      }),
+    /** One-off fix for obligations deactivated before the automatic cleanup
+     * existed — removes leftover pending/never-started deadlines from
+     * currently inactive obligations. Never touches ones with evidence. */
+    cleanupInactiveDeadlines: adminProcedure
+      .mutation(async () => {
+        const count = await db.cleanupInactiveObligationDeadlines();
+        return { count };
+      }),
+    getClientObligations: protectedProcedure
+      .input(z.object({ clientId: z.number() }))
+      .query(async ({ input }) => {
+        return db.getClientObligations(input.clientId);
+      }),
+    setClientObligations: protectedProcedure
+      .input(z.object({ clientId: z.number(), obligationIds: z.array(z.number()) }))
+      .mutation(async ({ input }) => {
+        await db.setClientObligations(input.clientId, input.obligationIds);
+        return { success: true };
+      }),
+  }),
+
+  deadlines: router({
+    getByClient: protectedProcedure
+      .input(z.object({ clientId: z.number() }))
+      .query(async ({ input, ctx }) => {
+        if (ctx.user.role !== "admin") {
+          const client = await db.getClientById(input.clientId);
+          if (!client || client.managerId !== ctx.user.id) {
+            throw new TRPCError({ code: "FORBIDDEN", message: "No tiene acceso a este cliente" });
+          }
+        }
+        return db.getClientDeadlines(input.clientId);
+      }),
+    getUpcoming: protectedProcedure
+      .input(z.object({ daysAhead: z.number().optional() }).optional())
+      .query(async ({ input, ctx }) => {
+        return db.getUpcomingDeadlines(
+          input?.daysAhead || 30,
+          ctx.user.role === "admin" ? undefined : ctx.user.id
+        );
+      }),
+    getForMonth: protectedProcedure
+      .input(z.object({ year: z.number(), month: z.number() }))
+      .query(async ({ input, ctx }) => {
+        return db.getDeadlinesForMonth(
+          input.year,
+          input.month,
+          ctx.user.role === "admin" ? undefined : ctx.user.id
+        );
+      }),
+    generate: protectedProcedure
+      .input(z.object({ clientId: z.number(), year: z.number() }))
+      .mutation(async ({ input }) => {
+        const client = await db.getClientById(input.clientId);
+        if (!client) throw new Error("Cliente no encontrado");
+        if (!client.isActive) throw new Error(`El cliente "${client.razonSocial}" está inactivo — reactívalo primero para generar su calendario.`);
+        const allObligations = await db.getClientObligations(input.clientId);
+        // Skip obligations that were deactivated in the catalog since being
+        // assigned to this client — otherwise regenerating the calendar
+        // would recreate deadlines we specifically cleaned up on deactivation.
+        const inactiveSkipped = allObligations.filter((o: any) => !o.obligationIsActive).map((o: any) => o.obligationName);
+        const obligations = allObligations.filter((o: any) => o.obligationIsActive);
+        if (obligations.length === 0) throw new Error("El cliente no tiene obligaciones activas asignadas");
+
+        const lastDigit = client.nit ? client.nit.slice(-1) : "0";
+
+        // Try to use DIAN calendar entries first
+        const deadlines: any[] = [];
+        for (const obl of obligations) {
+          // Obligations with fixed annual dates (e.g. Cámara de Comercio,
+          // Supersalud, Supersociedades) don't depend on the client's NIT and
+          // aren't sourced from the DIAN calendar — use them directly.
+          if (obl.fixedDueDates) {
+            let fixedDates: string[] = [];
+            try {
+              fixedDates = JSON.parse(obl.fixedDueDates);
+            } catch {
+              fixedDates = [];
+            }
+            for (const md of fixedDates) {
+              const [month, day] = md.split("-").map(Number);
+              if (!month || !day) continue;
+              deadlines.push({
+                clientId: input.clientId,
+                obligationId: obl.obligationId,
+                period: `${input.year}-${md}`,
+                dueDate: new Date(Date.UTC(input.year, month - 1, day)),
+                lastDigitNit: "ALL",
+                status: "pendiente",
+              });
+            }
+            continue;
+          }
+
+          const periods = generatePeriods(obl.frequency, input.year, obl.installments || 1);
+          for (const period of periods) {
+            // Look up DIAN calendar (matches by single digit, two-digit range, or "ALL")
+            const dianEntry = await db.getDianCalendarForDeadline(input.year, obl.obligationCode, client.nit || "", period);
+            const dueDate = dianEntry ? new Date(dianEntry.dueDate) : generateDefaultDueDate(obl.frequency, period, input.year, lastDigit);
+            deadlines.push({
+              clientId: input.clientId,
+              obligationId: obl.obligationId,
+              period,
+              dueDate,
+              lastDigitNit: dianEntry ? dianEntry.lastDigitNit : lastDigit,
+              status: "pendiente",
+            });
+          }
+        }
+
+        // Deletes only the never-started ones (see deleteClientDeadlines);
+        // anything already completed/in-progress-with-evidence survives.
+        await db.deleteClientDeadlines(input.clientId);
+
+        // Don't re-insert a deadline for an obligation+period that already
+        // has a surviving (evidenced) entry — that would create a duplicate
+        // sitting right next to the real, completed one.
+        const preserved = await db.getClientDeadlines(input.clientId);
+        const preservedKeys = new Set(preserved.map((d: any) => `${d.obligationId}|${d.period}`));
+        const toInsert = deadlines.filter(d => !preservedKeys.has(`${d.obligationId}|${d.period}`));
+
+        if (toInsert.length > 0) await db.createTaxDeadlines(toInsert);
+
+        let message = `${toInsert.length} vencimiento(s) generados`;
+        if (inactiveSkipped.length > 0) {
+          message += `. Obligaciones inactivas no incluidas: ${inactiveSkipped.join(", ")}`;
+        }
+        if (preserved.length > toInsert.length) {
+          message += `. ${preserved.length} vencimiento(s) con evidencia existente se conservaron sin cambios.`;
+        }
+        return { count: toInsert.length, message };
+      }),
+    updateStatus: protectedProcedure
+      .input(z.object({ id: z.number(), status: z.enum(["pendiente", "en_progreso", "vencido"]) }))
+      .mutation(async ({ input, ctx }) => {
+        const deadlineExistente = await db.getDeadlineById(input.id);
+        await db.assertClienteActivo(deadlineExistente?.clientId);
+        await db.updateDeadlineStatus(input.id, input.status, ctx.user.id);
+        return { success: true };
+      }),
+    /** Marks a deadline as completed — requires supporting evidence, same as
+     * tasks. Non-admins may only complete deadlines for clients they manage. */
+    complete: protectedProcedure
+      .input(z.object({
+        id: z.number(),
+        clientId: z.number(),
+        evidenceFiles: z.array(z.object({
+          url: z.string(),
+          key: z.string().optional(),
+          fileName: z.string(),
+          contentType: z.string().optional(),
+          fileSize: z.number().optional(),
+        })).min(1, "Debe adjuntar al menos un archivo de evidencia"),
+        driveSubfolder: z.string().optional(),
+        driveSubfolderId: z.string().optional(),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        await db.assertClienteActivo(input.clientId);
+        if (ctx.user.role !== "admin") {
+          const client = await db.getClientById(input.clientId);
+          if (!client || client.managerId !== ctx.user.id) {
+            throw new TRPCError({ code: "FORBIDDEN", message: "No tiene acceso a este cliente" });
+          }
+        }
+        const [firstFile] = input.evidenceFiles;
+        await db.completeDeadline(input.id, firstFile.url, firstFile.key || null, ctx.user.id, input.driveSubfolder);
+        for (const file of input.evidenceFiles) {
+          await db.createDeadlineAttachment({
+            deadlineId: input.id,
+            fileName: file.fileName,
+            fileUrl: file.url,
+            fileKey: file.key || file.url,
+            contentType: file.contentType || null,
+            fileSize: file.fileSize || null,
+            uploadedById: ctx.user.id,
+          });
+        }
+        if (input.driveSubfolder && !input.driveSubfolderId) {
+          await db.ensureClientDriveSubfolder(input.clientId, input.driveSubfolder);
+        }
+        pushEvidenceToDrive(input.clientId, input.driveSubfolder, input.evidenceFiles, input.driveSubfolderId).catch(err =>
+          console.error("[Google Drive] Error subiendo evidencia del vencimiento:", err)
+        );
+        await db.logHistoryEvent("deadline", input.id, "completada", ctx.user.id);
+        return { success: true };
+      }),
+    /** Admin-only: reopens a deadline mistakenly marked as completed. */
+    reopen: adminProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ input, ctx }) => {
+        const deadlineExistente = await db.getDeadlineById(input.id);
+        await db.assertClienteActivo(deadlineExistente?.clientId);
+        await db.reopenDeadline(input.id, ctx.user.id);
+        return { success: true };
+      }),
+    getAttachments: protectedProcedure
+      .input(z.object({ deadlineId: z.number() }))
+      .query(async ({ input }) => {
+        return db.getDeadlineAttachments(input.deadlineId);
+      }),
+    /** Admin reviews a completed deadline: approves it and can leave
+     * observations/instructions the collaborator will see. */
+    approve: adminProcedure
+      .input(z.object({ id: z.number(), reviewNotes: z.string().optional() }))
+      .mutation(async ({ input, ctx }) => {
+        const deadlinePrevio = await db.getDeadlineById(input.id);
+        await db.assertClienteActivo(deadlinePrevio?.clientId);
+        await db.approveDeadline(input.id, ctx.user.id, input.reviewNotes);
+        const deadline = await db.getDeadlineById(input.id);
+        const client = deadline ? await db.getClientById(deadline.clientId) : null;
+        if (client?.managerId && client.managerId !== ctx.user.id) {
+          await db.createNotification(client.managerId, "aprobada", "deadline", input.id, `${client.razonSocial} — período ${deadline!.period}`, input.reviewNotes, deadline!.clientId);
+        }
+        return { success: true };
+      }),
+    /** Admin sends a completed deadline back to the collaborator for
+     * correction, with a required observation of what needs fixing. */
+    requestCorrection: adminProcedure
+      .input(z.object({
+        id: z.number(), reviewNotes: z.string().min(1, "Debe indicar qué corregir"),
+        adjuntos: z.array(z.object({ fileName: z.string(), fileBase64: z.string(), contentType: z.string() })).optional(),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        const deadlinePrevio = await db.getDeadlineById(input.id);
+        await db.assertClienteActivo(deadlinePrevio?.clientId);
+        await db.requestDeadlineCorrection(input.id, ctx.user.id, input.reviewNotes);
+        for (const adjunto of input.adjuntos || []) {
+          const buffer = Buffer.from(adjunto.fileBase64, "base64");
+          const rawKey = `deadlines/${input.id}/${Date.now()}_${adjunto.fileName}`;
+          const { url, key } = await storagePut(rawKey, buffer, adjunto.contentType);
+          await db.createDeadlineAttachment({
+            deadlineId: input.id, fileName: adjunto.fileName, fileUrl: url, fileKey: key,
+            contentType: adjunto.contentType, fileSize: buffer.length, uploadedById: ctx.user.id,
+          });
+        }
+        const deadline = await db.getDeadlineById(input.id);
+        const client = deadline ? await db.getClientById(deadline.clientId) : null;
+        if (client?.managerId && client.managerId !== ctx.user.id) {
+          await db.createNotification(client.managerId, "correccion_solicitada", "deadline", input.id, `${client.razonSocial} — período ${deadline!.period}`, input.reviewNotes, deadline!.clientId);
+        }
+        return { success: true };
+      }),
+    /** Mismo concepto que tasks.requestCompletion — el trabajo ya hecho
+     * estaba bien, falta UNA acción más antes de cerrar el vencimiento. */
+    requestCompletion: adminProcedure
+      .input(z.object({
+        id: z.number(), reviewNotes: z.string().min(1, "Indique qué falta para completar"),
+        adjuntos: z.array(z.object({ fileName: z.string(), fileBase64: z.string(), contentType: z.string() })).optional(),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        const deadlinePrevio = await db.getDeadlineById(input.id);
+        await db.assertClienteActivo(deadlinePrevio?.clientId);
+        await db.requestDeadlineCompletion(input.id, ctx.user.id, input.reviewNotes);
+        for (const adjunto of input.adjuntos || []) {
+          const buffer = Buffer.from(adjunto.fileBase64, "base64");
+          const rawKey = `deadlines/${input.id}/${Date.now()}_${adjunto.fileName}`;
+          const { url, key } = await storagePut(rawKey, buffer, adjunto.contentType);
+          await db.createDeadlineAttachment({
+            deadlineId: input.id, fileName: adjunto.fileName, fileUrl: url, fileKey: key,
+            contentType: adjunto.contentType, fileSize: buffer.length, uploadedById: ctx.user.id,
+          });
+        }
+        const deadline = await db.getDeadlineById(input.id);
+        const client = deadline ? await db.getClientById(deadline.clientId) : null;
+        if (client?.managerId && client.managerId !== ctx.user.id) {
+          await db.createNotification(client.managerId, "completar_solicitado", "deadline", input.id, `${client.razonSocial} — período ${deadline!.period}`, input.reviewNotes, deadline!.clientId);
+        }
+        return { success: true };
+      }),
+    getHistory: protectedProcedure
+      .input(z.object({ id: z.number() }))
+      .query(async ({ input }) => {
+        return db.getHistory("deadline", input.id);
+      }),
+    /** Manually correct a deadline's due date when detected to be wrong
+     * (e.g. an error in the DIAN calendar import or the fallback estimate) */
+    updateDueDate: adminProcedure
+      .input(z.object({ id: z.number(), dueDate: z.string() }))
+      .mutation(async ({ input }) => {
+        const deadlinePrevio = await db.getDeadlineById(input.id);
+        await db.assertClienteActivo(deadlinePrevio?.clientId);
+        await db.updateDeadlineDueDate(input.id, new Date(input.dueDate));
+        return { success: true };
+      }),
+    /** Upload a supporting document for a tax deadline (same key-suffix fix
+     * as the other upload endpoints — always return the storagePut key). */
+    uploadEvidence: protectedProcedure
+      .input(z.object({
+        fileName: z.string(),
+        fileBase64: z.string(),
+        contentType: z.string(),
+      }))
+      .mutation(async ({ input }) => {
+        const buffer = Buffer.from(input.fileBase64, "base64");
+        const rawKey = `deadline-evidence/${Date.now()}_${input.fileName}`;
+        const { url, key } = await storagePut(rawKey, buffer, input.contentType);
+        return { url, key };
+      }),
+  }),
+
+  tasks: router({
+    list: protectedProcedure.query(async ({ ctx }) => {
+      return db.getAllTasks(ctx.user.role === "admin" ? undefined : ctx.user.id);
+    }),
+    // Conteo ligero para el indicador del menú — se consulta con mucha
+    // más frecuencia que la lista completa, así que va aparte en vez de
+    // derivarse de `list` en el cliente.
+    countDevueltasOPorCompletar: protectedProcedure.query(async ({ ctx }) => {
+      return db.countTasksDevueltasOPorCompletar(ctx.user.role === "admin" ? undefined : ctx.user.id);
+    }),
+    getByAssignee: protectedProcedure
+      .input(z.object({ userId: z.number() }))
+      .query(async ({ input }) => {
+        return db.getTasksByAssignee(input.userId);
+      }),
+    getById: protectedProcedure
+      .input(z.object({ id: z.number() }))
+      .query(async ({ input }) => {
+        const task = await db.getTaskById(input.id);
+        if (!task) throw new Error("Tarea no encontrada");
+        const attachments = await db.getTaskAttachments(input.id);
+        return { ...task, attachments };
+      }),
+    create: protectedProcedure
+      .input(z.object({
+        title: z.string().min(1),
+        description: z.string().optional(),
+        clientId: z.number(),
+        assignedToId: z.number().optional(),
+        dueDate: z.string().optional(),
+        priority: z.enum(["baja", "media", "alta", "urgente"]).optional(),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        await db.assertClienteActivo(input.clientId);
+        const id = await db.createTask({
+          title: input.title,
+          description: input.description || null,
+          clientId: input.clientId,
+          assignedToId: input.assignedToId || null,
+          createdById: ctx.user.id,
+          dueDate: input.dueDate ? new Date(input.dueDate) : null,
+          priority: input.priority || "media",
+          status: "pendiente",
+        });
+        return { id };
+      }),
+    // Una vez grabada la tarea, la fecha límite ya no se puede modificar
+    // (por eso no está en este input) — si quedó mal, un administrador
+    // debe eliminarla y crearla de nuevo. Los administradores pueden
+    // editar cualquier tarea; los demás usuarios solo las que ellos mismos
+    // crearon.
+    update: protectedProcedure
+      .input(z.object({
+        id: z.number(),
+        title: z.string().optional(),
+        description: z.string().optional(),
+        assignedToId: z.number().nullable().optional(),
+        priority: z.enum(["baja", "media", "alta", "urgente"]).optional(),
+        status: z.enum(["pendiente", "en_progreso", "completada", "vencida"]).optional(),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        const existente = await db.getTaskById(input.id);
+        await db.assertClienteActivo(existente?.clientId);
+        if (ctx.user.role !== "admin") {
+          if (!existente || existente.createdById !== ctx.user.id) {
+            throw new Error("Solo puedes editar tareas que tú mismo hayas creado.");
+          }
+        }
+        const { id, ...data } = input;
+        await db.updateTask(id, data);
+        return { success: true };
+      }),
+    /** Complete task with evidence (confirmation + file upload). Non-admins may
+     * only complete tasks assigned directly to them. */
+    complete: protectedProcedure
+      .input(z.object({
+        id: z.number(),
+        evidenceFiles: z.array(z.object({
+          url: z.string(),
+          key: z.string().optional(),
+          fileName: z.string(),
+          contentType: z.string().optional(),
+          fileSize: z.number().optional(),
+        })).min(1, "Debe adjuntar al menos un archivo de evidencia"),
+        completionNotes: z.string().optional(),
+        driveSubfolder: z.string().optional(),
+        driveSubfolderId: z.string().optional(),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        const task = await db.getTaskById(input.id);
+        if (!task) throw new Error("Tarea no encontrada");
+        await db.assertClienteActivo(task.clientId);
+        if (ctx.user.role !== "admin") {
+          if (task.assignedToId !== ctx.user.id) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: "Solo puede completar tareas asignadas a usted",
+            });
+          }
+        }
+        const [firstFile] = input.evidenceFiles;
+        await db.updateTask(input.id, {
+          status: "completada",
+          completedAt: new Date(),
+          completedById: ctx.user.id,
+          evidenceFileUrl: firstFile.url,
+          evidenceFileKey: firstFile.key || null,
+          completionNotes: input.completionNotes || null,
+          driveSubfolder: input.driveSubfolder || null,
+          // Clear any previous review outcome — this is a fresh submission
+          // (possibly after a correction), so it should show as "sin
+          // revisar" again, not the old approval/correction note.
+          reviewStatus: null,
+          reviewNotes: null,
+          reviewedById: null,
+          reviewedAt: null,
+        });
+        for (const file of input.evidenceFiles) {
+          await db.createTaskAttachment({
+            taskId: input.id,
+            fileName: file.fileName,
+            fileUrl: file.url,
+            fileKey: file.key || file.url,
+            contentType: file.contentType || null,
+            fileSize: file.fileSize || null,
+            uploadedById: ctx.user.id,
+            isEvidence: true,
+          });
+        }
+        if (input.driveSubfolder && !input.driveSubfolderId) {
+          await db.ensureClientDriveSubfolder(task.clientId, input.driveSubfolder);
+        }
+        pushEvidenceToDrive(task.clientId, input.driveSubfolder, input.evidenceFiles, input.driveSubfolderId).catch(err =>
+          console.error("[Google Drive] Error subiendo evidencia de la tarea:", err)
+        );
+        await db.logHistoryEvent("task", input.id, "completada", ctx.user.id);
+        return { success: true };
+      }),
+    /** Admin can reopen a completed task */
+    reopen: adminProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ input, ctx }) => {
+        const existente = await db.getTaskById(input.id);
+        await db.assertClienteActivo(existente?.clientId);
+        await db.clearTaskAttachments(input.id);
+        await db.updateTask(input.id, {
+          status: "pendiente",
+          completedAt: null,
+          completedById: null,
+          evidenceFileUrl: null,
+          evidenceFileKey: null,
+          driveSubfolder: null,
+          completionNotes: null,
+        });
+        await db.logHistoryEvent("task", input.id, "reabierta", ctx.user.id);
+        return { success: true };
+      }),
+    /** Admin-only: cancels a task no longer needed. Deletes it outright if
+     * nothing was ever attached; otherwise keeps it (marked "cancelada") so
+     * existing work isn't lost, just removed from active dashboard views. */
+    cancel: adminProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ input, ctx }) => {
+        const existente = await db.getTaskById(input.id);
+        await db.assertClienteActivo(existente?.clientId);
+        const result = await db.cancelTask(input.id, ctx.user.id);
+        return { result };
+      }),
+    /** Upload attachment to a task */
+    uploadAttachment: adminProcedure
+      .input(z.object({
+        taskId: z.number(),
+        fileName: z.string(),
+        fileBase64: z.string(),
+        contentType: z.string(),
+        fileSize: z.number().optional(),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        const tareaExistente = await db.getTaskById(input.taskId);
+        await db.assertClienteActivo(tareaExistente?.clientId);
+        const buffer = Buffer.from(input.fileBase64, "base64");
+        const rawKey = `tasks/${input.taskId}/${Date.now()}_${input.fileName}`;
+        const { url, key } = await storagePut(rawKey, buffer, input.contentType);
+        const id = await db.createTaskAttachment({
+          taskId: input.taskId,
+          fileName: input.fileName,
+          fileUrl: url,
+          fileKey: key,
+          contentType: input.contentType,
+          fileSize: input.fileSize || buffer.length,
+          uploadedById: ctx.user.id,
+        });
+        return { id, url, key, fileName: input.fileName };
+      }),
+    /** Upload evidence file for task completion */
+    uploadEvidence: protectedProcedure
+      .input(z.object({
+        fileName: z.string(),
+        fileBase64: z.string(),
+        contentType: z.string(),
+      }))
+      .mutation(async ({ input }) => {
+        const buffer = Buffer.from(input.fileBase64, "base64");
+        const rawKey = `evidence/${Date.now()}_${input.fileName}`;
+        const { url, key } = await storagePut(rawKey, buffer, input.contentType);
+        return { url, key };
+      }),
+    getAttachments: protectedProcedure
+      .input(z.object({ taskId: z.number() }))
+      .query(async ({ input }) => {
+        return db.getTaskAttachments(input.taskId);
+      }),
+    /** Admin reviews a completed task: approves it and can leave
+     * observations/instructions the collaborator will see. */
+    approve: adminProcedure
+      .input(z.object({ id: z.number(), reviewNotes: z.string().optional() }))
+      .mutation(async ({ input, ctx }) => {
+        const tareaExistente = await db.getTaskById(input.id);
+        await db.assertClienteActivo(tareaExistente?.clientId);
+        await db.approveTask(input.id, ctx.user.id, input.reviewNotes);
+        const task = await db.getTaskById(input.id);
+        if (task?.assignedToId && task.assignedToId !== ctx.user.id) {
+          const client = await db.getClientById(task.clientId);
+          const title = client ? `${client.razonSocial} — ${task.title}` : task.title;
+          await db.createNotification(task.assignedToId, "aprobada", "task", input.id, title, input.reviewNotes, task.clientId);
+        }
+        return { success: true };
+      }),
+    /** Admin sends a completed task back to the collaborator for
+     * correction, with a required observation of what needs fixing, y
+     * opcionalmente un archivo adjunto (ej. una captura señalando el
+     * error) — el adjunto es voluntario, la observación sigue siendo
+     * obligatoria. */
+    requestCorrection: adminProcedure
+      .input(z.object({
+        id: z.number(), reviewNotes: z.string().min(1, "Debe indicar qué corregir"),
+        adjuntos: z.array(z.object({ fileName: z.string(), fileBase64: z.string(), contentType: z.string() })).optional(),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        const tareaExistente = await db.getTaskById(input.id);
+        await db.assertClienteActivo(tareaExistente?.clientId);
+        await db.requestTaskCorrection(input.id, ctx.user.id, input.reviewNotes);
+        for (const adjunto of input.adjuntos || []) {
+          const buffer = Buffer.from(adjunto.fileBase64, "base64");
+          const rawKey = `tasks/${input.id}/${Date.now()}_${adjunto.fileName}`;
+          const { url, key } = await storagePut(rawKey, buffer, adjunto.contentType);
+          await db.createTaskAttachment({
+            taskId: input.id, fileName: adjunto.fileName, fileUrl: url, fileKey: key,
+            contentType: adjunto.contentType, fileSize: buffer.length, uploadedById: ctx.user.id,
+          });
+        }
+        const task = await db.getTaskById(input.id);
+        if (task?.assignedToId && task.assignedToId !== ctx.user.id) {
+          const client = await db.getClientById(task.clientId);
+          const title = client ? `${client.razonSocial} — ${task.title}` : task.title;
+          await db.createNotification(task.assignedToId, "correccion_solicitada", "task", input.id, title, input.reviewNotes, task.clientId);
+        }
+        return { success: true };
+      }),
+    /** Admin marca que el trabajo ya hecho estaba BIEN pero falta UNA
+     * ACCIÓN MÁS antes de dar la tarea por terminada (ej. un documento
+     * que se envió a firmar ya volvió firmado) — a diferencia de
+     * "corregir", NO borra la evidencia ya subida, el colaborador la
+     * conserva y solo agrega lo que falta con este comentario/adjunto
+     * como guía. */
+    requestCompletion: adminProcedure
+      .input(z.object({
+        id: z.number(), reviewNotes: z.string().min(1, "Indique qué falta para completar"),
+        adjuntos: z.array(z.object({ fileName: z.string(), fileBase64: z.string(), contentType: z.string() })).optional(),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        const tareaExistente = await db.getTaskById(input.id);
+        await db.assertClienteActivo(tareaExistente?.clientId);
+        await db.requestTaskCompletion(input.id, ctx.user.id, input.reviewNotes);
+        for (const adjunto of input.adjuntos || []) {
+          const buffer = Buffer.from(adjunto.fileBase64, "base64");
+          const rawKey = `tasks/${input.id}/${Date.now()}_${adjunto.fileName}`;
+          const { url, key } = await storagePut(rawKey, buffer, adjunto.contentType);
+          await db.createTaskAttachment({
+            taskId: input.id, fileName: adjunto.fileName, fileUrl: url, fileKey: key,
+            contentType: adjunto.contentType, fileSize: buffer.length, uploadedById: ctx.user.id,
+          });
+        }
+        const task = await db.getTaskById(input.id);
+        if (task?.assignedToId && task.assignedToId !== ctx.user.id) {
+          const client = await db.getClientById(task.clientId);
+          const title = client ? `${client.razonSocial} — ${task.title}` : task.title;
+          await db.createNotification(task.assignedToId, "completar_solicitado", "task", input.id, title, input.reviewNotes, task.clientId);
+        }
+        return { success: true };
+      }),
+    getHistory: protectedProcedure
+      .input(z.object({ id: z.number() }))
+      .query(async ({ input }) => {
+        return db.getHistory("task", input.id);
+      }),
+  }),
+
+  /** Recurring task rules — a template that periodically generates real,
+   * independently-trackable task instances (weekly/quincenal/monthly),
+   * instead of one task getting silently reset every cycle. */
+  taskRecurrences: router({
+    list: adminProcedure.query(async () => {
+      return db.getTaskRecurrences();
+    }),
+    create: adminProcedure
+      .input(z.object({
+        title: z.string().min(1),
+        description: z.string().optional(),
+        clientId: z.number(),
+        assignedToId: z.number().optional(),
+        priority: z.enum(["baja", "media", "alta", "urgente"]).default("media"),
+        recurrenceType: z.enum(["semanal", "quincenal", "mensual"]),
+        dayOfWeek: z.number().min(0).max(6).optional(),
+        dayOfMonth: z.number().min(1).max(31).optional(),
+        startDate: z.string().optional(),
+        endDate: z.string().optional(),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        const id = await db.createTaskRecurrence({
+          title: input.title,
+          description: input.description || null,
+          clientId: input.clientId,
+          assignedToId: input.assignedToId || null,
+          priority: input.priority,
+          createdById: ctx.user.id,
+          recurrenceType: input.recurrenceType,
+          dayOfWeek: input.dayOfWeek ?? null,
+          dayOfMonth: input.dayOfMonth ?? null,
+          startDate: input.startDate || null,
+          endDate: input.endDate || null,
+        });
+        return { id };
+      }),
+    setActive: adminProcedure
+      .input(z.object({ id: z.number(), isActive: z.boolean() }))
+      .mutation(async ({ input }) => {
+        await db.setTaskRecurrenceActive(input.id, input.isActive);
+        return { success: true };
+      }),
+    updateDates: adminProcedure
+      .input(z.object({ id: z.number(), startDate: z.string().optional(), endDate: z.string().optional() }))
+      .mutation(async ({ input }) => {
+        await db.setTaskRecurrenceDates(input.id, input.startDate || null, input.endDate || null);
+        return { success: true };
+      }),
+    delete: adminProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ input }) => {
+        await db.deleteTaskRecurrence(input.id);
+        return { success: true };
+      }),
+    /** Checks every active rule and creates any task whose cycle is due but
+     * hasn't been generated yet — safe to run repeatedly, never duplicates. */
+    generate: adminProcedure.mutation(async () => {
+      const count = await db.generateDueRecurringTasks();
+      return { count };
+    }),
+  }),
+
+  settings: router({
+    getAll: adminProcedure.query(async () => {
+      return db.getAllSettings();
+    }),
+    get: protectedProcedure
+      .input(z.object({ key: z.string() }))
+      .query(async ({ input }) => {
+        return db.getSetting(input.key);
+      }),
+    set: adminProcedure
+      .input(z.object({ key: z.string(), value: z.string(), description: z.string().optional() }))
+      .mutation(async ({ input, ctx }) => {
+        await db.setSetting(input.key, input.value, input.description, ctx.user.id);
+        return { success: true };
+      }),
+  }),
+
+  dianCalendar: router({
+    getEntries: protectedProcedure
+      .input(z.object({ year: z.number(), obligationCode: z.string().optional() }))
+      .query(async ({ input }) => {
+        return db.getDianCalendarEntries(input.year, input.obligationCode);
+      }),
+    /** Copies already-loaded calendar dates from one obligation to another
+     * for the same year — e.g. "Consumo" officially follows the same dates
+     * as "IVA Bimestral", so there's no need to re-extract or retype them. */
+    copyFromObligation: adminProcedure
+      .input(z.object({
+        year: z.number(),
+        fromObligationCode: z.string(),
+        toObligationCode: z.string(),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        const count = await db.copyDianCalendarEntries(
+          input.year,
+          input.fromObligationCode,
+          input.toObligationCode,
+          ctx.user.id
+        );
+        return { count };
+      }),
+    /** Admin uploads DIAN calendar data (parsed from Excel/CSV) */
+    upload: adminProcedure
+      .input(z.object({
+        year: z.number(),
+        entries: z.array(z.object({
+          obligationCode: z.string(),
+          period: z.string(),
+          lastDigitNit: z.string(),
+          dueDate: z.string(),
+        })),
+        clearExisting: z.boolean().optional(),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        if (input.clearExisting) {
+          await db.clearDianCalendar(input.year);
+        }
+        const entries = input.entries.map(e => ({
+          year: input.year,
+          obligationCode: e.obligationCode,
+          period: e.period,
+          lastDigitNit: e.lastDigitNit,
+          dueDate: new Date(e.dueDate),
+          uploadedById: ctx.user.id,
+        }));
+        await db.insertDianCalendarEntries(entries);
+        await db.setSetting("dian_calendar_year", String(input.year), "Año del calendario DIAN cargado", ctx.user.id);
+        return { count: entries.length };
+      }),
+    uploadPdf: adminProcedure
+      .input(z.object({
+        fileName: z.string(),
+        fileBase64: z.string(),
+        contentType: z.string(),
+      }))
+      .mutation(async ({ input }) => {
+        const buffer = Buffer.from(input.fileBase64, "base64");
+        const rawKey = `dian-calendar/${Date.now()}_${input.fileName}`;
+        const { url, key } = await storagePut(rawKey, buffer, input.contentType);
+        return { url, key };
+      }),
+    /** Starts reading the official DIAN calendar PDF with AI in the
+     * background and returns immediately with a jobId. The full extraction
+     * (one AI call per obligation, spaced out to respect the API rate limit)
+     * can take several minutes — far too long for a single HTTP request to
+     * survive proxies/load balancers, so the client polls getExtractionStatus
+     * instead of waiting on this call. */
+    startExtraction: adminProcedure
+      .input(z.object({ fileKey: z.string(), year: z.number() }))
+      .mutation(async ({ input }) => {
+        pruneOldExtractionJobs();
+        const jobId = crypto.randomUUID();
+        dianExtractionJobs.set(jobId, {
+          status: "processing",
+          progress: { current: 0, total: 0, currentObligation: "" },
+          startedAt: Date.now(),
+        });
+        // Intentionally not awaited: this runs in the background while the
+        // mutation itself returns right away.
+        runDianExtractionJob(jobId, input.fileKey, input.year).catch(err => {
+          const job = dianExtractionJobs.get(jobId);
+          if (job) {
+            job.status = "failed";
+            job.error = err instanceof Error ? err.message : "Error inesperado";
+          }
+        });
+        return { jobId };
+      }),
+    getExtractionStatus: adminProcedure
+      .input(z.object({ jobId: z.string() }))
+      .query(async ({ input }) => {
+        const job = dianExtractionJobs.get(input.jobId);
+        if (!job) {
+          return { status: "not_found" as const, progress: null, result: null, error: "El trabajo ya no está disponible (puede haber expirado)." };
+        }
+        return { status: job.status, progress: job.progress, result: job.result ?? null, error: job.error ?? null };
+      }),
+  }),
+
+  dashboard: router({
+    summary: protectedProcedure
+      .input(z.object({
+        month: z.string().optional(), // "YYYY-MM"
+        clientId: z.number().optional(),
+        assignedToId: z.number().optional(),
+        obligationId: z.number().optional(),
+      }).optional())
+      .query(async ({ input, ctx }) => {
+        const now = new Date();
+        const defaultMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+        return db.getDashboardData({
+          month: input?.month || defaultMonth,
+          clientId: input?.clientId,
+          assignedToId: input?.assignedToId,
+          obligationId: input?.obligationId,
+          managerId: ctx.user.role === "admin" ? undefined : ctx.user.id,
+        });
+      }),
+  }),
+  /** Admin-only screen to review everything marked as done — completed
+   * tasks and completed tax deadlines together, with their evidence. */
+  review: router({
+    list: adminProcedure
+      .input(z.object({
+        month: z.string().optional(), // "YYYY-MM", omit for all-time
+        clientId: z.number().optional(),
+        assignedToId: z.number().optional(),
+        obligationId: z.number().optional(),
+        vista: z.enum(["pendientes", "devueltas", "por_completar"]).optional(),
+      }).optional())
+      .query(async ({ input }) => {
+        return db.getCompletedItemsForReview({
+          month: input?.month,
+          clientId: input?.clientId,
+          assignedToId: input?.assignedToId,
+          obligationId: input?.obligationId,
+          vista: input?.vista,
+        });
+      }),
+  }),
+  /** Basic AI assistant for collaborators — answers questions about a
+   * specific client using the evidence files already uploaded for that
+   * client's completed tasks and deadlines as real context, instead of
+   * guessing. */
+  assistant: router({
+    chat: protectedProcedure
+      .input(z.object({
+        clientId: z.number(),
+        message: z.string().min(1),
+        history: z.array(z.object({
+          role: z.enum(["user", "assistant"]),
+          content: z.string(),
+        })).optional(),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        const client = await db.getClientById(input.clientId);
+        if (!client) throw new Error("Cliente no encontrado");
+        if (ctx.user.role !== "admin" && client.managerId !== ctx.user.id) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "No tiene acceso a este cliente" });
+        }
+
+        // Content the assistant can actually "read" — evidence already
+        // uploaded through the app (reliably fetchable), capped so the
+        // request stays within reasonable size/cost.
+        const evidence = await db.getClientEvidenceContext(input.clientId, 8);
+        const evidenceBlocks = await Promise.all(
+          evidence
+            .filter(e => e.contentType === "application/pdf" || (e.contentType || "").startsWith("image/"))
+            .map(async e => ({
+              type: "file_url" as const,
+              file_url: {
+                url: await storageGetSignedUrl(e.fileKey || e.fileUrl.replace(/^\/files\//, "")),
+                mime_type: e.contentType || "application/pdf",
+              },
+            }))
+        );
+        const evidenceList = evidence.map(e => `- ${e.title} (${e.detail}${e.date ? `, ${new Date(e.date).toLocaleDateString("es-CO")}` : ""})`).join("\n");
+
+        // Full Drive folder listing — awareness only (names/paths/dates),
+        // not full content, since a client's folder can hold far more
+        // documents than fit in one conversation.
+        let driveFilesList = "";
+        if (isDriveConfigured() && client.driveFolderUrl) {
+          const rootFolderId = extractFolderIdFromUrl(client.driveFolderUrl);
+          if (rootFolderId) {
+            try {
+              const allFiles = await listAllFilesRecursive(rootFolderId);
+              driveFilesList = allFiles
+                .slice(0, 100)
+                .map(f => `- ${f.path} (modificado ${new Date(f.modifiedTime).toLocaleDateString("es-CO")})`)
+                .join("\n");
+            } catch (err) {
+              console.error("[Asistente IA] Error listando archivos de Drive:", err);
+            }
+          }
+        }
+
+        // Tablero: avisos y aclaraciones generales del equipo (no atadas a
+        // este cliente en particular) — conocimiento operativo útil sin
+        // importar de qué cliente se esté preguntando, incluyendo
+        // documentos que se hayan subido ahí para estudio.
+        const boardPosts = await db.getBoardContextForAssistant(15);
+        const boardSummary = boardPosts.map(p => {
+          const adjuntosTxt = p.adjuntos.length > 0
+            ? ` [Adjuntos: ${p.adjuntos.map(a => a.fileName).join(", ")}]`
+            : "";
+          return `- ${p.pinned ? "📌 " : ""}[${p.obligationName || "General"}] ${p.authorName || "Usuario"}: ${p.content}${adjuntosTxt}`;
+        }).join("\n");
+        const boardAttachmentBlocks = await Promise.all(
+          boardPosts
+            .flatMap(p => p.adjuntos)
+            .filter(a => a.contentType === "application/pdf" || (a.contentType || "").startsWith("image/"))
+            .slice(0, 6)
+            .map(async a => ({
+              type: "file_url" as const,
+              file_url: {
+                url: await storageGetSignedUrl(a.fileKey),
+                mime_type: a.contentType || "application/pdf",
+              },
+            })),
+        );
+
+        // Operational context: tasks, deadlines, and their comments.
+        const { tasks: clientTasks, deadlines: clientDeadlines } = await db.getClientOperationalContext(input.clientId);
+        const tasksSummary = clientTasks.map(t => {
+          const commentsText = t.comments.length > 0
+            ? "\n  Comentarios: " + t.comments.map((c: any) => `[${c.authorName}: ${c.content}]`).join(" ")
+            : "";
+          return `- "${t.title}" — estado: ${t.status}, asignada a: ${t.assignedToName || "sin asignar"}${t.dueDate ? `, vence: ${new Date(t.dueDate).toLocaleDateString("es-CO")}` : ""}${t.completionNotes ? `, notas: ${t.completionNotes}` : ""}${commentsText}`;
+        }).join("\n");
+        const deadlinesSummary = clientDeadlines.map(d => {
+          const commentsText = d.comments.length > 0
+            ? "\n  Comentarios: " + d.comments.map((c: any) => `[${c.authorName}: ${c.content}]`).join(" ")
+            : "";
+          return `- ${d.obligationName} — período ${d.period}, estado: ${d.status}, vence: ${new Date(d.dueDate).toLocaleDateString("es-CO")}${commentsText}`;
+        }).join("\n");
+
+        const systemPrompt = `Eres un asistente contable para el equipo de Areda SAS, una firma de contaduría en Colombia. Estás ayudando a un colaborador con preguntas sobre el cliente "${client.razonSocial}" (NIT ${client.nit}).
+
+Documentos con contenido disponible para leer (soportes ya subidos de tareas y vencimientos completados de este cliente):
+${evidenceList || "No hay documentos de soporte cargados aún para este cliente."}
+
+${driveFilesList ? `Otros documentos que existen en la carpeta de Drive del cliente (solo conoces el nombre y la fecha, NO el contenido — si el usuario necesita el contenido de alguno de estos, dile que lo abra manualmente en Drive):\n${driveFilesList}\n` : ""}
+Tareas de este cliente (con sus comentarios, si tienen):
+${tasksSummary || "No hay tareas registradas para este cliente."}
+
+Vencimientos tributarios de este cliente (con sus comentarios, si tienen):
+${deadlinesSummary || "No hay vencimientos registrados para este cliente."}
+
+Avisos y aclaraciones generales del equipo (Tablero — no son específicos de este cliente, pero pueden ser relevantes: procesos, dudas resueltas, documentos de estudio subidos por el equipo):
+${boardSummary || "No hay publicaciones en el Tablero todavía."}
+
+Responde basándote en esta información cuando sea posible. Si la pregunta requiere el contenido de un documento que no tienes disponible (solo aparece en la lista de "otros documentos"), dile al usuario que lo revise directamente en Drive en vez de inventar su contenido. Sé conciso y directo, como corresponde a un contexto de trabajo contable.`;
+
+        const historyMessages = (input.history || []).map(h => ({ role: h.role, content: h.content }));
+
+        const response = await invokeLLM({
+          max_tokens: 2000,
+          messages: [
+            { role: "system", content: systemPrompt },
+            ...historyMessages,
+            {
+              role: "user",
+              content: [
+                { type: "text" as const, text: input.message },
+                ...evidenceBlocks,
+                ...boardAttachmentBlocks,
+              ],
+            },
+          ],
+        });
+
+        const rawContent = response.choices?.[0]?.message?.content || "";
+        const answer = typeof rawContent === "string" ? rawContent : JSON.stringify(rawContent);
+        return { answer };
+      }),
+  }),
+  /** Self-reported clock in/out — replaces the in-person biometric register.
+   * The collaborator marks their own start of day, lunch out/in, and end of
+   * day; nothing is inferred or tracked automatically. */
+  timeTracking: router({
+    mark: protectedProcedure
+      .input(z.object({
+        type: z.enum(["inicio", "salida_almuerzo", "regreso_almuerzo", "fin"]),
+        latitude: z.number().optional(),
+        longitude: z.number().optional(),
+        locationAccuracy: z.number().optional(),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        const deviceType = db.inferirTipoDispositivo(ctx.req.headers["user-agent"]);
+        await db.createTimeEntry(ctx.user.id, input.type, {
+          deviceType, latitude: input.latitude, longitude: input.longitude, locationAccuracy: input.locationAccuracy,
+        });
+        return { success: true };
+      }),
+    /** The client computes "today" using its own local clock and sends the
+     * exact range — avoids the server having to guess the collaborator's
+     * timezone for what "today" means. */
+    getToday: protectedProcedure
+      .input(z.object({ startOfDay: z.string(), endOfDay: z.string() }))
+      .query(async ({ input, ctx }) => {
+        return db.getUserTimeEntries(ctx.user.id, new Date(input.startOfDay), new Date(input.endOfDay));
+      }),
+    /** Restricted to a single specific admin (Arlex) by explicit request —
+     * attendance/hours data about the team is sensitive enough that even
+     * other admins shouldn't see it by default. */
+    getLog: adminProcedure
+      .input(z.object({ startOfDay: z.string(), endOfDay: z.string(), userId: z.number().optional() }))
+      .query(async ({ input, ctx }) => {
+        if (ctx.user.cedula !== ASISTENCIA_AUTHORIZED_CEDULA) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Esta sección está restringida" });
+        }
+        return db.getTimeTrackingLog(new Date(input.startOfDay), new Date(input.endOfDay), input.userId);
+      }),
+    /** Saves the collaborator's own hour-by-hour plan for one work block
+     * (in house / a specific client / on leave) — exactly 4 slots. */
+    saveLocation: protectedProcedure
+      .input(z.object({
+        date: z.string(), // "YYYY-MM-DD", the collaborator's own calendar day
+        block: z.enum(["morning", "afternoon"]),
+        slots: z.array(z.object({
+          type: z.enum(["in_house", "client", "libre"]),
+          clientId: z.number().optional(),
+        })).length(4),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        await db.saveWorkLocation(ctx.user.id, input.date, input.block, input.slots);
+        return { success: true };
+      }),
+    getMyLocation: protectedProcedure
+      .input(z.object({ date: z.string() }))
+      .query(async ({ input, ctx }) => {
+        return db.getWorkLocation(ctx.user.id, input.date);
+      }),
+    /** Restricted the same way as getLog — everyone's location plan for a
+     * given day, for the Asistencia admin view. */
+    getLocationsForDate: adminProcedure
+      .input(z.object({ date: z.string() }))
+      .query(async ({ input, ctx }) => {
+        if (ctx.user.cedula !== ASISTENCIA_AUTHORIZED_CEDULA) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Esta sección está restringida" });
+        }
+        return db.getWorkLocationsForDate(input.date);
+      }),
+  }),
+  /** Comments on a specific task or deadline — for asking/flagging things
+   * about that item directly ("revisa el adjunto, faltó algo"), instead of
+   * a general chat between users. */
+  comments: router({
+    list: protectedProcedure
+      .input(z.object({ entityType: z.enum(["task", "deadline", "renta_cliente"]), entityId: z.number() }))
+      .query(async ({ input, ctx }) => {
+        if (input.entityType === "task") {
+          const task = await db.getTaskById(input.entityId);
+          if (!task) throw new Error("Tarea no encontrada");
+          if (ctx.user.role !== "admin" && task.assignedToId !== ctx.user.id) {
+            throw new TRPCError({ code: "FORBIDDEN", message: "No tiene acceso a esta tarea" });
+          }
+        } else if (input.entityType === "renta_cliente") {
+          assertRentaPNAccess(ctx.user.role);
+        } else {
+          const deadline = await db.getDeadlineById(input.entityId);
+          if (!deadline) throw new Error("Vencimiento no encontrado");
+          if (ctx.user.role !== "admin") {
+            const client = await db.getClientById(deadline.clientId);
+            if (!client || client.managerId !== ctx.user.id) {
+              throw new TRPCError({ code: "FORBIDDEN", message: "No tiene acceso a este vencimiento" });
+            }
+          }
+        }
+        return db.getComments(input.entityType, input.entityId);
+      }),
+    create: protectedProcedure
+      .input(z.object({ entityType: z.enum(["task", "deadline", "renta_cliente"]), entityId: z.number(), content: z.string().min(1) }))
+      .mutation(async ({ input, ctx }) => {
+        if (input.entityType === "task") {
+          const task = await db.getTaskById(input.entityId);
+          if (!task) throw new Error("Tarea no encontrada");
+          if (ctx.user.role !== "admin" && task.assignedToId !== ctx.user.id) {
+            throw new TRPCError({ code: "FORBIDDEN", message: "No tiene acceso a esta tarea" });
+          }
+          await db.createComment(input.entityType, input.entityId, ctx.user.id, input.content);
+          // Notifica a todos los que han participado en la conversación de
+          // esta tarea (encargado, quien la creó, y cualquiera que ya haya
+          // comentado antes) menos a quien acaba de comentar — así, si un
+          // administrador comenta y el encargado responde, el administrador
+          // se entera de la respuesta sin importar quién creó la tarea.
+          const hilo = await db.getComments("task", task.id);
+          const participantes = new Set<number>();
+          if (task.assignedToId) participantes.add(task.assignedToId);
+          if (task.createdById) participantes.add(task.createdById);
+          for (const c of hilo) if (c.authorId) participantes.add(c.authorId);
+          participantes.delete(ctx.user.id);
+          if (participantes.size > 0) {
+            const client = await db.getClientById(task.clientId);
+            const title = client ? `${client.razonSocial} — ${task.title}` : task.title;
+            for (const uid of Array.from(participantes)) {
+              await db.createNotification(uid, "comentario", "task", task.id, title, input.content, task.clientId);
+            }
+          }
+        } else if (input.entityType === "renta_cliente") {
+          assertRentaPNAccess(ctx.user.role);
+          await db.createComment(input.entityType, input.entityId, ctx.user.id, input.content);
+        } else {
+          const deadline = await db.getDeadlineById(input.entityId);
+          if (!deadline) throw new Error("Vencimiento no encontrado");
+          const client = await db.getClientById(deadline.clientId);
+          if (ctx.user.role !== "admin") {
+            if (!client || client.managerId !== ctx.user.id) {
+              throw new TRPCError({ code: "FORBIDDEN", message: "No tiene acceso a este vencimiento" });
+            }
+          }
+          await db.createComment(input.entityType, input.entityId, ctx.user.id, input.content);
+          // Mismo criterio que en tareas: notificar a todo el que ha
+          // participado en el hilo (el encargado del cliente, quien revisó
+          // o completó el vencimiento antes, y cualquiera que ya haya
+          // comentado) menos a quien acaba de comentar.
+          const hilo = await db.getComments("deadline", deadline.id);
+          const participantes = new Set<number>();
+          if (client?.managerId) participantes.add(client.managerId);
+          if (deadline.completedById) participantes.add(deadline.completedById);
+          if (deadline.reviewedById) participantes.add(deadline.reviewedById);
+          for (const c of hilo) if (c.authorId) participantes.add(c.authorId);
+          participantes.delete(ctx.user.id);
+          if (participantes.size > 0 && client) {
+            const title = `${client.razonSocial} — período ${deadline.period}`;
+            for (const uid of Array.from(participantes)) {
+              await db.createNotification(uid, "comentario", "deadline", deadline.id, title, input.content, deadline.clientId);
+            }
+          }
+        }
+        return { success: true };
+      }),
+  }),
+  /** Real Google Drive integration (service account) — lets the admin
+   * verify the connection, and lets anyone browse a client's actual Drive
+   * subfolders when uploading evidence. */
+  googleDrive: router({
+    isConfigured: protectedProcedure.query(() => isDriveConfigured()),
+    /** Admin-only: confirms the credentials work AND that a specific
+     * client's folder was actually shared with the service account. */
+    testConnection: adminProcedure
+      .input(z.object({ clientId: z.number() }))
+      .query(async ({ input }) => {
+        if (!isDriveConfigured()) {
+          throw new Error("Google Drive no está configurado — faltan las variables de entorno en Railway");
+        }
+        const client = await db.getClientById(input.clientId);
+        if (!client?.driveFolderUrl) throw new Error("Este cliente no tiene una carpeta de Drive configurada");
+        const folderId = extractFolderIdFromUrl(client.driveFolderUrl);
+        if (!folderId) throw new Error("No se pudo interpretar el enlace de la carpeta de Drive");
+        const folder = await testFolderAccess(folderId);
+        return { success: true, folderName: folder.name };
+      }),
+    /** Real subfolders inside a client's Drive folder (falls back to the
+     * remembered-name list on the frontend if Drive isn't configured). */
+    listSubfolders: protectedProcedure
+      .input(z.object({ clientId: z.number() }))
+      .query(async ({ input, ctx }) => {
+        const client = await db.getClientById(input.clientId);
+        if (!client) throw new Error("Cliente no encontrado");
+        if (ctx.user.role !== "admin" && client.managerId !== ctx.user.id) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "No tiene acceso a este cliente" });
+        }
+        if (!client.driveFolderUrl || !isDriveConfigured()) return [];
+        const folderId = extractFolderIdFromUrl(client.driveFolderUrl);
+        if (!folderId) return [];
+        return listSubfoldersRecursive(folderId);
+      }),
+  }),
+  /** In-app notifications — lets a collaborator know something happened on
+   * a task/deadline they care about (comment, approval, correction) without
+   * having to stumble onto it by chance. */
+  notifications: router({
+    list: protectedProcedure
+      .input(z.object({ limit: z.number().optional() }).optional())
+      .query(async ({ input, ctx }) => {
+        return db.getNotifications(ctx.user.id, input?.limit);
+      }),
+    unreadCount: protectedProcedure.query(async ({ ctx }) => {
+      // Piggyback housekeeping on this frequent poll instead of a separate
+      // scheduled job — deletes old READ notifications only.
+      await db.cleanupOldReadNotifications(ctx.user.id);
+      return db.getUnreadNotificationCount(ctx.user.id);
+    }),
+    markRead: protectedProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ input, ctx }) => {
+        await db.markNotificationRead(input.id, ctx.user.id);
+        return { success: true };
+      }),
+    markAllRead: protectedProcedure.mutation(async ({ ctx }) => {
+      await db.markAllNotificationsRead(ctx.user.id);
+      return { success: true };
+    }),
+  }),
+
+  informes: router({
+    // Clientes disponibles para el módulo — visible para cualquier usuario
+    // autenticado; los que no son administradores solo ven los clientes
+    // donde son el gerente/responsable asignado (managerId), igual que en
+    // el módulo general de Clientes. Cada endpoint que reciba un
+    // clienteId además valida que el usuario tenga acceso a ESE cliente
+    // en particular (ver assertClienteAccesibleInformes).
+    clientes: router({
+      list: protectedProcedure.query(async ({ ctx }) => {
+        return db.getAllClients(ctx.user.role === "admin" ? undefined : ctx.user.id);
+      }),
+    }),
+    cuentas: router({
+      // Cuentas que ya se vieron en alguna carga pero se quedaron sin
+      // nombre (ej. porque la clasificación por IA falló esa vez).
+      pendientesDeNombre: protectedProcedure.query(async ({ ctx }) => {
+        if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Solo el administrador puede hacer esto." });
+        return informesDb.getCuentasSinDescripcion();
+      }),
+      reclasificar: protectedProcedure.mutation(async ({ ctx }) => {
+        if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Solo el administrador puede hacer esto." });
+        const pendientes = await informesDb.getCuentasSinDescripcion();
+        if (pendientes.length === 0) return { intentadas: 0, clasificadas: 0 };
+        const resultado = await informesDb.clasificarCuentasNuevas(pendientes);
+        return { intentadas: pendientes.length, clasificadas: resultado.clasificadas, exito: resultado.exito };
+      }),
+      // Catálogo de nombres de cuenta propio de cada cliente — se siembra
+      // solo desde el archivo (si trae nombre) y se puede corregir/agregar
+      // a mano, útil para clientes cuyo archivo nunca trae nombre.
+      catalogoCliente: protectedProcedure
+        .input(z.object({ clienteId: z.number() }))
+        .query(async ({ input, ctx }) => {
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
+          return informesDb.listarCatalogoCliente(input.clienteId);
+        }),
+      actualizarNombreCliente: protectedProcedure
+        .input(z.object({ clienteId: z.number(), cuenta: z.string().min(1), nombre: z.string().min(1) }))
+        .mutation(async ({ input, ctx }) => {
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
+          await informesDb.actualizarNombreCuentaManual(input.clienteId, input.cuenta, input.nombre);
+          return { success: true };
+        }),
+    }),
+    centrosCosto: router({
+      list: protectedProcedure
+        .input(z.object({ clienteId: z.number() }))
+        .query(async ({ input, ctx }) => {
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
+          return informesDb.getCentrosCosto(input.clienteId);
+        }),
+      create: protectedProcedure
+        .input(z.object({ clienteId: z.number(), codigo: z.string().min(1), nombre: z.string().min(1) }))
+        .mutation(async ({ input, ctx }) => {
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
+          await informesDb.createCentroCosto(input.clienteId, input.codigo, input.nombre);
+          return { success: true };
+        }),
+      // Para clientes con saldos ya cargados antes de que el catálogo se
+      // empezara a sembrar automáticamente al subir el auxiliar.
+      detectarDesdeSaldos: protectedProcedure
+        .input(z.object({ clienteId: z.number() }))
+        .mutation(async ({ input, ctx }) => {
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
+          return informesDb.detectarCentrosCostoDesdeSaldos(input.clienteId);
+        }),
+      // Conveniencia: siembra el catálogo conocido de Colfamil (23 puntos +
+      // Adm) para el clienteId indicado. No hace nada si ese cliente ya
+      // tiene centros cargados.
+      seedColfamil: protectedProcedure
+        .input(z.object({ clienteId: z.number() }))
+        .mutation(async ({ input, ctx }) => {
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
+          await informesDb.seedCentrosCosto(input.clienteId, informesDb.CENTROS_SEED_COLFAMIL);
+          return { success: true };
+        }),
+      update: protectedProcedure
+        .input(z.object({ id: z.number(), nombre: z.string().optional(), activo: z.boolean().optional() }))
+        .mutation(async ({ input, ctx }) => {
+          if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Solo el administrador puede hacer esto." });
+          const { id, ...data } = input;
+          await informesDb.updateCentroCosto(id, data);
+          return { success: true };
+        }),
+    }),
+    cargas: router({
+      list: protectedProcedure
+        .input(z.object({ clienteId: z.number(), anio: z.number().optional() }))
+        .query(async ({ input, ctx }) => {
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
+          return informesDb.listarCargas(input.clienteId, input.anio);
+        }),
+      // La subida real del archivo (puede pesar 50-100mb+) va por
+      // POST /api/informes/upload (binario crudo), no por tRPC — ver
+      // server/_core/index.ts. Esta query solo permite consultar el estado
+      // de una carga ya creada, para el polling desde el frontend.
+      getById: protectedProcedure
+        .input(z.object({ clienteId: z.number(), id: z.number() }))
+        .query(async ({ input, ctx }) => {
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
+          const cargas = await informesDb.listarCargas(input.clienteId);
+          return cargas.find(c => c.id === input.id) || null;
+        }),
+      // Repara datos duplicados de re-subidas anteriores a la corrección
+      // que borra el periodo antes de insertar (ver guardarSaldosMensuales).
+      // Deja solo la fila más reciente por cada combinación de
+      // año/mes/centro/cuenta — no afecta clientes que ya estén limpios.
+      deduplicarSaldos: protectedProcedure
+        .input(z.object({ clienteId: z.number() }))
+        .mutation(async ({ input, ctx }) => {
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
+          return informesDb.deduplicarSaldosMensuales(input.clienteId);
+        }),
+    }),
+    reportes: router({
+      list: protectedProcedure
+        .input(z.object({ clienteId: z.number(), anio: z.number().optional() }))
+        .query(async ({ input, ctx }) => {
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
+          return informesDb.listarReportes(input.clienteId, input.anio);
+        }),
+      // ERM (Estado de Resultados Mensual comparativo) — el informe
+      // principal: un año, comparativo por mes, todos los centros de costo
+      // combinados. Funciona igual con o sin centros de costo.
+      generarERM: protectedProcedure
+        .input(z.object({
+          clienteId: z.number(), anio: z.number(),
+          nivel: z.enum(["resumen", "detalle"]).default("resumen"),
+        }))
+        .mutation(async ({ input, ctx }) => {
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
+          const buffer = await generarReporteERM(input.clienteId, input.anio, input.nivel);
+          const key = `informes/ERM_${input.clienteId}_${input.anio}_${input.nivel}_${Date.now()}.xlsx`;
+          const { url, key: fileKey } = await storagePut(
+            key, buffer, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          );
+          await informesDb.guardarReporteGenerado({
+            clienteId: input.clienteId, anio: input.anio, mes: null, tipo: "ERM",
+            nivel: input.nivel, fileKey, generadoPorId: ctx.user.id,
+          });
+          const signedUrl = await storageGetSignedUrl(fileKey);
+          return { url, signedUrl, fileKey };
+        }),
+      // ERI (por centro de costo) — informe derivado del ERM, solo tiene
+      // sentido para clientes que manejan centro de costo.
+      generarERI: protectedProcedure
+        .input(z.object({
+          clienteId: z.number(), anio: z.number(), mes: z.number().min(1).max(12),
+          nivel: z.enum(["resumen", "detalle"]).default("resumen"),
+        }))
+        .mutation(async ({ input, ctx }) => {
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
+          const buffer = await generarReporteERI(input.clienteId, input.anio, input.mes, input.nivel);
+          const key = `informes/ERI_${input.clienteId}_${input.anio}_${String(input.mes).padStart(2, "0")}_${Date.now()}.xlsx`;
+          const { url, key: fileKey } = await storagePut(
+            key, buffer, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          );
+          await informesDb.guardarReporteGenerado({
+            clienteId: input.clienteId, anio: input.anio, mes: input.mes, tipo: "ERI",
+            nivel: input.nivel, fileKey, generadoPorId: ctx.user.id,
+          });
+          const signedUrl = await storageGetSignedUrl(fileKey);
+          return { url, signedUrl, fileKey };
+        }),
+      getDownloadUrl: protectedProcedure
+        .input(z.object({ fileKey: z.string() }))
+        .query(async ({ input, ctx }) => {
+          return { signedUrl: await storageGetSignedUrl(input.fileKey) };
+        }),
+    }),
+    // Informe con destino al cliente — resume, en orden cronológico, todo
+    // lo hecho por su cuenta en un periodo (tareas, vencimientos, revisión,
+    // cargues de libro auxiliar, generación de reportes). Restringido a
+    // administradores porque expone quién revisó/aprobó cada cosa.
+    gestionCliente: router({
+      generar: adminProcedure
+        .input(z.object({ clienteId: z.number(), fechaInicio: z.string(), fechaFin: z.string() }))
+        .mutation(async ({ input }) => {
+          const cliente = await db.getClientById(input.clienteId);
+          if (!cliente) throw new Error("Cliente no encontrado");
+          const fechaInicio = new Date(input.fechaInicio);
+          const fechaFin = new Date(input.fechaFin);
+          const resultado = await informesGestionCliente.getActividadesGestionCliente(input.clienteId, fechaInicio, fechaFin);
+          const buffer = await informesGestionCliente.generarInformeGestionCliente(
+            cliente.razonSocial, cliente.nit, fechaInicio, fechaFin, resultado,
+          );
+          const key = `informes/GestionCliente_${input.clienteId}_${Date.now()}.pdf`;
+          const { url, key: fileKey } = await storagePut(key, buffer, "application/pdf");
+          const signedUrl = await storageGetSignedUrl(fileKey);
+          return { url, signedUrl, fileKey, totalActividades: resultado.actividades.length + resultado.otras.length };
+        }),
+    }),
+    // Conciliación de IVA (Formulario 300 de la DIAN) — se construye por
+    // pasos: primero se verifica que el periodo tenga libro auxiliar y
+    // comparación DIAN de cada mes, luego se va clasificando ingresos,
+    // IVA generado, compras, IVA descontable, IVA transitorio, y la
+    // proporcionalidad del Art. 490 E.T. (los siguientes pasos se agregan
+    // en próximas entregas).
+    iva: router({
+      verificarPeriodo: protectedProcedure
+        .input(z.object({
+          clienteId: z.number(), anio: z.number(),
+          periodicidad: z.enum(["bimestral", "cuatrimestral", "anual"]), periodo: z.number(),
+        }))
+        .query(async ({ input, ctx }) => {
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
+          return informesIva.verificarPrerequisitosIva(input.clienteId, input.anio, input.periodicidad, input.periodo);
+        }),
+      iniciar: protectedProcedure
+        .input(z.object({
+          clienteId: z.number(), anio: z.number(),
+          periodicidad: z.enum(["bimestral", "cuatrimestral", "anual"]), periodo: z.number(),
+        }))
+        .mutation(async ({ input, ctx }) => {
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
+          const { todoListo } = await informesIva.verificarPrerequisitosIva(input.clienteId, input.anio, input.periodicidad, input.periodo);
+          if (!todoListo) {
+            throw new Error("Todavía faltan meses de este periodo sin libro auxiliar o sin comparación DIAN — complétalos antes de iniciar la conciliación.");
+          }
+          return informesIva.iniciarOConseguirConciliacion(input.clienteId, input.anio, input.periodicidad, input.periodo, ctx.user.id);
+        }),
+      obtener: protectedProcedure
+        .input(z.object({
+          clienteId: z.number(), anio: z.number(),
+          periodicidad: z.enum(["bimestral", "cuatrimestral", "anual"]), periodo: z.number(),
+        }))
+        .query(async ({ input, ctx }) => {
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
+          return informesIva.getConciliacionIva(input.clienteId, input.anio, input.periodicidad, input.periodo) ?? null;
+        }),
+      // Paso 2 — clasificación de ingresos por tarifa (gravado 19%/5%,
+      // excluido, no gravado) y comparación contra el total "Emitido"
+      // que ya reportó la DIAN en cada mes del periodo.
+      ingresos: router({
+        listar: protectedProcedure
+          .input(z.object({
+            clienteId: z.number(), anio: z.number(),
+            periodicidad: z.enum(["bimestral", "cuatrimestral", "anual"]), periodo: z.number(),
+          }))
+          .query(async ({ input, ctx }) => {
+            await assertClienteAccesibleInformes(ctx, input.clienteId);
+            const meses = informesIva.mesesDelPeriodo(input.periodicidad, input.periodo);
+            const [cuentas, totalDianPorMes] = await Promise.all([
+              informesIva.getCuentasIngresoDelPeriodo(input.clienteId, input.anio, meses, input.periodicidad, input.periodo),
+              informesIva.getTotalDianEmitidoPorMes(input.clienteId, input.anio, meses),
+            ]);
+            return { cuentas, totalDianPorMes };
+          }),
+        guardarClasificacion: protectedProcedure
+          .input(z.object({
+            clienteId: z.number(), anio: z.number(),
+            periodicidad: z.enum(["bimestral", "cuatrimestral", "anual"]), periodo: z.number(),
+            clasificaciones: z.array(z.object({
+              cuenta: z.string(), clasificacion: z.enum(["gravado_19", "gravado_5", "excluido", "no_gravado"]),
+              facturado: z.boolean(),
+            })),
+          }))
+          .mutation(async ({ input, ctx }) => {
+            await assertClienteAccesibleInformes(ctx, input.clienteId);
+            await informesIva.guardarClasificacionCuentas(input.clienteId, input.clasificaciones, ctx.user.id);
+            return informesIva.computarResumenIngresos(input.clienteId, input.anio, input.periodicidad, input.periodo);
+          }),
+        guardarDivision: protectedProcedure
+          .input(z.object({
+            clienteId: z.number(), anio: z.number(),
+            periodicidad: z.enum(["bimestral", "cuatrimestral", "anual"]), periodo: z.number(),
+            cuenta: z.string(),
+            divisiones: z.array(z.object({
+              etiqueta: z.string().optional(), valor: z.number(),
+              clasificacion: z.enum(["gravado_19", "gravado_5", "excluido", "no_gravado"]), facturado: z.boolean(),
+            })),
+          }))
+          .mutation(async ({ input, ctx }) => {
+            await assertClienteAccesibleInformes(ctx, input.clienteId);
+            await informesIva.guardarDivisionesCuenta(
+              input.clienteId, input.anio, input.periodicidad, input.periodo, input.cuenta, input.divisiones, ctx.user.id,
+            );
+            return informesIva.computarResumenIngresos(input.clienteId, input.anio, input.periodicidad, input.periodo);
+          }),
+      }),
+      // Paso 4 — compras: mismo patrón que el paso de ingresos, pero con
+      // las cuentas 14 (inventario) y 62 (compras) — el usuario clasifica
+      // cada una por tarifa (o divide si mezcla varias), y se compara
+      // contra el total "Recibido" que la DIAN ya tiene reportado.
+      compras: router({
+        listar: protectedProcedure
+          .input(z.object({
+            clienteId: z.number(), anio: z.number(),
+            periodicidad: z.enum(["bimestral", "cuatrimestral", "anual"]), periodo: z.number(),
+          }))
+          .query(async ({ input, ctx }) => {
+            await assertClienteAccesibleInformes(ctx, input.clienteId);
+            const meses = informesIva.mesesDelPeriodo(input.periodicidad, input.periodo);
+            const [cuentas, totalDianPorMes, expediente] = await Promise.all([
+              informesIva.getCuentasComprasDelPeriodo(input.clienteId, input.anio, meses, input.periodicidad, input.periodo),
+              informesIva.getTotalDianRecibidoComprasPorMes(input.clienteId, input.anio, meses),
+              informesIva.getConciliacionIva(input.clienteId, input.anio, input.periodicidad, input.periodo),
+            ]);
+            let sinCompras = false;
+            try {
+              const estado = expediente?.estadoJson ? JSON.parse(expediente.estadoJson) : {};
+              sinCompras = !!estado.compras?.sinCompras;
+            } catch { /* estado inválido — se asume false */ }
+            return { cuentas, totalDianPorMes, sinCompras };
+          }),
+        // Para empresas que no tienen compras gravables en las cuentas
+        // 14/62 (ej. algunas de servicios) — sin esto, el Paso 4 se
+        // quedaba sin nada que guardar, bloqueando el paso al Paso 5.
+        marcarSinCompras: protectedProcedure
+          .input(z.object({
+            clienteId: z.number(), anio: z.number(),
+            periodicidad: z.enum(["bimestral", "cuatrimestral", "anual"]), periodo: z.number(),
+            marcar: z.boolean(),
+          }))
+          .mutation(async ({ input, ctx }) => {
+            await assertClienteAccesibleInformes(ctx, input.clienteId);
+            return informesIva.guardarSinCompras(input.clienteId, input.anio, input.periodicidad, input.periodo, input.marcar);
+          }),
+        // Tipos de comprobante que tuvieron movimiento en las cuentas
+        // 14/62 del periodo, y cuáles ya están marcados como asiento
+        // interno (no compra real) — para configurar el filtro antes de
+        // clasificar.
+        tiposDocumento: protectedProcedure
+          .input(z.object({
+            clienteId: z.number(), anio: z.number(),
+            periodicidad: z.enum(["bimestral", "cuatrimestral", "anual"]), periodo: z.number(),
+          }))
+          .query(async ({ input, ctx }) => {
+            await assertClienteAccesibleInformes(ctx, input.clienteId);
+            const meses = informesIva.mesesDelPeriodo(input.periodicidad, input.periodo);
+            const [tipos, excluidos] = await Promise.all([
+              informesIva.getTiposComprobanteComprasDelPeriodo(input.clienteId, input.anio, meses),
+              informesIva.getComprasTiposExcluidos(input.clienteId),
+            ]);
+            return { tipos, excluidos };
+          }),
+        guardarTiposExcluidos: protectedProcedure
+          .input(z.object({ clienteId: z.number(), tipos: z.array(z.string()) }))
+          .mutation(async ({ input, ctx }) => {
+            await assertClienteAccesibleInformes(ctx, input.clienteId);
+            await informesIva.guardarComprasTiposExcluidos(input.clienteId, input.tipos, ctx.user.id);
+            return { success: true };
+          }),
+        guardarClasificacion: protectedProcedure
+          .input(z.object({
+            clienteId: z.number(), anio: z.number(),
+            periodicidad: z.enum(["bimestral", "cuatrimestral", "anual"]), periodo: z.number(),
+            clasificaciones: z.array(z.object({
+              cuenta: z.string(), clasificacion: z.enum(["gravado_19", "gravado_5", "excluido", "no_gravado"]),
+              facturado: z.boolean(),
+            })),
+          }))
+          .mutation(async ({ input, ctx }) => {
+            await assertClienteAccesibleInformes(ctx, input.clienteId);
+            await informesIva.guardarClasificacionCuentas(input.clienteId, input.clasificaciones, ctx.user.id);
+            return informesIva.computarResumenCompras(input.clienteId, input.anio, input.periodicidad, input.periodo);
+          }),
+        guardarDivision: protectedProcedure
+          .input(z.object({
+            clienteId: z.number(), anio: z.number(),
+            periodicidad: z.enum(["bimestral", "cuatrimestral", "anual"]), periodo: z.number(),
+            cuenta: z.string(),
+            divisiones: z.array(z.object({
+              etiqueta: z.string().optional(), valor: z.number(),
+              clasificacion: z.enum(["gravado_19", "gravado_5", "excluido", "no_gravado"]), facturado: z.boolean(),
+            })),
+          }))
+          .mutation(async ({ input, ctx }) => {
+            await assertClienteAccesibleInformes(ctx, input.clienteId);
+            await informesIva.guardarDivisionesCuenta(
+              input.clienteId, input.anio, input.periodicidad, input.periodo, input.cuenta, input.divisiones, ctx.user.id,
+            );
+            return informesIva.computarResumenCompras(input.clienteId, input.anio, input.periodicidad, input.periodo);
+          }),
+      }),
+      // Paso 3 — IVA generado: confirmar cuál cuenta contable (casi
+      // siempre sub-cuenta de la 2408) corresponde al IVA generado al
+      // 19% y al 5%, y cotejar que la tarifa aplicada sobre la base ya
+      // clasificada en el paso de ingresos sea igual al valor contable
+      // real de esa cuenta.
+      // Clasificación UNIFICADA de cuentas de IVA (24xx) — reemplaza los
+      // selectores de cuenta dispersos en cada paso: aquí se listan
+      // TODAS las cuentas del periodo de una sola vez (igual que en
+      // ingresos) y se clasifica cada una en su categoría — generado,
+      // descontable, transitorio, o devoluciones — permitiendo VARIAS
+      // cuentas por categoría (el sistema las suma).
+      clasificacionCuentas: router({
+        listar: protectedProcedure
+          .input(z.object({
+            clienteId: z.number(), anio: z.number(),
+            periodicidad: z.enum(["bimestral", "cuatrimestral", "anual"]), periodo: z.number(),
+          }))
+          .query(async ({ input, ctx }) => {
+            await assertClienteAccesibleInformes(ctx, input.clienteId);
+            const meses = informesIva.mesesDelPeriodo(input.periodicidad, input.periodo);
+            const cuentaMayor = await informesIvaCuentas.getCuentaMayorIva(input.clienteId);
+            const [diagnostico, clasificacionMapa] = await Promise.all([
+              informesIvaCuentas.getCuentasPrefijoDelPeriodoConDiagnostico(input.clienteId, input.anio, meses, [cuentaMayor]),
+              informesIvaCuentas.getClasificacionCuentasIva(input.clienteId),
+            ]);
+            const cuentas = diagnostico.cuentas.map(c => ({ ...c, categoria: clasificacionMapa.get(c.cuenta) || null }));
+            return { cuentas, cuentaMayor, diagnostico };
+          }),
+        guardarCuentaMayor: protectedProcedure
+          .input(z.object({ clienteId: z.number(), cuenta: z.string().min(1) }))
+          .mutation(async ({ input, ctx }) => {
+            await assertClienteAccesibleInformes(ctx, input.clienteId);
+            await informesIvaCuentas.guardarCuentaMayorIva(input.clienteId, input.cuenta.trim(), ctx.user.id);
+            return { success: true };
+          }),
+        guardarClasificacion: protectedProcedure
+          .input(z.object({
+            clienteId: z.number(),
+            clasificaciones: z.array(z.object({
+              cuenta: z.string(),
+              categoria: z.enum([
+                "generado_19", "generado_5", "descontable_19", "descontable_5", "transitorio",
+                "generado_devolucion_compra_19", "generado_devolucion_compra_5",
+                "descontable_devolucion_venta_19", "descontable_devolucion_venta_5",
+              ]),
+            })),
+          }))
+          .mutation(async ({ input, ctx }) => {
+            await assertClienteAccesibleInformes(ctx, input.clienteId);
+            await informesIvaCuentas.guardarClasificacionCuentasIva(input.clienteId, input.clasificaciones, ctx.user.id);
+            return { success: true };
+          }),
+      }),
+      ivaGenerado: router({
+        // La lista de cuentas y su clasificación ahora viven en el paso
+        // unificado "clasificacionCuentas" — este endpoint solo calcula
+        // la comparación a partir de lo ya clasificado ahí.
+        comparar: protectedProcedure
+          .input(z.object({
+            clienteId: z.number(), anio: z.number(),
+            periodicidad: z.enum(["bimestral", "cuatrimestral", "anual"]), periodo: z.number(),
+          }))
+          .query(async ({ input, ctx }) => {
+            await assertClienteAccesibleInformes(ctx, input.clienteId);
+            const expediente = await informesIva.getConciliacionIva(input.clienteId, input.anio, input.periodicidad, input.periodo);
+            let estado: any = {};
+            try { estado = expediente?.estadoJson ? JSON.parse(expediente.estadoJson) : {}; } catch { estado = {}; }
+            const totalPorClasificacion = estado.ingresos?.totalPorClasificacion;
+            if (!totalPorClasificacion) {
+              throw new Error("Primero completa y guarda el Paso 2 (clasificación de ingresos) de este periodo.");
+            }
+            const meses = informesIva.mesesDelPeriodo(input.periodicidad, input.periodo);
+
+            const esperado19 = totalPorClasificacion.gravado_19 * 0.19;
+            const esperado5 = totalPorClasificacion.gravado_5 * 0.05;
+
+            // Las 4 lecturas de saldo y las 2 comparaciones contra la DIAN
+            // son independientes entre sí — lanzarlas TODAS a la vez (en
+            // vez de una detrás de otra) es lo que evita que el tiempo se
+            // acumule y la sección se sienta lenta al abrirla.
+            const [
+              { saldo: real19, cuentas: cuentas19 },
+              { saldo: real5, cuentas: cuentas5 },
+              { saldo: devCompra19, cuentas: cuentasDevCompra19 },
+              { saldo: devCompra5, cuentas: cuentasDevCompra5 },
+              ivaDianPorMes,
+              ivaDianDevCompraPorMes,
+            ] = await Promise.all([
+              informesIvaCuentas.getSaldoSumadoPorCategoria(input.clienteId, input.anio, meses, "generado_19", "pasivo"),
+              informesIvaCuentas.getSaldoSumadoPorCategoria(input.clienteId, input.anio, meses, "generado_5", "pasivo"),
+              informesIvaCuentas.getSaldoSumadoPorCategoria(input.clienteId, input.anio, meses, "generado_devolucion_compra_19", "pasivo"),
+              informesIvaCuentas.getSaldoSumadoPorCategoria(input.clienteId, input.anio, meses, "generado_devolucion_compra_5", "pasivo"),
+              // El IVA que la DIAN reporta en los documentos de venta — el
+              // archivo no discrimina el IVA por tarifa dentro de cada
+              // documento, así que solo se puede comparar el TOTAL (19%+5%
+              // juntos) contra lo que la DIAN reporta, no cada tarifa por
+              // separado.
+              informesIva.getTotalIvaDianVentasPorMes(input.clienteId, input.anio, meses),
+              // IVA de la DIAN para los documentos que el cliente clasificó
+              // como "devolucion_compra" en la config de tipos de documento
+              // — permite comparar el valor real de las cuentas de
+              // devolución contra lo que la DIAN reporta para esos mismos
+              // documentos.
+              informesIva.getTotalIvaDianDevolucionCompraPorMes(input.clienteId, input.anio, meses),
+            ]);
+            const hayMesesSinIvaDian = ivaDianPorMes.some(m => m.valor === null);
+            const totalIvaDian = hayMesesSinIvaDian ? null : ivaDianPorMes.reduce((a, m) => a + (m.valor ?? 0), 0);
+            const hayMesesSinIvaDianDevCompra = ivaDianDevCompraPorMes.some(m => m.valor === null);
+            const totalIvaDianDevCompra = hayMesesSinIvaDianDevCompra ? null : ivaDianDevCompraPorMes.reduce((a, m) => a + (m.valor ?? 0), 0);
+
+            return {
+              tarifa19: { base: totalPorClasificacion.gravado_19, esperado: esperado19, cuentas: cuentas19, real: real19, diferencia: real19 !== null ? esperado19 - real19 : null },
+              tarifa5: { base: totalPorClasificacion.gravado_5, esperado: esperado5, cuentas: cuentas5, real: real5, diferencia: real5 !== null ? esperado5 - real5 : null },
+              devolucionCompra19: { cuentas: cuentasDevCompra19, real: devCompra19 },
+              devolucionCompra5: { cuentas: cuentasDevCompra5, real: devCompra5 },
+              totalIvaDian, hayMesesSinIvaDian,
+              totalIvaDianDevCompra, hayMesesSinIvaDianDevCompra,
+            };
+          }),
+      }),
+      ivaDescontable: router({
+        comparar: protectedProcedure
+          .input(z.object({
+            clienteId: z.number(), anio: z.number(),
+            periodicidad: z.enum(["bimestral", "cuatrimestral", "anual"]), periodo: z.number(),
+          }))
+          .query(async ({ input, ctx }) => {
+            await assertClienteAccesibleInformes(ctx, input.clienteId);
+            const expediente = await informesIva.getConciliacionIva(input.clienteId, input.anio, input.periodicidad, input.periodo);
+            let estado: any = {};
+            try { estado = expediente?.estadoJson ? JSON.parse(expediente.estadoJson) : {}; } catch { estado = {}; }
+            const totalPorClasificacion = estado.compras?.totalPorClasificacion;
+            if (!totalPorClasificacion) {
+              throw new Error("Primero completa y guarda el Paso 4 (clasificación de compras) de este periodo.");
+            }
+            const meses = informesIva.mesesDelPeriodo(input.periodicidad, input.periodo);
+
+            const esperado19 = totalPorClasificacion.gravado_19 * 0.19;
+            const esperado5 = totalPorClasificacion.gravado_5 * 0.05;
+            const [
+              { saldo: real19, cuentas: cuentas19 },
+              { saldo: real5, cuentas: cuentas5 },
+              { saldo: devVenta19, cuentas: cuentasDevVenta19 },
+              { saldo: devVenta5, cuentas: cuentasDevVenta5 },
+              // El IVA que la DIAN reporta en los documentos de compra
+              // activos (mismo grupo de documentos ya usado para el total
+              // neto de compras) — solo se puede comparar el TOTAL (19%+5%
+              // juntos), el archivo no discrimina el IVA por tarifa.
+              ivaDianPorMes,
+              // IVA de la DIAN para los documentos que el cliente clasificó
+              // como "devolucion_venta" — permite comparar el valor real de
+              // las cuentas de devolución contra lo que la DIAN reporta.
+              ivaDianDevVentaPorMes,
+            ] = await Promise.all([
+              informesIvaCuentas.getSaldoSumadoPorCategoria(input.clienteId, input.anio, meses, "descontable_19", "activo_gasto"),
+              informesIvaCuentas.getSaldoSumadoPorCategoria(input.clienteId, input.anio, meses, "descontable_5", "activo_gasto"),
+              informesIvaCuentas.getSaldoSumadoPorCategoria(input.clienteId, input.anio, meses, "descontable_devolucion_venta_19", "activo_gasto"),
+              informesIvaCuentas.getSaldoSumadoPorCategoria(input.clienteId, input.anio, meses, "descontable_devolucion_venta_5", "activo_gasto"),
+              informesIva.getTotalIvaDianComprasPorMes(input.clienteId, input.anio, meses),
+              informesIva.getTotalIvaDianDevolucionVentaPorMes(input.clienteId, input.anio, meses),
+            ]);
+
+            // Qué proporción de la base de compras (todas las tarifas)
+            // está facturada electrónicamente — solo eso da derecho al
+            // descontable en la práctica.
+            const totalContabilidad = estado.compras?.totalContabilidad ?? 0;
+            const totalContabilidadFacturado = estado.compras?.totalContabilidadFacturado ?? 0;
+            const pctFacturado = totalContabilidad > 0 ? (totalContabilidadFacturado / totalContabilidad) : null;
+
+            const hayMesesSinIvaDian = ivaDianPorMes.some(m => m.valor === null);
+            const totalIvaDian = hayMesesSinIvaDian ? null : ivaDianPorMes.reduce((a, m) => a + (m.valor ?? 0), 0);
+            const hayMesesSinIvaDianDevVenta = ivaDianDevVentaPorMes.some(m => m.valor === null);
+            const totalIvaDianDevVenta = hayMesesSinIvaDianDevVenta ? null : ivaDianDevVentaPorMes.reduce((a, m) => a + (m.valor ?? 0), 0);
+
+            return {
+              tarifa19: { base: totalPorClasificacion.gravado_19, esperado: esperado19, cuentas: cuentas19, real: real19, diferencia: real19 !== null ? esperado19 - real19 : null },
+              tarifa5: { base: totalPorClasificacion.gravado_5, esperado: esperado5, cuentas: cuentas5, real: real5, diferencia: real5 !== null ? esperado5 - real5 : null },
+              devolucionVenta19: { cuentas: cuentasDevVenta19, real: devVenta19 },
+              devolucionVenta5: { cuentas: cuentasDevVenta5, real: devVenta5 },
+              pctFacturado, totalContabilidad, totalContabilidadFacturado,
+              totalIvaDian, hayMesesSinIvaDian,
+              totalIvaDianDevVenta, hayMesesSinIvaDianDevVenta,
+            };
+          }),
+      }),
+      ivaTransitorio: router({
+        comparar: protectedProcedure
+          .input(z.object({
+            clienteId: z.number(), anio: z.number(),
+            periodicidad: z.enum(["bimestral", "cuatrimestral", "anual"]), periodo: z.number(),
+          }))
+          .query(async ({ input, ctx }) => {
+            await assertClienteAccesibleInformes(ctx, input.clienteId);
+            const expediente = await informesIva.getConciliacionIva(input.clienteId, input.anio, input.periodicidad, input.periodo);
+            let estado: any = {};
+            try { estado = expediente?.estadoJson ? JSON.parse(expediente.estadoJson) : {}; } catch { estado = {}; }
+            const totalPorClasificacion = estado.ingresos?.totalPorClasificacion;
+            if (!totalPorClasificacion) {
+              throw new Error("Primero completa y guarda el Paso 2 (clasificación de ingresos) de este periodo.");
+            }
+            const meses = informesIva.mesesDelPeriodo(input.periodicidad, input.periodo);
+
+            // Proporción del Art. 490 E.T. — solo gravado vs. (gravado +
+            // excluido); los NO gravados no participan en absoluto.
+            const baseGravada = totalPorClasificacion.gravado_19 + totalPorClasificacion.gravado_5;
+            const baseExcluida = totalPorClasificacion.excluido;
+            const baseRelevante = baseGravada + baseExcluida;
+            const proporcionDescontable = baseRelevante > 0 ? baseGravada / baseRelevante : null;
+
+            const { saldo: saldoTransitorio, cuentas } = await informesIvaCuentas.getSaldoSumadoPorCategoria(input.clienteId, input.anio, meses, "transitorio", "activo_gasto");
+            const montoDescontable = saldoTransitorio !== null && proporcionDescontable !== null ? saldoTransitorio * proporcionDescontable : null;
+            const montoAGasto = saldoTransitorio !== null && montoDescontable !== null ? saldoTransitorio - montoDescontable : null;
+
+            return {
+              cuentas, saldoTransitorio, baseGravada, baseExcluida, proporcionDescontable, montoDescontable, montoAGasto,
+            };
+          }),
+      }),
+      // Datos que el Formulario 300 necesita pero que el contador digita
+      // directamente — no se calculan de ningún archivo cargado.
+      datosAdicionales: router({
+        guardar: protectedProcedure
+          .input(z.object({
+            clienteId: z.number(), anio: z.number(),
+            periodicidad: z.enum(["bimestral", "cuatrimestral", "anual"]), periodo: z.number(),
+            saldoFavorAnterior: z.number(), retencionesFuente: z.number(),
+          }))
+          .mutation(async ({ input, ctx }) => {
+            await assertClienteAccesibleInformes(ctx, input.clienteId);
+            await informesIva.guardarDatosAdicionalesIva(input.clienteId, input.anio, input.periodicidad, input.periodo, {
+              saldoFavorAnterior: input.saldoFavorAnterior, retencionesFuente: input.retencionesFuente,
+            });
+            return { success: true };
+          }),
+      }),
+      // Genera el Anexo completo de la conciliación — reúne todo lo
+      // calculado en los pasos anteriores más el saldo a favor anterior
+      // y las retenciones, en un solo Excel descargable.
+      generarAnexo: protectedProcedure
+        .input(z.object({
+          clienteId: z.number(), anio: z.number(),
+          periodicidad: z.enum(["bimestral", "cuatrimestral", "anual"]), periodo: z.number(),
+        }))
+        .mutation(async ({ input, ctx }) => {
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
+          const cliente = await db.getClientById(input.clienteId);
+          const buffer = await generarAnexoIva(
+            input.clienteId, cliente?.razonSocial || "Cliente", input.anio, input.periodicidad, input.periodo,
+          );
+          const key = `informes/IVA_ANEXO_${input.clienteId}_${input.anio}_${input.periodicidad}_${input.periodo}_${Date.now()}.xlsx`;
+          const { url, key: fileKey } = await storagePut(
+            key, buffer, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          );
+          await informesDb.guardarReporteGenerado({
+            clienteId: input.clienteId, anio: input.anio, mes: null, tipo: "IVA_ANEXO",
+            nivel: "detalle", fileKey, generadoPorId: ctx.user.id,
+          });
+          const signedUrl = await storageGetSignedUrl(fileKey);
+          return { url, signedUrl, fileKey };
+        }),
+      // Mismo Anexo, en PDF — mismo estilo visual que los anexos del
+      // módulo de Renta Persona Natural (encabezado, filas alineadas,
+      // logo de Areda al pie de cada página).
+      generarAnexoPdf: protectedProcedure
+        .input(z.object({
+          clienteId: z.number(), anio: z.number(),
+          periodicidad: z.enum(["bimestral", "cuatrimestral", "anual"]), periodo: z.number(),
+        }))
+        .mutation(async ({ input, ctx }) => {
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
+          const cliente = await db.getClientById(input.clienteId);
+          const buffer = await generarAnexoIvaPdf(
+            input.clienteId, cliente?.razonSocial || "Cliente", input.anio, input.periodicidad, input.periodo,
+          );
+          const key = `informes/IVA_ANEXO_${input.clienteId}_${input.anio}_${input.periodicidad}_${input.periodo}_${Date.now()}.pdf`;
+          const { url, key: fileKey } = await storagePut(key, buffer, "application/pdf");
+          await informesDb.guardarReporteGenerado({
+            clienteId: input.clienteId, anio: input.anio, mes: null, tipo: "IVA_ANEXO",
+            nivel: "detalle", fileKey, generadoPorId: ctx.user.id,
+          });
+          const signedUrl = await storageGetSignedUrl(fileKey);
+          return { url, signedUrl, fileKey };
+        }),
+    }),
+    dian: router({
+      // Consulta si ya existe un libro auxiliar cargado (desde Estado de
+      // Resultados) para este cliente+periodo, para reutilizarlo en la
+      // comparación DIAN sin pedirlo de nuevo.
+      auxiliarDisponible: protectedProcedure
+        .input(z.object({ clienteId: z.number(), anio: z.number(), mes: z.number().min(1).max(12) }))
+        .query(async ({ input, ctx }) => {
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
+          const carga = await informesDb.getCargaConArchivo(input.clienteId, input.anio, input.mes);
+          if (!carga) return null;
+          return { nombreArchivo: carga.nombreArchivo, totalFilas: carga.totalFilas };
+        }),
+      // Sube (o reutiliza) el archivo de la DIAN y devuelve cada tipo de
+      // documento que trae (Emitido/Recibido, con cantidad y total), junto
+      // con la configuración que el cliente ya tenga guardada — para que
+      // el usuario confirme o corrija qué representa cada tipo antes de
+      // comparar (se recuerda para todas las conciliaciones futuras).
+      detectarTiposDocumento: protectedProcedure
+        .input(z.object({ clienteId: z.number(), anio: z.number(), mes: z.number().min(1).max(12), dianBase64: z.string() }))
+        .mutation(async ({ input, ctx }) => {
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
+          const bufferDian = Buffer.from(input.dianBase64, "base64");
+          const filasDian = await informesDian.parseArchivoDian(bufferDian);
+          if (filasDian.length === 0) {
+            throw new Error("No se encontró ningún documento válido en el archivo de la DIAN.");
+          }
+          const detectados = informesDian.getTiposDocumentoDelArchivo(filasDian);
+          const configuradosPrevios = await informesDian.getConfigTiposDocumento(input.clienteId);
+          const mapaConfig = new Map(configuradosPrevios.map(c => [`${c.tipoDocumentoDian}|${c.grupo}`, c]));
+
+          // Tipos de comprobante REALES del libro auxiliar de este mes,
+          // para que el usuario elija de ahí en vez de escribirlos a mano.
+          let tiposComprobanteDisponibles: { tipo: string; cantidad: number }[] = [];
+          const carga = await informesDb.getCargaConArchivo(input.clienteId, input.anio, input.mes);
+          if (carga?.fileKey) {
+            const bufferAuxiliar = await storageGetBuffer(carga.fileKey);
+            const documentosAux = await informesDian.parseAuxiliarParaDian(bufferAuxiliar, input.anio, input.mes);
+            tiposComprobanteDisponibles = informesDian.getTiposComprobanteDelAuxiliar(documentosAux);
+          }
+
+          const tipos = detectados.map(d => {
+            const previo = mapaConfig.get(`${d.tipoDocumentoDian}|${d.grupo}`);
+            return {
+              ...d,
+              categoria: previo?.categoria || d.categoriaSugerida || "otro_gasto",
+              tiposComprobanteContable: previo?.tiposComprobanteContable ? JSON.parse(previo.tiposComprobanteContable) : [],
+              yaConfigurado: !!previo,
+            };
+          });
+          const comprobantesExcluidosPrevios = await informesDian.getComprobantesExcluidos(input.clienteId);
+          return { tipos, tiposComprobanteDisponibles, comprobantesExcluidos: comprobantesExcluidosPrevios };
+        }),
+      guardarTiposDocumento: protectedProcedure
+        .input(z.object({
+          clienteId: z.number(),
+          configs: z.array(z.object({
+            tipoDocumentoDian: z.string(), grupo: z.enum(["Emitido", "Recibido"]),
+            categoria: z.enum(["ingreso", "nomina", "honorarios_servicios", "otro_gasto", "compras_mercancia", "devolucion_venta", "devolucion_compra", "excluir"]),
+            tiposComprobanteContable: z.array(z.string()).optional(),
+          })),
+        }))
+        .mutation(async ({ input, ctx }) => {
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
+          await informesDian.guardarConfigTiposDocumento(input.clienteId, input.configs, ctx.user.id);
+          return { success: true };
+        }),
+      // Tipos de comprobante del libro auxiliar (ND, AC, ajustes internos,
+      // etc.) que este cliente excluye por completo de la conciliación
+      // DIAN — distinto de "excluir" en un tipo de documento de la DIAN.
+      getComprobantesExcluidos: protectedProcedure
+        .input(z.object({ clienteId: z.number() }))
+        .query(async ({ input, ctx }) => {
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
+          return informesDian.getComprobantesExcluidos(input.clienteId);
+        }),
+      guardarComprobantesExcluidos: protectedProcedure
+        .input(z.object({ clienteId: z.number(), tipos: z.array(z.string()) }))
+        .mutation(async ({ input, ctx }) => {
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
+          await informesDian.guardarComprobantesExcluidos(input.clienteId, input.tipos, ctx.user.id);
+          return { success: true };
+        }),
+      // Compara el archivo de reporte de documentos de la DIAN contra el
+      // libro auxiliar del mismo mes que ya se cargó en Estado de
+      // Resultados para ese cliente+mes — un solo auxiliar sirve de base
+      // para todo el módulo, aquí solo se sube el archivo de la DIAN.
+      comparar: protectedProcedure
+        .input(z.object({
+          clienteId: z.number(), anio: z.number(), mes: z.number().min(1).max(12),
+          dianBase64: z.string(),
+        }))
+        .mutation(async ({ input, ctx }) => {
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
+          const cliente = (await db.getAllClients()).find((c: any) => c.id === input.clienteId);
+          const bufferDian = Buffer.from(input.dianBase64, "base64");
+
+          const carga = await informesDb.getCargaConArchivo(input.clienteId, input.anio, input.mes);
+          if (!carga || !carga.fileKey) {
+            throw new Error(
+              "No hay un libro auxiliar cargado para este cliente y mes en Estado de Resultados. " +
+              "Súbelo ahí primero — esta pestaña solo necesita el archivo de la DIAN.",
+            );
+          }
+          const bufferAuxiliar = await storageGetBuffer(carga.fileKey);
+
+          const filasDian = await informesDian.parseArchivoDian(bufferDian);
+          if (filasDian.length === 0) {
+            throw new Error("No se encontró ningún documento válido en el archivo de la DIAN.");
+          }
+          const documentosAux0 = await informesDian.parseAuxiliarParaDian(bufferAuxiliar, input.anio, input.mes);
+          if (documentosAux0.size === 0) {
+            throw new Error("No se encontró ningún documento válido en el libro auxiliar para ese mes.");
+          }
+          // Comprobantes que el cliente decidió excluir por completo de
+          // la conciliación (ajustes internos, apertura de saldos, etc.)
+          // — se quitan ANTES de comparar nada, para que no aparezcan ni
+          // como "no clasificados" ni como un falso faltante.
+          const comprobantesExcluidos = await informesDian.getComprobantesExcluidos(input.clienteId);
+          const documentosAux = informesDian.filtrarDocumentosExcluidos(documentosAux0, comprobantesExcluidos);
+
+          // Configuración que el cliente ya haya guardado sobre qué
+          // representa cada tipo de documento de la DIAN y con qué
+          // tipo(s) de comprobante contable se relaciona — sin ella no
+          // hay con qué comparar del lado contable para ese tipo.
+          const configTiposDoc = await informesDian.getConfigTiposDocumento(input.clienteId);
+          const mapaConfigTipos = informesDian.mapaConfigTiposDocumento(configTiposDoc);
+          const configPorClave = new Map(configTiposDoc.map(c => [`${c.tipoDocumentoDian}|${c.grupo}`, c]));
+
+          // Cada sección se deriva de un tipo de documento EXACTO de la
+          // DIAN, comparado por tercero contra los tipos de comprobante
+          // configurados para ese tipo — no se calcula ningún cruce
+          // documento a documento (no se muestra en ningún lado, así que
+          // no vale la pena gastar recursos calculándolo).
+          const tiposDetectadosEnArchivo = informesDian.getTiposDocumentoDelArchivo(filasDian);
+          const itemsTerceroPorClave = new Map<string, ReturnType<typeof informesDian.compararPorTercero>>();
+          const seccionesTerceros = tiposDetectadosEnArchivo.map(d => {
+            const clave = `${d.tipoDocumentoDian}|${d.grupo}`;
+            const config = configPorClave.get(clave);
+            const comprobantes = config?.tiposComprobanteContable ? JSON.parse(config.tiposComprobanteContable) : [];
+            const items = informesDian.compararPorTercero(filasDian, documentosAux, {
+              tipoDocumentoDian: d.tipoDocumentoDian, grupo: d.grupo, tiposComprobanteContable: comprobantes,
+            });
+            itemsTerceroPorClave.set(clave, items);
+            return {
+              titulo: `${d.tipoDocumentoDian} — ${d.grupo}${comprobantes.length > 0 ? ` (vs. comprobante ${comprobantes.join("/")})` : " (sin comprobante contable asociado todavía)"}`,
+              items,
+            };
+          });
+
+          const tiposComprobanteAuxiliar = informesDian.getTiposComprobanteDelAuxiliar(documentosAux);
+          const tiposNoClasificados = informesDian.getTiposComprobanteNoClasificados(tiposComprobanteAuxiliar, configTiposDoc, comprobantesExcluidos);
+          const resumenPorTipo = informesDian.getResumenPorTipoDocumento(filasDian, itemsTerceroPorClave);
+
+          const buffer = await informesDian.generarReporteComparacionDian(
+            cliente?.razonSocial || "Cliente", input.anio, input.mes, seccionesTerceros, tiposNoClasificados, resumenPorTipo, filasDian,
+          );
+
+          const key = `informes/DIAN_${input.clienteId}_${input.anio}_${String(input.mes).padStart(2, "0")}_${Date.now()}.xlsx`;
+          const { url, key: fileKey } = await storagePut(
+            key, buffer, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          );
+          // "Emitido" incluye facturas de venta (ingreso real) pero TAMBIÉN
+          // nómina electrónica y documento soporte — ambos los genera la
+          // empresa, así que aparecen como "Emitido", pero son GASTO suyo,
+          // no ingreso. Sumar todo el grupo sin distinguir inflaba el total
+          // usado para comparar contra los ingresos ya clasificados en la
+          // conciliación de IVA. Se usa la misma categorización real
+          // (por tipo de documento) que ya usa el resto de la comparación.
+          // Las devoluciones en venta, aunque el cliente las reclasifique
+          // explícitamente como "devolucion_venta" (en vez de dejarlas en
+          // "ingreso"), siguen siendo parte del ingreso NETO — su signo
+          // ya resta correctamente (son notas crédito), así que hay que
+          // seguir sumándolas aquí para que el total no quede inflado.
+          const totalEmitidoDian = filasDian.filter(f => {
+            const cat = informesDian.categorizarFilaDianConConfig(f, mapaConfigTipos);
+            return cat === "ingreso" || cat === "devolucion_venta";
+          }).reduce((a, f) => a + f.total, 0);
+          const totalRecibidoDian = filasDian.filter(f => f.grupo === "Recibido").reduce((a, f) => a + f.total, 0);
+          // Desglose por tipo de documento exacto — para que otros pasos
+          // (ej. compras de IVA, y ahora la comparación de IVA contra la
+          // DIAN) puedan comparar contra SOLO los tipos que les
+          // corresponden, en vez del total "Recibido" completo.
+          const totalesPorTipoJson = JSON.stringify(
+            tiposDetectadosEnArchivo.map(d => ({ tipoDocumentoDian: d.tipoDocumentoDian, grupo: d.grupo, total: d.total, iva: d.iva })),
+          );
+          await informesDb.guardarReporteGenerado({
+            clienteId: input.clienteId, anio: input.anio, mes: input.mes, tipo: "DIAN",
+            nivel: "detalle", fileKey, generadoPorId: ctx.user.id, totalEmitidoDian, totalRecibidoDian, totalesPorTipoJson,
+          });
+          const signedUrl = await storageGetSignedUrl(fileKey);
+          const totalTercerosConciliados = resumenPorTipo.reduce((a, t) => a + t.cantidadTercerosConciliados, 0);
+          const totalTercerosTotal = resumenPorTipo.reduce((a, t) => a + t.cantidadTercerosTotal, 0);
+          return {
+            url, signedUrl, fileKey,
+            totalDian: filasDian.length,
+            tercerosConciliados: totalTercerosConciliados, tercerosSinConciliar: totalTercerosTotal - totalTercerosConciliados,
+          };
+        }),
+    }),
+  }),
+
+  board: router({
+    posts: router({
+      // obligationId: omitir = todas; 0 = solo "General"; N = esa obligación
+      list: protectedProcedure
+        .input(z.object({ obligationId: z.number().optional(), busqueda: z.string().optional() }).optional())
+        .query(async ({ input }) => {
+          const filtro = input?.obligationId === undefined ? {}
+            : input.obligationId === 0 ? { obligationId: null as null }
+            : { obligationId: input.obligationId };
+          return db.getBoardPosts({ ...filtro, busqueda: input?.busqueda });
+        }),
+      create: protectedProcedure
+        .input(z.object({ content: z.string().min(1), obligationId: z.number().optional() }))
+        .mutation(async ({ input, ctx }) => {
+          const id = await db.createBoardPost(ctx.user.id, input.content, input.obligationId ?? null);
+          // Avisa a todo el equipo (menos a quien publicó) que hay algo
+          // nuevo en el Tablero.
+          const otros = await db.getAllActiveUserIds(ctx.user.id);
+          const preview = input.content.length > 120 ? input.content.slice(0, 120) + "…" : input.content;
+          for (const uid of otros) {
+            await db.createNotification(uid, "tablero_post", "board_post", id, "Nuevo en el Tablero", preview, null);
+          }
+          return { id };
+        }),
+      setPinned: adminProcedure
+        .input(z.object({ id: z.number(), pinned: z.boolean() }))
+        .mutation(async ({ input }) => {
+          await db.setBoardPostPinned(input.id, input.pinned);
+          return { success: true };
+        }),
+      delete: adminProcedure
+        .input(z.object({ id: z.number() }))
+        .mutation(async ({ input }) => {
+          await db.deleteBoardPost(input.id);
+          return { success: true };
+        }),
+      uploadAttachment: protectedProcedure
+        .input(z.object({
+          postId: z.number(),
+          fileName: z.string(),
+          fileBase64: z.string(),
+          contentType: z.string(),
+          fileSize: z.number().optional(),
+        }))
+        .mutation(async ({ input, ctx }) => {
+          const buffer = Buffer.from(input.fileBase64, "base64");
+          const rawKey = `tablero/${input.postId}/${Date.now()}_${input.fileName}`;
+          const { url, key } = await storagePut(rawKey, buffer, input.contentType);
+          const id = await db.createBoardAttachment({
+            postId: input.postId, fileName: input.fileName, fileUrl: url, fileKey: key,
+            contentType: input.contentType, fileSize: input.fileSize || buffer.length,
+            uploadedById: ctx.user.id,
+          });
+          return { id, url, key, fileName: input.fileName };
+        }),
+      getAttachments: protectedProcedure
+        .input(z.object({ postId: z.number() }))
+        .query(async ({ input }) => db.getBoardPostAttachments(input.postId)),
+      getAttachmentUrl: protectedProcedure
+        .input(z.object({ fileKey: z.string() }))
+        .query(async ({ input }) => ({ signedUrl: await storageGetSignedUrl(input.fileKey) })),
+    }),
+    comments: router({
+      list: protectedProcedure
+        .input(z.object({ postId: z.number() }))
+        .query(async ({ input }) => db.getComments("board_post", input.postId)),
+      create: protectedProcedure
+        .input(z.object({ postId: z.number(), content: z.string().min(1) }))
+        .mutation(async ({ input, ctx }) => {
+          const post = await db.getBoardPostById(input.postId);
+          if (!post) throw new Error("Publicación no encontrada");
+          await db.createComment("board_post", input.postId, ctx.user.id, input.content);
+          // Notifica al autor de la publicación y a todo el que ya haya
+          // comentado antes, menos a quien acaba de comentar.
+          const hilo = await db.getComments("board_post", input.postId);
+          const participantes = new Set<number>();
+          if (post.authorId) participantes.add(post.authorId);
+          for (const c of hilo) if (c.authorId) participantes.add(c.authorId);
+          participantes.delete(ctx.user.id);
+          for (const uid of Array.from(participantes)) {
+            await db.createNotification(uid, "comentario", "board_post", input.postId, "Tablero", input.content, null);
+          }
+          return { success: true };
+        }),
+    }),
+  }),
+
+  renta: router({
+    // Restringido a usuarios con rol administrador (cualquiera, no una
+    // cédula puntual) — ver assertRentaPNAccess.
+    clientes: router({
+      list: protectedProcedure
+        .input(z.object({ anioGravable: z.number(), incluirInactivos: z.boolean().optional() }))
+        .query(async ({ input, ctx }) => {
+          assertRentaPNAccess(ctx.user.role);
+          const filas = await db.getRentaClientes(input.anioGravable, input.incluirInactivos);
+          const conteoComentarios = await db.getCommentCounts("renta_cliente", filas.map(c => c.id));
+          const conVencimiento = await Promise.all(filas.map(async (c) => {
+            const vencimiento = c.noObligado ? null : await db.getVencimientoRentaPN(c.cedula, c.anioGravable);
+            const diasRestantes = vencimiento
+              ? Math.ceil((vencimiento.getTime() - Date.now()) / (1000 * 60 * 60 * 24))
+              : null;
+            return { ...c, vencimiento, diasRestantes, cantidadComentarios: conteoComentarios[c.id] || 0 };
+          }));
+          // Orden: primero los obligados y pendientes (por menos días
+          // restantes), luego los ya terminados, y al final los no
+          // obligados a declarar.
+          return conVencimiento.sort((a, b) => {
+            if (a.noObligado !== b.noObligado) return a.noObligado ? 1 : -1;
+            if (a.terminado !== b.terminado) return a.terminado ? 1 : -1;
+            const da = a.diasRestantes ?? Infinity;
+            const dbb = b.diasRestantes ?? Infinity;
+            return da - dbb;
+          });
+        }),
+      // Importa en bloque un Excel de 2 columnas (Nombre, Cédula) para el
+      // año gravable indicado — omite sin error los que ya existan.
+      importarExcel: protectedProcedure
+        .input(z.object({ anioGravable: z.number(), archivoBase64: z.string() }))
+        .mutation(async ({ input, ctx }) => {
+          assertRentaPNAccess(ctx.user.role);
+          const buffer = Buffer.from(input.archivoBase64, "base64");
+          const clientes = rentaDb.parseListadoClientesRenta(buffer);
+          if (clientes.length === 0) {
+            throw new Error("No se encontraron filas con nombre y cédula en el archivo — verifica que traiga esas 2 columnas.");
+          }
+          return db.importarClientesRentaEnBloque(input.anioGravable, clientes);
+        }),
+      create: protectedProcedure
+        .input(z.object({ nombre: z.string().min(1), cedula: z.string().min(1), anioGravable: z.number() }))
+        .mutation(async ({ input, ctx }) => {
+          assertRentaPNAccess(ctx.user.role);
+          const id = await db.createRentaCliente({
+            nombre: input.nombre, cedula: input.cedula.replace(/\D/g, ""),
+            anioGravable: input.anioGravable, createdById: ctx.user.id,
+          });
+          return { id };
+        }),
+      update: protectedProcedure
+        .input(z.object({
+          id: z.number(), nombre: z.string().optional(), cedula: z.string().optional(),
+          noObligado: z.boolean().optional(), terminado: z.boolean().optional(), activo: z.boolean().optional(),
+          comentariosGenerales: z.string().optional(), comentarioNoObligado: z.string().optional(),
+        }))
+        .mutation(async ({ input, ctx }) => {
+          assertRentaPNAccess(ctx.user.role);
+          const { id, ...data } = input;
+          if (data.cedula) data.cedula = data.cedula.replace(/\D/g, "");
+          await db.updateRentaCliente(id, data);
+          return { success: true };
+        }),
+      delete: protectedProcedure
+        .input(z.object({ id: z.number() }))
+        .mutation(async ({ input, ctx }) => {
+          assertRentaPNAccess(ctx.user.role);
+          await db.deleteRentaCliente(input.id);
+          return { success: true };
+        }),
+      // ---- Carpeta de Drive con los soportes que envía el cliente ----
+      guardarDrive: protectedProcedure
+        .input(z.object({ rentaClienteId: z.number(), driveFolderUrl: z.string() }))
+        .mutation(async ({ input, ctx }) => {
+          assertRentaPNAccess(ctx.user.role);
+          await db.updateRentaCliente(input.rentaClienteId, { driveFolderUrl: input.driveFolderUrl });
+          return { success: true };
+        }),
+      listarArchivosDrive: protectedProcedure
+        .input(z.object({ rentaClienteId: z.number() }))
+        .query(async ({ input, ctx }) => {
+          assertRentaPNAccess(ctx.user.role);
+          const cliente = await db.getRentaClienteById(input.rentaClienteId);
+          if (!cliente?.driveFolderUrl || !isDriveConfigured()) return [];
+          const folderId = extractFolderIdFromUrl(cliente.driveFolderUrl);
+          if (!folderId) return [];
+          return listAllFilesRecursive(folderId);
+        }),
+      subirArchivoDrive: protectedProcedure
+        .input(z.object({ rentaClienteId: z.number(), fileName: z.string(), fileBase64: z.string(), contentType: z.string() }))
+        .mutation(async ({ input, ctx }) => {
+          assertRentaPNAccess(ctx.user.role);
+          if (!isDriveConfigured()) throw new Error("Google Drive no está configurado en este servidor.");
+          const cliente = await db.getRentaClienteById(input.rentaClienteId);
+          if (!cliente?.driveFolderUrl) throw new Error("Este cliente de renta no tiene una carpeta de Drive configurada.");
+          const folderId = extractFolderIdFromUrl(cliente.driveFolderUrl);
+          if (!folderId) throw new Error("No se pudo interpretar el enlace de la carpeta de Drive.");
+          const buffer = Buffer.from(input.fileBase64, "base64");
+          const archivo = await uploadFileToDrive(folderId, input.fileName, buffer, input.contentType);
+          return { id: archivo.id, name: archivo.name, webViewLink: (archivo as any).webViewLink };
+        }),
+      // ---- Solicitud de documentos al cliente (PDF con checklist) ----
+      catalogoDocumentos: protectedProcedure
+        .input(z.object({ rentaClienteId: z.number() }))
+        .query(async ({ input, ctx }) => {
+          assertRentaPNAccess(ctx.user.role);
+          const exogena = await db.getExogenaRenta(input.rentaClienteId);
+          const recomendadas = exogena
+            ? Array.from(rentaDb.recomendarCategoriasDocumentos(exogena.items.map((it: any) => ({ categoria: it.categoria, detalle: it.detalle || "" }))))
+            : ["Información personal", "Deducibles"];
+          const cliente = await db.getRentaClienteById(input.rentaClienteId);
+          let estadoGuardado: { seleccionados: string[]; documentosExtra: string[]; observaciones: string } | null = null;
+          if (cliente?.solicitudDocumentosEstado) {
+            try { estadoGuardado = JSON.parse(cliente.solicitudDocumentosEstado); } catch { estadoGuardado = null; }
+          }
+          return { categorias: rentaDb.CATALOGO_DOCUMENTOS_RENTA, categoriasRecomendadas: recomendadas, estadoGuardado };
+        }),
+      // Guarda lo último marcado en la Solicitud de Documentos, para que
+      // no se pierda al cerrar y volver a abrir el diálogo.
+      guardarEstadoSolicitudDocumentos: protectedProcedure
+        .input(z.object({
+          rentaClienteId: z.number(), seleccionados: z.array(z.string()),
+          documentosExtra: z.array(z.string()), observaciones: z.string(),
+        }))
+        .mutation(async ({ input, ctx }) => {
+          assertRentaPNAccess(ctx.user.role);
+          const estado = JSON.stringify({
+            seleccionados: input.seleccionados, documentosExtra: input.documentosExtra, observaciones: input.observaciones,
+          });
+          await db.updateRentaCliente(input.rentaClienteId, { solicitudDocumentosEstado: estado });
+          return { success: true };
+        }),
+      generarSolicitudDocumentos: protectedProcedure
+        .input(z.object({
+          rentaClienteId: z.number(), anioGravable: z.number(),
+          itemsSeleccionados: z.array(z.string()), documentosAdicionales: z.array(z.string()), observaciones: z.string(),
+        }))
+        .mutation(async ({ input, ctx }) => {
+          assertRentaPNAccess(ctx.user.role);
+          const cliente = await db.getRentaClienteById(input.rentaClienteId);
+          if (!cliente) throw new Error("Cliente de renta no encontrado.");
+          const buffer = await rentaDb.generarSolicitudDocumentos(
+            cliente.nombre, cliente.cedula, input.anioGravable,
+            new Set(input.itemsSeleccionados), input.documentosAdicionales, input.observaciones,
+          );
+          const key = `renta/solicitud-documentos/${input.rentaClienteId}_${Date.now()}.pdf`;
+          const { key: fileKey } = await storagePut(key, buffer, "application/pdf");
+          const signedUrl = await storageGetSignedUrl(fileKey);
+          return { signedUrl };
+        }),
+      // ---- Limpieza de datos (antes de una capacitación, ej.) ----
+      // Borra todo lo cargado en Liquidación de TODOS los clientes de
+      // renta (exógena, declaración anterior, dependientes, cédulas,
+      // reportes) — conserva la lista de clientes. Acción irreversible,
+      // por eso exige escribir la frase de confirmación exacta además de
+      // ser administrador.
+      limpiarDatosLiquidacion: protectedProcedure
+        .input(z.object({ confirmacion: z.string() }))
+        .mutation(async ({ input, ctx }) => {
+          assertRentaPNAccess(ctx.user.role);
+          if (ctx.user.role !== "admin") {
+            throw new TRPCError({ code: "FORBIDDEN", message: "Solo el administrador puede limpiar los datos de Liquidación." });
+          }
+          if (input.confirmacion !== "BORRAR DATOS RENTA") {
+            throw new Error('Frase de confirmación incorrecta — escribe exactamente "BORRAR DATOS RENTA".');
+          }
+          return db.limpiarDatosLiquidacionRentaPN();
+        }),
+      // ---- Flujo de revisión ----
+      solicitarRevision: protectedProcedure
+        .input(z.object({ rentaClienteId: z.number() }))
+        .mutation(async ({ input, ctx }) => {
+          assertRentaPNAccess(ctx.user.role);
+          await db.updateRentaCliente(input.rentaClienteId, {
+            estadoRevision: "solicitada", revisionSolicitadaPorId: ctx.user.id, revisionSolicitadaAt: new Date(), revisionComentario: null,
+          });
+          return { success: true };
+        }),
+      aprobarRevision: protectedProcedure
+        .input(z.object({ rentaClienteId: z.number() }))
+        .mutation(async ({ input, ctx }) => {
+          assertRentaPNAccess(ctx.user.role);
+          await db.updateRentaCliente(input.rentaClienteId, { estadoRevision: "aprobada" });
+          return { success: true };
+        }),
+      rechazarRevision: protectedProcedure
+        .input(z.object({ rentaClienteId: z.number(), comentario: z.string().optional() }))
+        .mutation(async ({ input, ctx }) => {
+          assertRentaPNAccess(ctx.user.role);
+          await db.updateRentaCliente(input.rentaClienteId, { estadoRevision: "rechazada", revisionComentario: input.comentario || null });
+          return { success: true };
+        }),
+      pendientesRevision: protectedProcedure.query(async ({ ctx }) => {
+        assertRentaPNAccess(ctx.user.role);
+        return db.getRentaClientesPendientesRevision();
+      }),
+      terminados: protectedProcedure.query(async ({ ctx }) => {
+        assertRentaPNAccess(ctx.user.role);
+        return db.getRentaClientesTerminados();
+      }),
+      // Reabre una renta ya terminada — vuelve a quedar editable en
+      // Liquidación (se resetea el estado de revisión, el cliente deja de
+      // estar "terminado"). El archivo de la declaración final ya subida
+      // NO se borra — si se sube una nueva reemplaza la referencia.
+      reabrir: protectedProcedure
+        .input(z.object({ rentaClienteId: z.number() }))
+        .mutation(async ({ input, ctx }) => {
+          assertRentaPNAccess(ctx.user.role);
+          if (ctx.user.role !== "admin") {
+            throw new TRPCError({ code: "FORBIDDEN", message: "Solo el administrador puede reabrir una renta terminada." });
+          }
+          await db.updateRentaCliente(input.rentaClienteId, { terminado: false, estadoRevision: null, revisionComentario: null });
+          return { success: true };
+        }),
+      // ---- Finalización: subir la declaración con sello de recibido ----
+      subirDeclaracionFinal: protectedProcedure
+        .input(z.object({ rentaClienteId: z.number(), fileName: z.string(), fileBase64: z.string(), contentType: z.string() }))
+        .mutation(async ({ input, ctx }) => {
+          assertRentaPNAccess(ctx.user.role);
+          const cliente = await db.getRentaClienteById(input.rentaClienteId);
+          if (cliente?.estadoRevision !== "aprobada") {
+            throw new Error("La revisión debe estar aprobada antes de subir la declaración final.");
+          }
+          const buffer = Buffer.from(input.fileBase64, "base64");
+          const key = `renta/declaracion-final/${input.rentaClienteId}_${Date.now()}_${input.fileName}`;
+          const { key: fileKey } = await storagePut(key, buffer, input.contentType);
+          await db.updateRentaCliente(input.rentaClienteId, { declaracionFileKey: fileKey, terminado: true });
+          return { success: true };
+        }),
+    }),
+    exogena: router({
+      get: protectedProcedure
+        .input(z.object({ rentaClienteId: z.number() }))
+        .query(async ({ input, ctx }) => {
+          assertRentaPNAccess(ctx.user.role);
+          const exogena = await db.getExogenaRenta(input.rentaClienteId);
+          if (!exogena) return null;
+          const resumen = rentaDb.resumirPorRenglon(exogena.items as any);
+          return { ...exogena, resumen };
+        }),
+      // Sube y procesa el archivo de exógena de un cliente de renta — se
+      // reemplaza cualquier exógena anterior de ese mismo cliente.
+      upload: protectedProcedure
+        .input(z.object({
+          rentaClienteId: z.number(), nombreArchivo: z.string(), archivoBase64: z.string(),
+        }))
+        .mutation(async ({ input, ctx }) => {
+          assertRentaPNAccess(ctx.user.role);
+          const buffer = Buffer.from(input.archivoBase64, "base64");
+          const resultado = await rentaDb.parseExogenaDian(buffer);
+          if (resultado.items.length === 0 && Object.values(resultado.topes).every(v => v === null)) {
+            throw new Error("No se pudo reconocer el archivo — verifica que sea el reporte de Consulta de Información Exógena de la DIAN.");
+          }
+          const key = `renta/exogena/${input.rentaClienteId}_${Date.now()}_${input.nombreArchivo}`;
+          const { key: fileKey } = await storagePut(
+            key, buffer, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          );
+          await db.guardarExogenaRenta(
+            input.rentaClienteId,
+            {
+              nombreArchivo: input.nombreArchivo, fileKey,
+              topeIngresos: resultado.topes.ingresos, topePatrimonio: resultado.topes.patrimonio,
+              topeConsumoTC: resultado.topes.consumoTC, topeMovimiento: resultado.topes.movimiento,
+              topeCompras: resultado.topes.compras, uploadedById: ctx.user.id,
+            },
+            resultado.items,
+          );
+          const resumen = rentaDb.resumirPorRenglon(resultado.items);
+          return {
+            success: true, totalItems: resultado.items.length, topes: resultado.topes, resumen,
+          };
+        }),
+    }),
+    declaracionAnterior: router({
+      get: protectedProcedure
+        .input(z.object({ rentaClienteId: z.number() }))
+        .query(async ({ input, ctx }) => {
+          assertRentaPNAccess(ctx.user.role);
+          return db.getDeclaracionAnterior(input.rentaClienteId);
+        }),
+      guardar: protectedProcedure
+        .input(z.object({
+          rentaClienteId: z.number(),
+          primeraDeclaracion: z.boolean().optional(),
+          patrimonioLiquidoAnioAnterior: z.number().optional(),
+          impuestoNetoAnioAnterior: z.number().optional(),
+          saldoAFavorAnterior: z.number().optional(),
+          anticipoAnioActual: z.number().optional(),
+        }))
+        .mutation(async ({ input, ctx }) => {
+          assertRentaPNAccess(ctx.user.role);
+          const { rentaClienteId, ...data } = input;
+          await db.guardarDeclaracionAnterior(rentaClienteId, data);
+          return { success: true };
+        }),
+    }),
+    cuentasCobro: router({
+      listar: protectedProcedure.query(async ({ ctx }) => {
+        assertRentaPNAccess(ctx.user.role);
+        const filas = await db.getRentaCuentasCobro();
+        return Promise.all(filas.map(async (f) => ({
+          ...f,
+          signedUrl: f.fileKey ? await storageGetSignedUrl(f.fileKey) : null,
+        })));
+      }),
+      // El próximo folio a usar — solo de referencia, para mostrarlo en
+      // el formulario antes de guardar (el número real se asigna al
+      // guardar, para evitar que dos personas reserven el mismo).
+      siguienteNumero: protectedProcedure
+        .input(z.object({ prefijo: z.string().default("R25") }))
+        .query(async ({ input, ctx }) => {
+          assertRentaPNAccess(ctx.user.role);
+          return { numero: await db.getSiguienteNumeroCuentaCobro(input.prefijo) };
+        }),
+      // Total de ingresos brutos ya declarados por el cliente — solo de
+      // REFERENCIA para decidir cuánto cobrar, no es el valor de la cuenta.
+      totalIngresos: protectedProcedure
+        .input(z.object({ rentaClienteId: z.number() }))
+        .query(async ({ input, ctx }) => {
+          assertRentaPNAccess(ctx.user.role);
+          const datos = await db.getDatosLiquidacion(input.rentaClienteId);
+          if (!datos) return { total: null };
+          const resultado = rentaDb.armarLiquidacion(datos);
+          return { total: rentaDb.getTotalIngresosBrutosRenta(resultado) };
+        }),
+      guardar: protectedProcedure
+        .input(z.object({
+          rentaClienteId: z.number(),
+          prefijo: z.string().default("R25"),
+          detalle: z.string().min(1),
+          valor: z.number().positive(),
+          totalIngresosReferencia: z.number().optional(),
+        }))
+        .mutation(async ({ input, ctx }) => {
+          assertRentaPNAccess(ctx.user.role);
+          const cliente = await db.getRentaClienteById(input.rentaClienteId);
+          if (!cliente) throw new Error("Cliente no encontrado.");
+
+          const numero = await db.getSiguienteNumeroCuentaCobro(input.prefijo);
+          const fecha = new Date();
+
+          const buffer = await generarCuentaCobroPdf({
+            prefijo: input.prefijo, numero, fecha,
+            clienteNombre: cliente.nombre, clienteCedula: cliente.cedula,
+            detalle: input.detalle, valor: input.valor,
+          });
+          const key = `renta/cuentas-cobro/${input.prefijo}_${numero}_${Date.now()}.pdf`;
+          const { key: fileKey } = await storagePut(key, buffer, "application/pdf");
+
+          const id = await db.guardarRentaCuentaCobro({
+            rentaClienteId: input.rentaClienteId, prefijo: input.prefijo, numero, fecha,
+            detalle: input.detalle, valor: input.valor,
+            totalIngresosReferencia: input.totalIngresosReferencia ?? null,
+            fileKey, generadoPorId: ctx.user.id,
+          });
+          const signedUrl = await storageGetSignedUrl(fileKey);
+          return { id, numero, signedUrl };
+        }),
+      // Borrar una cuenta de cobro ya generada — restringido a Arlex
+      // puntualmente (misma cédula que ASISTENCIA_AUTHORIZED_CEDULA),
+      // no a cualquier administrador del módulo Renta PN.
+      eliminar: protectedProcedure
+        .input(z.object({ id: z.number() }))
+        .mutation(async ({ input, ctx }) => {
+          assertRentaPNAccess(ctx.user.role);
+          if (ctx.user.cedula !== ASISTENCIA_AUTHORIZED_CEDULA) {
+            throw new TRPCError({ code: "FORBIDDEN", message: "No autorizado para eliminar cuentas de cobro." });
+          }
+          await db.eliminarRentaCuentaCobro(input.id);
+          return { success: true };
+        }),
+    }),
+    liquidacion: router({
+      // Los topes/catálogo de deducciones se exponen para que el frontend
+      // muestre el tope de cada tipo sin duplicar esos números ahí.
+      catalogoTopes: protectedProcedure.query(async ({ ctx }) => {
+        assertRentaPNAccess(ctx.user.role);
+        return {
+          uvt: rentaDb.UVT_2025, tipos: rentaDb.TIPOS_DEDUCCION_RENTA_EXENTA,
+          topeGlobalUVT: rentaDb.TOPES_DEDUCCION_2025.limiteGlobalDeduccionesRentasExentas, cedulas: rentaDb.CEDULAS,
+          tiposGananciaOcasional: rentaDb.TIPOS_GANANCIA_OCASIONAL,
+          topesObligacionUVT: {
+            ingresos: rentaDb.TOPES_DEDUCCION_2025.ingresos, patrimonio: rentaDb.TOPES_DEDUCCION_2025.patrimonio,
+            consumoTC: rentaDb.TOPES_DEDUCCION_2025.consumoTC, movimiento: rentaDb.TOPES_DEDUCCION_2025.movimiento,
+            compras: rentaDb.TOPES_DEDUCCION_2025.compras,
+          },
+        };
+      }),
+      list: protectedProcedure
+        .input(z.object({ rentaClienteId: z.number(), seccion: z.string().optional() }))
+        .query(async ({ input, ctx }) => {
+          assertRentaPNAccess(ctx.user.role);
+          const items = await db.getLiquidacionItems(input.rentaClienteId, input.seccion) as any[];
+          // Se agrega valorLimitado (tope individual) y, para las 4
+          // sub-rentas de la Cédula General, valorAjustadoGeneral (tras
+          // repartir el tope del 40%/1.340 UVT, respetando qué partidas
+          // se marcaron como "límite general") — para mostrar las
+          // columnas sin que el frontend repita esta lógica.
+          const ingresoBrutoPorCedula: Record<string, number> = {};
+          const incrngoPorCedula: Record<string, number> = {};
+          for (const it of items) {
+            if (it.cedula && it.tipoValor === "ingreso_bruto") ingresoBrutoPorCedula[it.cedula] = (ingresoBrutoPorCedula[it.cedula] || 0) + it.valor;
+            if (it.cedula && it.tipoValor === "ingreso_no_constitutivo") incrngoPorCedula[it.cedula] = (incrngoPorCedula[it.cedula] || 0) + it.valor;
+          }
+
+          const conLimitado = items.map(it => {
+            if (it.tipoValor !== "deduccion" && it.tipoValor !== "renta_exenta") return it;
+            const ingresoBrutoCedula = it.cedula ? ingresoBrutoPorCedula[it.cedula] : undefined;
+            const valorLimitado = rentaDb.calcularValorLimitado(it.valor, it.tipoDeduccion, ingresoBrutoCedula);
+            return { ...it, valorLimitado };
+          });
+
+          // Si hay una partida de 25% laboral en cálculo automático, se
+          // calcula su valor real ANTES de repartir el tope entre las
+          // demás partidas — de lo contrario el reparto de abajo la
+          // trataría como si valiera $0 (su "valor" digitado, que no se
+          // usa cuando está en automático), subestimando cuánto hay que
+          // ajustar a las demás y descuadrando lo que se ve en pantalla.
+          const itemAuto25 = conLimitado.find(it => it.tipoDeduccion === "renta_exenta_25_laboral" && it.calculoAutomatico);
+          let auto25Real: number | null = null;
+          if (itemAuto25) {
+            const datosCompletos = await db.getDatosLiquidacion(input.rentaClienteId);
+            if (datosCompletos) auto25Real = rentaDb.armarLiquidacion(datosCompletos as any).auto25CalculadoValor;
+          }
+
+          const esGeneral = (cedula: string | null) => cedula != null && (rentaDb.SUBRENTAS_GENERAL as readonly string[]).includes(cedula);
+          const itemsGeneral = conLimitado.filter(it =>
+            (it.tipoValor === "deduccion" || it.tipoValor === "renta_exenta") && esGeneral(it.cedula)
+            && !rentaDb.TIPOS_FUERA_DE_LIMITE_40.has(it.tipoDeduccion || ""),
+          );
+          let resultado = conLimitado;
+          if (itemsGeneral.length > 0) {
+            const baseCalculoLimite = rentaDb.SUBRENTAS_GENERAL.reduce(
+              (a, n) => a + (ingresoBrutoPorCedula[n] || 0) - (incrngoPorCedula[n] || 0), 0,
+            );
+            const topeUVT = rentaDb.redondearPesosDian(rentaDb.TOPES_DEDUCCION_2025.limiteGlobalDeduccionesRentasExentas * rentaDb.UVT_2025);
+            const limiteGlobal = Math.min(baseCalculoLimite * 0.4, topeUVT);
+            const ajustes = rentaDb.repartirLimiteGeneral(
+              itemsGeneral.map(it => {
+                const esEsteAuto25 = itemAuto25 && it.id === itemAuto25.id;
+                return {
+                  clave: it.id, cedula: it.cedula,
+                  valor: esEsteAuto25 && auto25Real != null ? auto25Real : it.valorLimitado,
+                  // El 25% automático se reduce solo si el asesor lo marca a
+                  // mano, igual que cualquier otra partida — si no lo marca
+                  // (ni marca nada más), muestra su valor natural calculado
+                  // aunque el conjunto supere el tope.
+                  marcado: !!it.limiteGeneral,
+                  orden: it.limiteGeneralOrden,
+                };
+              }),
+              limiteGlobal, rentaDb.SUBRENTAS_GENERAL, true,
+            );
+            resultado = conLimitado.map(it => ajustes.has(it.id) ? { ...it, valorAjustadoGeneral: ajustes.get(it.id) } : it);
+          }
+          if (itemAuto25 && auto25Real != null) {
+            resultado = resultado.map(it => it.id === itemAuto25.id ? { ...it, valorAjustadoGeneral: auto25Real, valorLimitado: auto25Real } : it);
+          }
+          return resultado;
+        }),
+      crear: protectedProcedure
+        .input(z.object({
+          rentaClienteId: z.number(), seccion: z.enum(["activo", "pasivo", "cedula", "descuento_tributario"]),
+          cedula: z.enum(["trabajo", "trabajo_honorarios", "capital", "no_laboral", "pensiones", "dividendos", "ganancia_ocasional"]).optional(),
+          tipoValor: z.enum(["ingreso_bruto", "ingreso_no_constitutivo", "costo_deduccion_procedente", "renta_exenta", "deduccion", "retencion"]).optional(),
+          tipoDeduccion: z.string().optional(), tipoGananciaOcasional: z.string().optional(), limiteGeneral: z.boolean().optional(),
+          calculoAutomatico: z.boolean().optional(), comentario: z.string().optional(),
+          concepto: z.string().min(1), valor: z.number(),
+        }))
+        .mutation(async ({ input, ctx }) => {
+          assertRentaPNAccess(ctx.user.role);
+          let alerta: string | null = null;
+          if (input.tipoDeduccion) {
+            let ingresoBrutoCedula: number | undefined;
+            if (input.tipoDeduccion === "aportes_voluntarios_pension_afc" && input.cedula) {
+              const itemsCedula = await db.getLiquidacionItems(input.rentaClienteId, "cedula");
+              ingresoBrutoCedula = itemsCedula
+                .filter((it: any) => it.cedula === input.cedula && it.tipoValor === "ingreso_bruto")
+                .reduce((a: number, it: any) => a + it.valor, 0);
+            }
+            const { excedeTope, tope, topeUVT } = rentaDb.validarTopeDeduccion(input.tipoDeduccion, input.valor, ingresoBrutoCedula);
+            if (excedeTope) {
+              const notaTope = input.tipoDeduccion === "aportes_voluntarios_pension_afc"
+                ? "el menor entre 3.800 UVT y el 30% del ingreso bruto de esta cédula"
+                : `${topeUVT} UVT`;
+              alerta = `El valor supera el tope 2025 (${notaTope}: $${tope!.toLocaleString("es-CO")}) para este tipo — revisar antes de continuar.`;
+            }
+          }
+          const id = await db.crearLiquidacionItem({
+            rentaClienteId: input.rentaClienteId, seccion: input.seccion, cedula: input.cedula || null,
+            tipoValor: input.tipoValor || null, tipoGananciaOcasional: input.tipoGananciaOcasional || null,
+            tipoDeduccion: input.tipoDeduccion || null, concepto: input.concepto, valor: input.valor,
+            limiteGeneral: input.limiteGeneral || false,
+            limiteGeneralOrden: input.limiteGeneral ? Date.now() : null,
+            calculoAutomatico: input.calculoAutomatico || false,
+            comentario: input.comentario || null,
+          });
+          return { id, alerta };
+        }),
+      actualizar: protectedProcedure
+        .input(z.object({
+          id: z.number(), concepto: z.string().optional(), valor: z.number().optional(),
+          limiteGeneral: z.boolean().optional(), calculoAutomatico: z.boolean().optional(),
+          comentario: z.string().optional(),
+        }))
+        .mutation(async ({ input, ctx }) => {
+          assertRentaPNAccess(ctx.user.role);
+          const { id, ...data } = input;
+          const datosActualizar: typeof data & { limiteGeneralOrden?: number | null } = { ...data };
+          if (input.limiteGeneral !== undefined) {
+            datosActualizar.limiteGeneralOrden = input.limiteGeneral ? Date.now() : null;
+          }
+          await db.actualizarLiquidacionItem(id, datosActualizar);
+          return { success: true };
+        }),
+      eliminar: protectedProcedure
+        .input(z.object({ id: z.number() }))
+        .mutation(async ({ input, ctx }) => {
+          assertRentaPNAccess(ctx.user.role);
+          await db.eliminarLiquidacionItem(input.id);
+          return { success: true };
+        }),
+      // Trae al listado de activos/pasivos/ingresos los ítems ya
+      // clasificados en la exógena que aún no se hayan importado.
+      importarDesdeExogena: protectedProcedure
+        .input(z.object({ rentaClienteId: z.number(), seccion: z.enum(["activo", "pasivo", "ingreso", "retencion"]) }))
+        .mutation(async ({ input, ctx }) => {
+          assertRentaPNAccess(ctx.user.role);
+          const importados = await db.importarDesdeExogena(input.rentaClienteId, input.seccion);
+          return { importados };
+        }),
+      // Lista los ítems de exógena todavía sin importar, para elegir
+      // manualmente cuáles van a la cédula seleccionada.
+      exogenaDisponibles: protectedProcedure
+        .input(z.object({ rentaClienteId: z.number(), seccion: z.enum(["activo", "pasivo", "ingreso", "retencion"]) }))
+        .query(async ({ input, ctx }) => {
+          assertRentaPNAccess(ctx.user.role);
+          return db.getExogenaItemsDisponibles(input.rentaClienteId, input.seccion);
+        }),
+      importarSeleccionDesdeExogena: protectedProcedure
+        .input(z.object({
+          rentaClienteId: z.number(), seccion: z.enum(["activo", "pasivo", "ingreso", "retencion"]),
+          exogenaItemIds: z.array(z.number()), cedula: z.enum(["trabajo", "trabajo_honorarios", "capital", "no_laboral", "pensiones", "dividendos"]).optional(),
+        }))
+        .mutation(async ({ input, ctx }) => {
+          assertRentaPNAccess(ctx.user.role);
+          const importados = await db.importarItemsExogenaSeleccionados(input.rentaClienteId, input.seccion, input.exogenaItemIds, input.cedula);
+          return { importados };
+        }),
+    }),
+    reportes: router({
+      list: protectedProcedure
+        .input(z.object({ rentaClienteId: z.number() }))
+        .query(async ({ input, ctx }) => {
+          assertRentaPNAccess(ctx.user.role);
+          return db.getRentaReportes(input.rentaClienteId);
+        }),
+      getDownloadUrl: protectedProcedure
+        .input(z.object({ fileKey: z.string() }))
+        .query(async ({ input, ctx }) => {
+          assertRentaPNAccess(ctx.user.role);
+          return { signedUrl: await storageGetSignedUrl(input.fileKey) };
+        }),
+      // Solo el administrador puede borrar del historial de generados.
+      eliminar: protectedProcedure
+        .input(z.object({ id: z.number() }))
+        .mutation(async ({ input, ctx }) => {
+          assertRentaPNAccess(ctx.user.role);
+          if (ctx.user.role !== "admin") {
+            throw new TRPCError({ code: "FORBIDDEN", message: "Solo el administrador puede eliminar reportes generados." });
+          }
+          await db.eliminarRentaReporte(input.id);
+          return { success: true };
+        }),
+      // Reúne activos/pasivos/ingresos/deducciones/declaración anterior ya
+      // cargados, calcula la liquidación (patrimonio líquido, renta líquida
+      // Calcula la liquidación en vivo con lo que haya cargado hasta el
+      // momento — sin generar Excel ni guardar historial, para mostrar un
+      // resumen de seguimiento mientras se va cargando información.
+      resumenActual: protectedProcedure
+        .input(z.object({ rentaClienteId: z.number() }))
+        .query(async ({ input, ctx }) => {
+          assertRentaPNAccess(ctx.user.role);
+          const datos = await db.getDatosLiquidacion(input.rentaClienteId);
+          if (!datos) return null;
+          return rentaDb.armarLiquidacion(datos);
+        }),
+      // Corre las validaciones de topes individuales y generales, más las
+      // recomendaciones que se han ido incorporando — lista pensada para
+      // seguir creciendo, no un checklist cerrado.
+      validarRenta: protectedProcedure
+        .input(z.object({ rentaClienteId: z.number() }))
+        .query(async ({ input, ctx }) => {
+          assertRentaPNAccess(ctx.user.role);
+          const datos = await db.getDatosLiquidacion(input.rentaClienteId);
+          if (!datos) return { hallazgos: [] };
+          const resultado = rentaDb.armarLiquidacion(datos);
+          const [exogena, dependientes] = await Promise.all([
+            db.getExogenaRenta(input.rentaClienteId),
+            db.getDependientes(input.rentaClienteId),
+          ]);
+          const hallazgos = rentaDb.validarRenta(datos, resultado, {
+            exogenaIngresoBruto: exogena?.topeIngresos ?? null,
+            tieneDependientes: dependientes.length > 0,
+          });
+          return { hallazgos };
+        }),
+      // gravable por cédula con el tope aplicado, impuesto según Art. 241,
+      // anticipo de referencia), y genera el Excel del borrador.
+      generarBorrador210: protectedProcedure
+        .input(z.object({ rentaClienteId: z.number(), anioGravable: z.number() }))
+        .mutation(async ({ input, ctx }) => {
+          assertRentaPNAccess(ctx.user.role);
+          const cliente = (await db.getRentaClientes(input.anioGravable)).find((c: any) => c.id === input.rentaClienteId);
+          if (!cliente) throw new Error("Cliente de renta no encontrado para ese año gravable.");
+          const datos = await db.getDatosLiquidacion(input.rentaClienteId);
+          if (!datos) throw new Error("No se pudo reunir la información de liquidación.");
+
+          const resultado = rentaDb.armarLiquidacion(datos);
+
+          // Excel — el borrador con la numeración real de casillas.
+          const bufferExcel = await rentaDb.generarBorrador210(resultado, cliente.nombre, cliente.cedula, input.anioGravable);
+          const keyExcel = `renta/borrador210/${input.rentaClienteId}_${Date.now()}.xlsx`;
+          const { key: fileKeyExcel } = await storagePut(
+            keyExcel, bufferExcel, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          );
+          await db.guardarRentaReporte(input.rentaClienteId, fileKeyExcel, ctx.user.id, "BORRADOR_210");
+
+          // PDF — los 2 anexos (detalle de renta + detalle de patrimonio).
+          const dependientes = await db.getDependientes(input.rentaClienteId);
+          const bufferPdf = await rentaDb.generarAnexosRenta(datos, resultado, cliente.nombre, cliente.cedula, input.anioGravable, dependientes, cliente.comentariosGenerales);
+          const keyPdf = `renta/anexos/${input.rentaClienteId}_${Date.now()}.pdf`;
+          const { key: fileKeyPdf } = await storagePut(keyPdf, bufferPdf, "application/pdf");
+          await db.guardarRentaReporte(input.rentaClienteId, fileKeyPdf, ctx.user.id, "ANEXOS_PDF");
+
+          const signedUrl = await storageGetSignedUrl(fileKeyExcel);
+          const signedUrlPdf = await storageGetSignedUrl(fileKeyPdf);
+          return { signedUrl, fileKey: fileKeyExcel, signedUrlPdf, fileKeyPdf, resultado };
+        }),
+    }),
+    dependientes: router({
+      list: protectedProcedure
+        .input(z.object({ rentaClienteId: z.number() }))
+        .query(async ({ input, ctx }) => {
+          assertRentaPNAccess(ctx.user.role);
+          return db.getDependientes(input.rentaClienteId);
+        }),
+      agregar: protectedProcedure
+        .input(z.object({
+          rentaClienteId: z.number(), nombre: z.string().min(1), tipoDocumento: z.string().min(1), numeroDocumento: z.string().min(1),
+          tipoDeduccion: z.enum(["diez_por_ciento", "adicional_72uvt"]).optional(),
+        }))
+        .mutation(async ({ input, ctx }) => {
+          assertRentaPNAccess(ctx.user.role);
+          const id = await db.agregarDependiente(input.rentaClienteId, input.nombre, input.tipoDocumento, input.numeroDocumento, input.tipoDeduccion);
+          return { id };
+        }),
+      eliminar: protectedProcedure
+        .input(z.object({ id: z.number() }))
+        .mutation(async ({ input, ctx }) => {
+          assertRentaPNAccess(ctx.user.role);
+          await db.eliminarDependiente(input.id);
+          return { success: true };
+        }),
+    }),
+  }),
+
+  // ---- Módulo Oficina — agentes de IA, solo para Arlex ----
+  // Primera entrega: solo el agente "Estadista de Tareas" (tipo
+  // "estadista_tareas") está activo y operativo. Los agentes de correo y
+  // desarrollo existen como filas (escritorios "próximamente" en la UI)
+  // pero sus propios endpoints se agregan cuando se conecten.
+  oficina: router({
+    agentes: router({
+      list: protectedProcedure.query(async ({ ctx }) => {
+        assertOficinaAccess(ctx.user.cedula);
+        return oficinaDb.listarAgentes();
+      }),
+      actualizar: protectedProcedure
+        .input(z.object({
+          id: z.number(),
+          nombre: z.string().min(1).optional(),
+          personalidad: z.string().optional(),
+          objetivo: z.string().optional(),
+          especialidad: z.string().optional(),
+          criterioTerminado: z.string().optional(),
+          esfuerzo: z.enum(["low", "medium", "high"]).optional(),
+        }))
+        .mutation(async ({ input, ctx }) => {
+          assertOficinaAccess(ctx.user.cedula);
+          const { id, ...data } = input;
+          await oficinaDb.actualizarAgente(id, data);
+          return { success: true };
+        }),
+    }),
+    chat: router({
+      listar: protectedProcedure
+        .input(z.object({ agenteId: z.number() }))
+        .query(async ({ input, ctx }) => {
+          assertOficinaAccess(ctx.user.cedula);
+          return oficinaDb.listarMensajes(input.agenteId);
+        }),
+      enviar: protectedProcedure
+        .input(z.object({ agenteId: z.number(), mensaje: z.string().min(1) }))
+        .mutation(async ({ input, ctx }) => {
+          assertOficinaAccess(ctx.user.cedula);
+          return oficinaDb.enviarMensajeChat(input.agenteId, input.mensaje);
+        }),
+    }),
+    solicitudes: router({
+      listar: protectedProcedure
+        .input(z.object({ agenteId: z.number().optional() }))
+        .query(async ({ input, ctx }) => {
+          assertOficinaAccess(ctx.user.cedula);
+          return oficinaDb.listarSolicitudes(input.agenteId);
+        }),
+      resolver: protectedProcedure
+        .input(z.object({ id: z.number(), accion: z.enum(["atender", "descartar"]) }))
+        .mutation(async ({ input, ctx }) => {
+          assertOficinaAccess(ctx.user.cedula);
+          await oficinaDb.resolverSolicitud(input.id, input.accion);
+          return { success: true };
+        }),
+    }),
+    estadista: router({
+      ultimaRevision: protectedProcedure
+        .input(z.object({ agenteId: z.number() }))
+        .query(async ({ input, ctx }) => {
+          assertOficinaAccess(ctx.user.cedula);
+          return oficinaDb.ultimaRevision(input.agenteId);
+        }),
+      revisarAhora: protectedProcedure.mutation(async ({ ctx }) => {
+        assertOficinaAccess(ctx.user.cedula);
+        return oficinaDb.revisarAhoraEstadista();
+      }),
+    }),
+  }),
+});
+
+export type AppRouter = typeof appRouter;
+
+// ==================== HELPER FUNCTIONS ====================
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/** When the AI's response gets cut off mid-way (hit the token limit or a
+ * network hiccup), the JSON as a whole is invalid — but most individual
+ * entry objects before the cutoff are still complete. Extract those instead
+ * of discarding everything. Entries here are flat objects (no nesting), so a
+ * simple non-greedy `{...}` match reliably finds each complete one. */
+function rescueEntriesFromTruncatedJson(jsonStr: string): any[] {
+  const matches = jsonStr.match(/\{[^{}]*\}/g) || [];
+  const rescued: any[] = [];
+  for (const m of matches) {
+    try {
+      const obj = JSON.parse(m);
+      if (obj && typeof obj === "object" && obj.obligationCode && obj.period && obj.dueDate) {
+        rescued.push(obj);
+      }
+    } catch {
+      // Skip fragments that still don't parse on their own
+    }
+  }
+  return rescued;
+}
+
+function generatePeriods(frequency: string, year: number, installments: number = 1): string[] {
+  switch (frequency) {
+    case "mensual":
+      return Array.from({ length: 12 }, (_, i) => `${year}-${String(i + 1).padStart(2, "0")}`);
+    case "bimestral":
+      return [`${year}-01-02`, `${year}-03-04`, `${year}-05-06`, `${year}-07-08`, `${year}-09-10`, `${year}-11-12`];
+    case "cuatrimestral":
+      return [`${year}-01-04`, `${year}-05-08`, `${year}-09-12`];
+    case "semestral":
+      return [`${year}-01-06`, `${year}-07-12`];
+    case "anual":
+      if (installments > 1) {
+        return Array.from({ length: installments }, (_, i) => `${year}-cuota${i + 1}`);
+      }
+      return [`${year}`];
+    default:
+      return [`${year}`];
+  }
+}
+
+function generateDefaultDueDate(frequency: string, period: string, year: number, lastDigit: string): Date {
+  const digitOffset = parseInt(lastDigit) || 0;
+  
+  switch (frequency) {
+    case "mensual": {
+      const month = parseInt(period.split("-")[1]);
+      const nextMonth = month + 1 > 12 ? 1 : month + 1;
+      const nextYear = month + 1 > 12 ? year + 1 : year;
+      return new Date(Date.UTC(nextYear, nextMonth - 1, 10 + digitOffset));
+    }
+    case "bimestral": {
+      const endMonth = parseInt(period.split("-")[1].split("-")[0]) + 1;
+      const biMonth = endMonth + 1 > 12 ? 1 : endMonth + 1;
+      const biYear = endMonth + 1 > 12 ? year + 1 : year;
+      return new Date(Date.UTC(biYear, biMonth - 1, 10 + digitOffset));
+    }
+    case "cuatrimestral": {
+      const parts = period.split("-");
+      const endM = parseInt(parts[1]) || 4;
+      const cuatMonth = endM + 1 > 12 ? 1 : endM + 1;
+      const cuatYear = endM + 1 > 12 ? year + 1 : year;
+      return new Date(Date.UTC(cuatYear, cuatMonth - 1, 10 + digitOffset));
+    }
+    case "semestral": {
+      const parts = period.split("-");
+      const endM = parseInt(parts[1]) || 6;
+      const semMonth = endM + 1 > 12 ? 1 : endM + 1;
+      const semYear = endM + 1 > 12 ? year + 1 : year;
+      return new Date(Date.UTC(semYear, semMonth - 1, 10 + digitOffset));
+    }
+    case "anual": {
+      const cuotaMatch = period.match(/cuota(\d+)/);
+      if (cuotaMatch) {
+        const cuotaNum = parseInt(cuotaMatch[1]);
+        // Rough fallback spacing between installments (only used if no DIAN entry exists)
+        const month = 3 + (cuotaNum - 1) * 2; // cuota1 → abr, cuota2 → jun, cuota3 → ago
+        return new Date(Date.UTC(year + 1, month, 10 + digitOffset));
+      }
+      return new Date(Date.UTC(year + 1, 3, 10 + digitOffset)); // April next year
+    }
+    default:
+      return new Date(Date.UTC(year, 11, 31));
+  }
+}

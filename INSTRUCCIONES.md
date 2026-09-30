@@ -1,111 +1,89 @@
-# Módulo Oficina — Fase 1: Estadista de Tareas
+# Cuentas de Cobro para Clientes Generales (prefijo AP)
 
-Primera entrega del módulo **Oficina** que hablamos: un menú nuevo, **visible
-solo para tu usuario** (cédula 5.820.262 — el mismo control que ya usan
-Asistencia y "eliminar cuenta de cobro"), con la escena gráfica del kit de
-Pulpo Starter y el primer agente funcionando de verdad: el **Estadista de
-Tareas**.
+## Qué se hizo
 
-Los otros dos agentes (Correo y Monitor de Desarrollo) ya aparecen como
-escritorios "próximamente" en la oficina, para que la escena se vea completa,
-pero todavía no hacen nada — van en la siguiente entrega, como acordamos.
+En el menú **Clientes** (los clientes generales de la firma, no los de Renta
+Persona Natural) se agregó una segunda pestaña **"Cuentas de Cobro"**, con la
+misma dinámica que ya usan las cuentas de cobro de Renta PN:
 
-## Qué puedes hacer ya
+- Eliges el cliente, escribes el detalle y el valor, y se genera un PDF de
+  cuenta de cobro con el mismo formato que ya usa Arlex (fecha, folio, "Debe
+  a" con los datos fijos de Arlex, tabla de detalle/valor, total, el valor en
+  letras, la nota del Art. 103/383 ET, los datos de pago y la firma).
+- **Prefijo `AP`** (en vez de `R25`, que es el de Renta PN).
+- **Numeración**: se retoma la numeración que se llevaba en el sistema
+  anterior. El último número usado fue **638**, así que la primera cuenta de
+  cobro que se genere aquí sale con el número **639**, y de ahí sigue
+  aumentando normalmente (640, 641, ...).
+- **Encabezado del cliente en el PDF**: además del nombre y el NIT (que es lo
+  único que muestra Renta PN), aquí también se incluyen la **dirección** y el
+  **teléfono** del cliente, cuando los tenga registrados.
+- Se guarda un historial de todas las cuentas de cobro generadas, con botón
+  para descargar el PDF de cada una.
+- **Eliminar**: igual que en Renta PN, solo Arlex (por su cédula) puede
+  borrar una cuenta de cobro ya generada. Cualquier otro admin puede
+  generarlas, pero no borrarlas.
 
-1. Entra a **Oficina** en el menú lateral (solo tú la ves).
-2. Verás la oficina con el escritorio del Estadista al frente. Haz clic
-   sobre el personaje o el escritorio para abrir su ventana, con 3 pestañas:
-   - **Chat**: puedes preguntarle directamente, ej. *"¿qué tareas están
-     represadas ahora mismo?"* — responde con IA (Claude, la misma que ya usa
-     el resto del portal) basándose en los hallazgos reales de la última
-     revisión.
-   - **Solicitudes**: historial de todo lo que este agente ha encontrado.
-   - **Configuración**: puedes cambiarle el nombre, la personalidad, el
-     objetivo, la especialidad, y su "esfuerzo de razonamiento" (Piensa
-     poco / Equilibrado / Piensa mucho) — igual que planteaba el kit
-     original.
-3. Botón **"Revisar ahora"**: corre el análisis en el momento. Revisa TODAS
-   las tareas activas de Areda Work y detecta:
-   - **Vencidas**: no completadas y con fecha límite ya pasada.
-   - **Represadas**: devueltas para corrección o para completar, y sin
-     movimiento hace más de 5 días — se quedaron "colgadas".
-   - **Olvidadas**: sin fecha límite, pendientes o en progreso, sin tocarse
-     hace más de 10 días.
-   - Además calcula el **% de cumplimiento a tiempo por colaborador**
-     (se lo puedes preguntar en el chat, o pedírselo en el resumen).
-4. Cada hallazgo nuevo aparece como una **solicitud pendiente** — el
-   personaje levanta la mano en la oficina y también se ve en el panel de
-   abajo. Puedes marcarla como **atendida** (✓) o **descartarla** (✗). Si el
-   problema sigue existiendo en la próxima revisión, vuelve a aparecer —
-   atender o descartar aquí no cambia nada en Tareas, es solo para que no te
-   pierdas el hallazgo.
-5. **Notificaciones de voz**: botón arriba a la derecha, "Voz
-   desactivada/activada". Actívalo y, mientras dejes esa pestaña de Areda
-   Work abierta (aunque esté minimizada o en segundo plano), el navegador
-   leerá en voz alta cada hallazgo NUEVO que aparezca — sin costo ni cuenta
-   externa, usa la voz integrada de Chrome. Por ahora solo suena si tienes la
-   pestaña abierta cuando "Revisar ahora" se ejecuta (todavía no hay revisión
-   automática en segundo plano — ver "Pendiente" abajo).
+No se tocó nada de la pestaña de Renta PN ni de sus cuentas de cobro — es una
+funcionalidad totalmente independiente, aunque comparte el mismo estilo
+visual y el mismo PDF.
 
-## Cómo aplicar
+## Archivos incluidos (carpeta `archivos_modificados/`)
 
-1. Reemplaza/agrega estos archivos en tu repositorio (mismas rutas):
-   - `drizzle/schema.ts`
-   - `drizzle/0062_colossal_victor_mancha.sql` (archivo nuevo)
-   - `drizzle/meta/0062_snapshot.json` (archivo nuevo)
-   - `drizzle/meta/_journal.json`
-   - `server/routers.ts`
-   - `server/oficinaDb.ts` (archivo nuevo)
-   - `client/src/App.tsx`
-   - `client/src/components/DashboardLayout.tsx`
-   - `client/src/pages/Oficina.tsx` (archivo nuevo)
-   - `client/public/oficina/*.png` (9 imágenes nuevas — la carpeta completa)
-2. Confirma y sube los cambios:
+Reemplaza estos archivos en tu repositorio, respetando la misma ruta:
+
+- `client/src/pages/Clientes.tsx` — pestañas "Clientes" / "Cuentas de Cobro"
+  y el formulario/listado nuevo.
+- `server/db.ts` — funciones nuevas para listar, generar el siguiente
+  número (con el piso en 638→639) y guardar/eliminar cuentas de cobro de
+  clientes generales.
+- `server/routers.ts` — endpoints nuevos `clients.cuentasCobro.listar`,
+  `clients.cuentasCobro.siguienteNumero`, `clients.cuentasCobro.guardar` y
+  `clients.cuentasCobro.eliminar`.
+- `server/clienteCuentaCobroPdf.ts` — **archivo nuevo**, genera el PDF de la
+  cuenta de cobro para clientes generales (con dirección y teléfono).
+- `drizzle/schema.ts` — se agregó la tabla nueva `cuentasCobroClientes`.
+- `drizzle/0063_slow_loki.sql` — **migración nueva**, crea la tabla
+  `cuentasCobroClientes`. No modifica ninguna tabla existente.
+- `drizzle/meta/0063_snapshot.json` y `drizzle/meta/_journal.json` — archivos
+  internos que Drizzle necesita junto con la migración.
+
+## Cómo aplicar los cambios
+
+1. Copia los archivos de `archivos_modificados/` a tu repositorio local, en
+   las mismas rutas.
+2. Sube los cambios a GitHub:
    ```
-   git add drizzle client/src/App.tsx client/src/components/DashboardLayout.tsx client/src/pages/Oficina.tsx client/public/oficina server/routers.ts server/oficinaDb.ts
-   git commit -m "Modulo Oficina: agente Estadista de Tareas (fase 1)"
+   git add client/src/pages/Clientes.tsx server/db.ts server/routers.ts server/clienteCuentaCobroPdf.ts drizzle/schema.ts drizzle/0063_slow_loki.sql drizzle/meta/0063_snapshot.json drizzle/meta/_journal.json
+   git commit -m "Agregar cuentas de cobro para clientes generales (prefijo AP)"
    git push
    ```
-3. **Corre la migración en la consola de Railway** (crea las 4 tablas nuevas —
-   no toca ninguna tabla existente):
+3. Railway va a desplegar automáticamente al hacer push.
+4. **Falta un paso manual**: entra a la Consola de Railway (la misma consola
+   donde corriste la migración anterior de "Oficina") y ejecuta:
    ```
    npx drizzle-kit migrate
    ```
-4. No hace falta ninguna variable de entorno nueva — el agente usa el mismo
-   `ANTHROPIC_API_KEY` que ya está configurado y que usa el resto del portal
-   (Asistente IA, extracción DIAN, etc.).
+   Esto crea la tabla nueva `cuentasCobroClientes` en la base de datos de
+   producción. Es una tabla nueva, no modifica ni borra nada existente.
 
-## Validación realizada
+## Validación que se hizo antes de entregar
 
-- `tsc --noEmit`: mismo número de errores preexistentes (33) antes y después
-  — no se introdujo ningún error nuevo.
-- `vite build`: compila limpio, sin advertencias nuevas.
-- Migración generada con `drizzle-kit generate`: 100% aditiva — solo crea
-  tablas nuevas (`oficinaAgentes`, `oficinaMensajes`, `oficinaSolicitudes`,
-  `oficinaRevisiones`), no modifica ninguna existente.
-- `diff` contra el repositorio original: confirma que solo cambiaron los
-  archivos listados arriba, sin tocar nada del resto de la aplicación.
-- No pude levantar una base de datos real en este entorno para probar el
-  flujo de punta a punta contra MySQL (sin acceso a Docker/apt aquí) — la
-  lógica se revisó a mano con cuidado, pero te recomiendo darle "Revisar
-  ahora" una primera vez después de desplegar y confirmar que los hallazgos
-  se vean coherentes con lo que tienes hoy en Tareas.
+- `tsc --noEmit`: el proyecto compila con exactamente los mismos 33 errores
+  que ya existían antes de este cambio (ninguno nuevo viene de los archivos
+  que se tocaron aquí).
+- `vite build`: el frontend compila sin errores.
+- Se comparó el código contra una copia nueva y limpia del repositorio para
+  confirmar que **solo** cambiaron los archivos listados arriba (más la
+  migración nueva) — nada más se modificó por accidente.
+- La migración se generó con Drizzle Kit y se revisó a mano: es un `CREATE
+  TABLE` limpio, no toca ninguna tabla existente.
 
-## Qué falta (siguiente entrega, como acordamos)
-
-- **Revisión automática programada** (cron): por ahora el análisis solo
-  corre cuando tú le das "Revisar ahora". El backend ya tiene el patrón para
-  un job periódico (igual al que ya usan los recordatorios de vencimientos),
-  pero registrar ese cron contra tu servidor de Railway ya desplegado es un
-  paso aparte que prefiero hacer una vez confirmes que esta primera versión
-  funciona bien — así no dejamos algo corriendo solo sin que lo hayas visto
-  primero.
-- **Agente de Correo** (contacto@ e ibague@aredasas.com): pendiente de que
-  actives la delegación de dominio en Google Workspace para el Service
-  Account, como quedamos — te aviso cuando estemos listos para ese paso.
-- **Monitor de Desarrollo**: se conecta como tarea programada de Claude Code,
-  aparte de este módulo — entrega independiente.
-- Por ahora el Estadista analiza `tasks` (tareas) — si quieres que también
-  desglose `taxDeadlines` (vencimientos) por separado, dímelo y lo sumamos
-  (hoy los vencimientos con tarea generada automáticamente ya quedan
-  cubiertos indirectamente a través de esa tarea).
+**Importante**: en este entorno no tengo una base de datos MySQL real para
+probar el flujo completo de extremo a extremo (crear, listar, generar el PDF
+con datos reales, eliminar). La lógica se revisó con cuidado y sigue
+exactamente el mismo patrón que ya funciona en producción para Renta PN, así
+que el riesgo es bajo, pero vale la pena que hagas una prueba rápida en
+Railway después de desplegar: genera una cuenta de cobro de prueba para
+cualquier cliente y confirma que el PDF sale bien, con el número **AP -
+0639** en la primera.
