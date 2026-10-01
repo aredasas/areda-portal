@@ -2,50 +2,76 @@ import PDFDocument from "pdfkit";
 
 /** Convierte un número entero (pesos, sin decimales) a su escritura en
  * letras en español — usado en la línea "SON:" de la cuenta de cobro.
- * Cubre hasta miles de millones, más que suficiente para honorarios. */
+ * Cubre hasta 999.999 millones. ASCII plano (sin tildes) porque se imprime
+ * con Helvetica estándar en pdfkit.
+ *   25.000      -> VEINTICINCO MIL PESOS M/CTE.
+ *   1.000.000   -> UN MILLON DE PESOS M/CTE.
+ *   1.750.000   -> UN MILLON SETECIENTOS CINCUENTA MIL PESOS M/CTE. */
 export function numeroALetras(valor: number): string {
   const UNIDADES = ["", "UN", "DOS", "TRES", "CUATRO", "CINCO", "SEIS", "SIETE", "OCHO", "NUEVE"];
   const DIEZ_A_DIECINUEVE = ["DIEZ", "ONCE", "DOCE", "TRECE", "CATORCE", "QUINCE", "DIECISEIS", "DIECISIETE", "DIECIOCHO", "DIECINUEVE"];
+  // 21-29 se escriben en una sola palabra ("VEINTICINCO", no "VEINTE Y CINCO").
+  const VEINTI = ["VEINTE", "VEINTIUN", "VEINTIDOS", "VEINTITRES", "VEINTICUATRO", "VEINTICINCO", "VEINTISEIS", "VEINTISIETE", "VEINTIOCHO", "VEINTINUEVE"];
   const DECENAS = ["", "", "VEINTE", "TREINTA", "CUARENTA", "CINCUENTA", "SESENTA", "SETENTA", "OCHENTA", "NOVENTA"];
   const CENTENAS = ["", "CIENTO", "DOSCIENTOS", "TRESCIENTOS", "CUATROCIENTOS", "QUINIENTOS", "SEISCIENTOS", "SETECIENTOS", "OCHOCIENTOS", "NOVECIENTOS"];
 
+  /** 0..999 */
   function convertirCentenas(n: number): string {
     if (n === 0) return "";
     if (n === 100) return "CIEN";
     const c = Math.floor(n / 100);
     const resto = n % 100;
-    let texto = c > 0 ? CENTENAS[c] : "";
+    const partes: string[] = [];
+    if (c > 0) partes.push(CENTENAS[c]);
     if (resto > 0) {
-      if (resto < 10) texto += (texto ? " " : "") + UNIDADES[resto];
-      else if (resto < 20) texto += (texto ? " " : "") + DIEZ_A_DIECINUEVE[resto - 10];
+      if (resto < 10) partes.push(UNIDADES[resto]);
+      else if (resto < 20) partes.push(DIEZ_A_DIECINUEVE[resto - 10]);
+      else if (resto < 30) partes.push(VEINTI[resto - 20]);
       else {
         const d = Math.floor(resto / 10);
         const u = resto % 10;
-        texto += (texto ? " " : "") + DECENAS[d] + (u > 0 ? " Y " + UNIDADES[u] : "");
+        partes.push(DECENAS[d] + (u > 0 ? " Y " + UNIDADES[u] : ""));
       }
     }
-    return texto;
+    return partes.join(" ");
   }
 
-  function convertirGrupo(n: number, singular: string, plural: string): string {
-    if (n === 0) return "";
-    if (n === 1) return singular;
-    return `${convertirCentenas(n)} ${plural}`;
+  /** 0..999.999 */
+  function convertirMiles(n: number): string {
+    const miles = Math.floor(n / 1000);
+    const resto = n % 1000;
+    const partes: string[] = [];
+    if (miles > 0) partes.push(miles === 1 ? "MIL" : `${convertirCentenas(miles)} MIL`);
+    if (resto > 0) partes.push(convertirCentenas(resto));
+    return partes.join(" ");
   }
 
   const entero = Math.round(Math.abs(valor));
   if (entero === 0) return "CERO PESOS M/CTE.";
+  if (entero === 1) return "UN PESO M/CTE.";
 
   const millones = Math.floor(entero / 1_000_000);
-  const miles = Math.floor((entero % 1_000_000) / 1000);
-  const resto = entero % 1000;
+  const restoMillon = entero % 1_000_000;
 
   const partes: string[] = [];
-  if (millones > 0) partes.push(convertirGrupo(millones, "UN MILLON", "MILLONES"));
-  if (miles > 0) partes.push(miles === 1 ? "MIL" : `${convertirCentenas(miles)} MIL`);
-  if (resto > 0) partes.push(convertirCentenas(resto));
+  if (millones > 0) partes.push(millones === 1 ? "UN MILLON" : `${convertirMiles(millones)} MILLONES`);
+  if (restoMillon > 0) partes.push(convertirMiles(restoMillon));
+  // Millones exactos llevan "DE": "DOS MILLONES DE PESOS".
+  const conector = millones > 0 && restoMillon === 0 ? " DE" : "";
 
-  return partes.filter(Boolean).join(" ").replace(/\s+/g, " ").trim() + " PESOS M/CTE.";
+  return partes.join(" ").replace(/\s+/g, " ").trim() + conector + " PESOS M/CTE.";
+}
+
+/** Fecha de la cuenta de cobro como DD/MM/AAAA. La fecha llega en la
+ * convención del proyecto (medianoche UTC del día calendario de Bogotá),
+ * así que se leen los componentes UTC — con getDate()/getMonth() el
+ * resultado dependería de la zona horaria del servidor. */
+export function formatearFechaCuentaCobro(fecha: Date): string {
+  return [
+    String(fecha.getUTCDate()).padStart(2, "0"),
+    String(fecha.getUTCMonth() + 1).padStart(2, "0"),
+    fecha.getUTCFullYear(),
+  ].join("/");
 }
 
 /** Genera el PDF de una cuenta de cobro — mismo formato que Arlex ya
@@ -72,11 +98,7 @@ export async function generarCuentaCobroPdf(datos: {
   // --- Encabezado: fecha a la izquierda, folio en una caja a la derecha ---
   const yEncabezado = doc.y;
   doc.font("Helvetica-Bold").fontSize(10).text("Fecha:", xIzq, yEncabezado);
-  const fechaFormateada = [
-    String(datos.fecha.getDate()).padStart(2, "0"),
-    String(datos.fecha.getMonth() + 1).padStart(2, "0"),
-    datos.fecha.getFullYear(),
-  ].join("/");
+  const fechaFormateada = formatearFechaCuentaCobro(datos.fecha);
   doc.font("Helvetica").text(fechaFormateada, xIzq + 45, yEncabezado);
 
   const anchoCaja = 170;

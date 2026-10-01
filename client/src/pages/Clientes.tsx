@@ -578,9 +578,26 @@ export default function Clientes() {
   );
 }
 
+/** Hoy en Bogotá como "AAAA-MM-DD" (valor por defecto del campo Fecha). */
+function hoyBogotaIso(): string {
+  return new Date().toLocaleDateString("en-CA", { timeZone: "America/Bogota" });
+}
+
+/** La fecha de una cuenta de cobro se guarda como medianoche UTC del día
+ * calendario — se formatea en UTC para que no se corra un día en Colombia. */
+function formatearFechaCuenta(fecha: string | Date): string {
+  return new Date(fecha).toLocaleDateString("es-CO", { timeZone: "UTC", day: "2-digit", month: "2-digit", year: "numeric" });
+}
+
+type ConceptoForm = { id: number; detalle: string; valor: string /* solo dígitos */ };
+
+let siguienteIdConcepto = 1;
+const conceptoVacio = (): ConceptoForm => ({ id: siguienteIdConcepto++, detalle: "", valor: "" });
+
 /** Pestaña "Cuentas de Cobro" — misma dinámica que la de Renta PN (CTA),
  * pero para cualquier cliente general de la firma. Prefijo propio "AP",
- * consecutivo que sigue el que se llevaba en el sistema anterior. */
+ * consecutivo que sigue el que se llevaba en el sistema anterior. Admite
+ * varios conceptos por cuenta (el total es su suma) y fecha editable. */
 function CuentasCobroClientesTab() {
   const { user } = useAuth();
   // Igual que en Renta PN: cualquier admin puede generar, pero eliminar
@@ -594,18 +611,35 @@ function CuentasCobroClientesTab() {
   const clientesConCta = new Set((listaQuery.data || []).map((cta: any) => cta.clientId));
 
   const [clientId, setClientId] = useState<string>("");
-  const [detalle, setDetalle] = useState("");
-  const [valor, setValor] = useState("");
+  const [fecha, setFecha] = useState<string>(hoyBogotaIso);
+  const [conceptos, setConceptos] = useState<ConceptoForm[]>(() => [conceptoVacio()]);
+  const [idParaEnfocar, setIdParaEnfocar] = useState<number | null>(null);
+  const refsDetalle = useRef<Map<number, HTMLInputElement>>(new Map());
+
+  useEffect(() => {
+    if (idParaEnfocar == null) return;
+    refsDetalle.current.get(idParaEnfocar)?.focus();
+    setIdParaEnfocar(null);
+  }, [idParaEnfocar]);
 
   const siguienteNumeroQuery = trpc.clients.cuentasCobro.siguienteNumero.useQuery({ prefijo: "AP" });
 
   const clienteSeleccionado = (clientesQuery.data || []).find((c: any) => String(c.id) === clientId);
 
+  const fmt = (n: number) => `$${Math.round(n).toLocaleString("es-CO")}`;
+  const valorNumerico = (c: ConceptoForm) => (c.valor ? Number(c.valor) : 0);
+  const total = conceptos.reduce((s, c) => s + valorNumerico(c), 0);
+
+  const reiniciarFormulario = () => {
+    setFecha(hoyBogotaIso());
+    setConceptos([conceptoVacio()]);
+  };
+
   const guardarMutation = trpc.clients.cuentasCobro.guardar.useMutation({
     onSuccess: (data) => {
-      toast.success(`Cuenta de cobro AP-${String(data.numero).padStart(4, "0")} generada`);
+      toast.success(`Cuenta de cobro AP - ${String(data.numero).padStart(4, "0")} generada por ${fmt(data.total)}`);
       if (data.signedUrl) window.open(data.signedUrl, "_blank");
-      setDetalle(""); setValor("");
+      reiniciarFormulario();
       utils.clients.cuentasCobro.listar.invalidate();
       utils.clients.cuentasCobro.siguienteNumero.invalidate();
     },
@@ -620,16 +654,45 @@ function CuentasCobroClientesTab() {
     onError: (err) => toast.error(err.message || "No se pudo eliminar la cuenta de cobro"),
   });
 
-  const fmt = (n: number) => `$${Math.round(n).toLocaleString("es-CO")}`;
+  const actualizarConcepto = (id: number, cambios: Partial<ConceptoForm>) => {
+    setConceptos((prev) => prev.map((c) => (c.id === id ? { ...c, ...cambios } : c)));
+  };
+
+  const agregarConcepto = () => {
+    const nuevo = conceptoVacio();
+    setConceptos((prev) => [...prev, nuevo]);
+    setIdParaEnfocar(nuevo.id);
+  };
+
+  const quitarConcepto = (id: number) => {
+    setConceptos((prev) => (prev.length > 1 ? prev.filter((c) => c.id !== id) : prev));
+  };
 
   const handleGuardar = () => {
-    if (!clientId || !detalle.trim() || !valor) {
-      toast.error("Completa el cliente, el detalle y el valor");
+    if (!clientId) {
+      toast.error("Elige el cliente");
+      return;
+    }
+    if (!fecha) {
+      toast.error("Elige la fecha de la cuenta de cobro");
+      return;
+    }
+    // Las filas que quedaron totalmente vacías se ignoran; una fila a medio
+    // llenar sí se reporta para que no se pierda un valor sin darse cuenta.
+    const llenos = conceptos.filter((c) => c.detalle.trim() || c.valor);
+    if (llenos.length === 0) {
+      toast.error("Agrega al menos un concepto con su detalle y valor");
+      return;
+    }
+    const incompleto = llenos.findIndex((c) => !c.detalle.trim() || valorNumerico(c) <= 0);
+    if (incompleto >= 0) {
+      const posicion = conceptos.indexOf(llenos[incompleto]) + 1;
+      toast.error(`El concepto ${posicion} necesita detalle y un valor mayor a cero`);
       return;
     }
     guardarMutation.mutate({
-      clientId: Number(clientId), prefijo: "AP",
-      detalle: detalle.trim(), valor: Number(valor),
+      clientId: Number(clientId), prefijo: "AP", fecha,
+      conceptos: llenos.map((c) => ({ detalle: c.detalle.trim(), valor: valorNumerico(c) })),
     });
   };
 
@@ -643,8 +706,8 @@ function CuentasCobroClientesTab() {
       <Card>
         <CardContent className="p-4 space-y-3">
           <p className="text-base font-semibold flex items-center gap-1.5"><Receipt className="w-4 h-4" /> Generar cuenta de cobro</p>
-          <div className="grid sm:grid-cols-2 gap-3">
-            <div className="space-y-1.5">
+          <div className="grid sm:grid-cols-4 gap-3">
+            <div className="sm:col-span-2 space-y-1.5">
               <Label className="text-xs">Cliente</Label>
               <Select value={clientId} onValueChange={setClientId}>
                 <SelectTrigger className="h-9 text-sm"><SelectValue placeholder="Elegir cliente..." /></SelectTrigger>
@@ -658,6 +721,10 @@ function CuentasCobroClientesTab() {
               </Select>
             </div>
             <div className="space-y-1.5">
+              <Label className="text-xs" htmlFor="cta-fecha">Fecha</Label>
+              <Input id="cta-fecha" type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} className="h-9 text-sm" />
+            </div>
+            <div className="space-y-1.5">
               <Label className="text-xs">Próximo folio</Label>
               <Input value={siguienteNumeroQuery.data ? `AP - ${String(siguienteNumeroQuery.data.numero).padStart(4, "0")}` : "..."} disabled className="h-9 text-sm bg-muted" />
             </div>
@@ -665,21 +732,63 @@ function CuentasCobroClientesTab() {
 
           {clientId && (
             <div className="rounded-md border bg-muted/30 p-3 text-sm space-y-1">
-              <div className="flex justify-between"><span className="text-muted-foreground">Cliente</span><span className="font-medium">{clienteSeleccionado?.razonSocial}</span></div>
-              <div className="flex justify-between"><span className="text-muted-foreground">NIT</span><span>{clienteSeleccionado?.nit}{clienteSeleccionado?.digitoVerificacion ? `-${clienteSeleccionado.digitoVerificacion}` : ""}</span></div>
-              <div className="flex justify-between"><span className="text-muted-foreground">Dirección</span><span>{clienteSeleccionado?.direccion || "sin registrar"}</span></div>
-              <div className="flex justify-between"><span className="text-muted-foreground">Teléfono</span><span>{clienteSeleccionado?.telefono || "sin registrar"}</span></div>
+              <div className="flex justify-between gap-3"><span className="text-muted-foreground shrink-0">Cliente</span><span className="font-medium text-right min-w-0">{clienteSeleccionado?.razonSocial}</span></div>
+              <div className="flex justify-between gap-3"><span className="text-muted-foreground shrink-0">NIT</span><span className="text-right">{clienteSeleccionado?.nit}{clienteSeleccionado?.digitoVerificacion ? `-${clienteSeleccionado.digitoVerificacion}` : ""}</span></div>
+              <div className="flex justify-between gap-3"><span className="text-muted-foreground shrink-0">Dirección</span><span className="text-right min-w-0">{clienteSeleccionado?.direccion || "sin registrar"}</span></div>
+              <div className="flex justify-between gap-3"><span className="text-muted-foreground shrink-0">Teléfono</span><span className="text-right">{clienteSeleccionado?.telefono || "sin registrar"}</span></div>
             </div>
           )}
 
-          <div className="grid sm:grid-cols-3 gap-3">
-            <div className="sm:col-span-2 space-y-1.5">
-              <Label className="text-xs">Detalle</Label>
-              <Input value={detalle} onChange={(e) => setDetalle(e.target.value)} placeholder="Ej. Honorarios contables Septiembre 2026" className="h-9 text-sm" />
+          <div className="space-y-2">
+            <div className="hidden sm:flex items-center gap-2 text-xs text-muted-foreground px-0.5">
+              <span className="w-6 shrink-0 text-center">#</span>
+              <span className="flex-1 min-w-0">Concepto</span>
+              <span className="w-40 shrink-0 text-right pr-3">Valor</span>
+              <span className="w-9 shrink-0" />
             </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs">Valor</Label>
-              <Input type="number" value={valor} onChange={(e) => setValor(e.target.value)} placeholder="0" className="h-9 text-sm" />
+            {conceptos.map((c, i) => (
+              <div key={c.id} className="flex items-center gap-2">
+                <span className="w-6 shrink-0 text-center text-xs text-muted-foreground">{i + 1}</span>
+                <Input
+                  ref={(el) => { if (el) refsDetalle.current.set(c.id, el); else refsDetalle.current.delete(c.id); }}
+                  value={c.detalle}
+                  onChange={(e) => actualizarConcepto(c.id, { detalle: e.target.value })}
+                  placeholder={i === 0 ? "Ej. Honorarios contables Septiembre 2026" : "Detalle del concepto"}
+                  aria-label={`Detalle del concepto ${i + 1}`}
+                  className="h-9 text-sm flex-1 min-w-0"
+                />
+                <div className="relative w-32 sm:w-40 shrink-0">
+                  <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">$</span>
+                  <Input
+                    inputMode="numeric"
+                    value={c.valor ? Number(c.valor).toLocaleString("es-CO") : ""}
+                    onChange={(e) => actualizarConcepto(c.id, { valor: e.target.value.replace(/\D/g, "").replace(/^0+/, "").slice(0, 12) })}
+                    onKeyDown={(e) => { if (e.key === "Enter" && i === conceptos.length - 1) { e.preventDefault(); agregarConcepto(); } }}
+                    placeholder="0"
+                    aria-label={`Valor del concepto ${i + 1}`}
+                    className="h-9 text-sm text-right pl-6 tabular-nums"
+                  />
+                </div>
+                <Button
+                  type="button" size="sm" variant="ghost"
+                  className="w-9 h-9 p-0 shrink-0 text-muted-foreground hover:text-red-600"
+                  onClick={() => quitarConcepto(c.id)}
+                  disabled={conceptos.length === 1}
+                  title={conceptos.length === 1 ? "La cuenta necesita al menos un concepto" : "Quitar concepto"}
+                  aria-label={`Quitar concepto ${i + 1}`}
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </Button>
+              </div>
+            ))}
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+              <Button type="button" size="sm" variant="outline" className="h-8" onClick={agregarConcepto} disabled={conceptos.length >= 30}>
+                <Plus className="w-3.5 h-3.5 mr-1" /> Agregar concepto
+              </Button>
+              <div className="flex items-baseline gap-3 rounded-md bg-muted/40 px-3 py-1.5">
+                <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Total</span>
+                <span className="text-base font-semibold tabular-nums">{fmt(total)}</span>
+              </div>
             </div>
           </div>
 
@@ -699,31 +808,37 @@ function CuentasCobroClientesTab() {
             <p className="text-sm text-muted-foreground">Todavía no se ha generado ninguna cuenta de cobro.</p>
           ) : (
             <div className="space-y-2">
-              {listaQuery.data.map((cta: any) => (
-                <div key={cta.id} className="flex items-center justify-between gap-2 border-b pb-2 last:border-b-0 text-sm">
-                  <div className="flex-1 min-w-0">
-                    <p className="font-medium">{cta.prefijo} - {String(cta.numero).padStart(4, "0")} · {cta.clienteNombre}</p>
-                    <p className="text-xs text-muted-foreground truncate">{cta.detalle}</p>
+              {listaQuery.data.map((cta: any) => {
+                const cantidadConceptos = cta.conceptos?.length ?? 1;
+                return (
+                  <div key={cta.id} className="flex items-center justify-between gap-2 border-b pb-2 last:border-b-0 text-sm">
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium truncate">{cta.prefijo} - {String(cta.numero).padStart(4, "0")} · {cta.clienteNombre}</p>
+                      <p className="text-xs text-muted-foreground truncate" title={(cta.conceptos || []).map((c: any) => `${c.detalle}: ${fmt(c.valor)}`).join("\n")}>
+                        {formatearFechaCuenta(cta.fecha)}
+                        {cantidadConceptos > 1 ? ` · ${cantidadConceptos} conceptos` : ""} · {cta.detalle}
+                      </p>
+                    </div>
+                    <span className="shrink-0 text-sm font-medium tabular-nums">{fmt(cta.valor)}</span>
+                    {cta.signedUrl && (
+                      <Button size="sm" variant="outline" className="shrink-0 h-8" onClick={() => window.open(cta.signedUrl, "_blank")} title="Descargar PDF">
+                        <Download className="w-3.5 h-3.5" />
+                      </Button>
+                    )}
+                    {puedeEliminar && (
+                      <Button
+                        size="sm" variant="outline"
+                        className="shrink-0 h-8 text-red-600 hover:bg-red-50 hover:text-red-700"
+                        onClick={() => handleEliminar(cta)}
+                        disabled={eliminarMutation.isPending}
+                        title="Eliminar cuenta de cobro"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </Button>
+                    )}
                   </div>
-                  <span className="shrink-0 text-sm font-medium">{fmt(cta.valor)}</span>
-                  {cta.signedUrl && (
-                    <Button size="sm" variant="outline" className="shrink-0 h-8" onClick={() => window.open(cta.signedUrl, "_blank")}>
-                      <Download className="w-3.5 h-3.5" />
-                    </Button>
-                  )}
-                  {puedeEliminar && (
-                    <Button
-                      size="sm" variant="outline"
-                      className="shrink-0 h-8 text-red-600 hover:bg-red-50 hover:text-red-700"
-                      onClick={() => handleEliminar(cta)}
-                      disabled={eliminarMutation.isPending}
-                      title="Eliminar cuenta de cobro"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </Button>
-                  )}
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </CardContent>

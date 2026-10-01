@@ -104,7 +104,8 @@ import { generarAnexoIva, generarAnexoIvaPdf } from "./informesIvaAnexo";
 import * as rentaDb from "./rentaDb";
 import { storagePut, storageGetSignedUrl, storageGetBuffer } from "./storage";
 import { generarCuentaCobroPdf } from "./rentaCuentaCobro";
-import { generarCuentaCobroClientePdf } from "./clienteCuentaCobroPdf";
+import { generarCuentaCobroClientePdf, leerConceptosCuentaCobro, fechaCalendarioAUtcMidnight } from "./clienteCuentaCobroPdf";
+import { bogotaTodayUTCMidnight } from "./dateUtils";
 import * as oficinaDb from "./oficinaDb";
 import { invokeLLM } from "./_core/llm";
 import { isDriveConfigured, extractFolderIdFromUrl, testFolderAccess, listSubfoldersRecursive, listAllFilesRecursive, uploadFileToDrive, resolveUploadFolder } from "./googleDrive";
@@ -611,8 +612,9 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
     cuentasCobro: router({
       listar: adminProcedure.query(async () => {
         const filas = await db.getCuentasCobroClientes();
-        return Promise.all(filas.map(async (f) => ({
+        return Promise.all(filas.map(async ({ conceptosJson, ...f }) => ({
           ...f,
+          conceptos: leerConceptosCuentaCobro(conceptosJson, f.detalle, f.valor),
           signedUrl: f.fileKey ? await storageGetSignedUrl(f.fileKey) : null,
         })));
       }),
@@ -625,32 +627,50 @@ Si no puedes leer algún campo, déjalo como cadena vacía "". Responde SOLO con
         .input(z.object({
           clientId: z.number(),
           prefijo: z.string().default("AP"),
-          detalle: z.string().min(1),
-          valor: z.number().positive(),
+          /** Fecha que imprime la cuenta, "AAAA-MM-DD" (día calendario
+           * elegido en el formulario; por defecto hoy en Bogotá). */
+          fecha: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Fecha inválida"),
+          conceptos: z.array(z.object({
+            detalle: z.string().trim().min(1, "Cada concepto necesita un detalle").max(500),
+            valor: z.number().positive("Cada concepto necesita un valor mayor a cero"),
+          })).min(1, "Agrega al menos un concepto").max(30, "Máximo 30 conceptos por cuenta de cobro"),
         }))
         .mutation(async ({ input, ctx }) => {
           const cliente = await db.getClientById(input.clientId);
           if (!cliente) throw new Error("Cliente no encontrado.");
 
+          const fecha = fechaCalendarioAUtcMidnight(input.fecha);
+          if (!fecha) throw new TRPCError({ code: "BAD_REQUEST", message: "La fecha de la cuenta de cobro no es válida." });
+
+          // Pesos enteros por concepto, y el total es la suma EXACTA de lo
+          // que se imprime en cada fila — así el total del PDF siempre
+          // cuadra con sus conceptos.
+          const conceptos = input.conceptos.map((c) => ({ detalle: c.detalle.trim(), valor: Math.round(c.valor) }));
+          if (conceptos.some((c) => c.valor <= 0)) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: "Cada concepto necesita un valor de al menos $1." });
+          }
+          const total = conceptos.reduce((s, c) => s + c.valor, 0);
+          const detalleResumen = conceptos.map((c) => c.detalle).join("; ");
+
           const numero = await db.getSiguienteNumeroCuentaCobroCliente(input.prefijo);
-          const fecha = new Date();
 
           const buffer = await generarCuentaCobroClientePdf({
             prefijo: input.prefijo, numero, fecha,
             clienteNombre: cliente.razonSocial, clienteNit: cliente.nit, clienteDigitoVerificacion: cliente.digitoVerificacion,
             clienteDireccion: cliente.direccion, clienteTelefono: cliente.telefono,
-            detalle: input.detalle, valor: input.valor,
+            conceptos,
           });
           const key = `clientes/cuentas-cobro/${input.prefijo}_${numero}_${Date.now()}.pdf`;
           const { key: fileKey } = await storagePut(key, buffer, "application/pdf");
 
           const id = await db.guardarCuentaCobroCliente({
             clientId: input.clientId, prefijo: input.prefijo, numero, fecha,
-            detalle: input.detalle, valor: input.valor,
+            detalle: detalleResumen, valor: total,
+            conceptosJson: JSON.stringify(conceptos),
             fileKey, generadoPorId: ctx.user.id,
           });
           const signedUrl = await storageGetSignedUrl(fileKey);
-          return { id, numero, signedUrl };
+          return { id, numero, total, signedUrl };
         }),
       eliminar: protectedProcedure
         .input(z.object({ id: z.number() }))
@@ -3180,7 +3200,10 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           if (!cliente) throw new Error("Cliente no encontrado.");
 
           const numero = await db.getSiguienteNumeroCuentaCobro(input.prefijo);
-          const fecha = new Date();
+          // Día calendario de Bogotá (medianoche UTC) — con `new Date()` el
+          // PDF imprimía el día siguiente si se generaba después de las
+          // 7:00pm hora Colombia (el servidor corre en UTC).
+          const fecha = bogotaTodayUTCMidnight();
 
           const buffer = await generarCuentaCobroPdf({
             prefijo: input.prefijo, numero, fecha,

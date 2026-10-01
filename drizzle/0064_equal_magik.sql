@@ -1,0 +1,1 @@
+ALTER TABLE `cuentasCobroClientes` ADD `conceptosJson` text;

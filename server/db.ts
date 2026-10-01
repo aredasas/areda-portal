@@ -2640,6 +2640,7 @@ export async function getCuentasCobroClientes() {
     id: cuentasCobroClientes.id, clientId: cuentasCobroClientes.clientId,
     prefijo: cuentasCobroClientes.prefijo, numero: cuentasCobroClientes.numero,
     fecha: cuentasCobroClientes.fecha, detalle: cuentasCobroClientes.detalle, valor: cuentasCobroClientes.valor,
+    conceptosJson: cuentasCobroClientes.conceptosJson,
     fileKey: cuentasCobroClientes.fileKey, createdAt: cuentasCobroClientes.createdAt,
     clienteNombre: clients.razonSocial, clienteNit: clients.nit, clienteDV: clients.digitoVerificacion,
   }).from(cuentasCobroClientes)

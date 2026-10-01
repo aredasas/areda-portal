@@ -1188,8 +1188,17 @@ export const cuentasCobroClientes = mysqlTable("cuentasCobroClientes", {
   prefijo: varchar("prefijo", { length: 10 }).default("AP").notNull(),
   numero: int("numero").notNull(),
   fecha: timestamp("fecha").defaultNow().notNull(),
+  /** Resumen de los conceptos (sus detalles unidos con "; ") — se sigue
+   * llenando para que el listado y cualquier consulta vieja sigan
+   * funcionando igual. El detalle completo, concepto por concepto, está
+   * en `conceptosJson`. */
   detalle: text("detalle").notNull(),
+  /** Total de la cuenta = suma de los valores de `conceptosJson`. */
   valor: double("valor").notNull(),
+  /** JSON `[{ detalle: string, valor: number }]` — uno por cada concepto
+   * digitado. NULL en las cuentas generadas antes de existir esta columna
+   * (esas tienen un único concepto: `detalle` + `valor`). */
+  conceptosJson: text("conceptosJson"),
   fileKey: varchar("fileKey", { length: 500 }),
   generadoPorId: int("generadoPorId").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),

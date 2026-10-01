@@ -449,6 +449,13 @@
       "when": 1790783042189,
       "tag": "0063_slow_loki",
       "breakpoints": true
+    },
+    {
+      "idx": 64,
+      "version": "5",
+      "when": 1790881105330,
+      "tag": "0064_equal_magik",
+      "breakpoints": true
     }
   ]
 }
