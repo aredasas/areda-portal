@@ -14,7 +14,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { trpc } from "@/lib/trpc";
 import { getEffectivePriority, priorityLabels, priorityColors } from "@/lib/priority";
-import { ClipboardList, Plus, Loader2, Calendar, Upload, CheckCircle2, RotateCcw, Paperclip, FileText, Eye, FolderOpen, XCircle, X, Repeat, Search } from "lucide-react";
+import { ClipboardList, Plus, Loader2, Calendar, Upload, CheckCircle2, RotateCcw, Paperclip, FileText, Eye, FolderOpen, XCircle, X, Repeat, Search, Pencil } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
 import { toast } from "sonner";
 
@@ -33,6 +33,11 @@ const statusColors: Record<string, string> = {
   vencida: "bg-red-100 text-red-800 border-red-200",
   cancelada: "bg-gray-200 text-gray-600 border-gray-300",
 };
+
+/** Columna "Acciones" fija a la derecha SOLO cuando la tabla puede
+ * desplazarse de lado (pantallas de menos de 1280px). En pantallas grandes
+ * la tabla cabe completa y fijarla solo dejaba una franja de otro color. */
+const ACCIONES_FIJA = "max-xl:sticky max-xl:right-0 max-xl:z-10 max-xl:bg-card max-xl:shadow-[-4px_0_4px_-4px_rgba(0,0,0,0.15)]";
 
 export default function Tareas() {
   const { user } = useAuth();
@@ -308,7 +313,7 @@ export default function Tareas() {
   return (
     <DashboardLayout>
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold text-[#42302E]">Tareas</h1>
           <p className="text-muted-foreground mt-1">Gestión de tareas asignadas a colaboradores</p>
@@ -369,8 +374,9 @@ export default function Tareas() {
         )}
       </div>
 
-      <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList>
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="min-w-0">
+        {/* En pantallas angostas las pestañas se desplazan de lado en vez de salirse de la página. */}
+        <TabsList className="max-w-full justify-start overflow-x-auto overflow-y-hidden">
           <TabsTrigger value="todas">Todas ({tasksFiltradosBase?.length || 0})</TabsTrigger>
           <TabsTrigger value="pendiente">Pendientes ({tasksFiltradosBase?.filter((t: any) => t.status === "pendiente").length || 0})</TabsTrigger>
           <TabsTrigger value="en_progreso">En Progreso ({tasksFiltradosBase?.filter((t: any) => t.status === "en_progreso").length || 0})</TabsTrigger>
@@ -387,35 +393,70 @@ export default function Tareas() {
                   <Loader2 className="h-6 w-6 animate-spin text-primary" />
                 </div>
               ) : filteredTasks && filteredTasks.length > 0 ? (
-                <Table>
+                // Anchos de columna fijos (table-fixed): la tabla siempre ocupa
+                // el ancho de la pantalla y la columna "Tarea" se queda con el
+                // espacio que sobra, partiendo los nombres largos en varias
+                // líneas — antes cada celda iba en una sola línea y un título
+                // largo ensanchaba toda la tabla. En pantallas de menos de
+                // 1500px los botones Editar/Reabrir/Cancelar quedan solo con
+                // su ícono para dejarle más ancho al nombre. Solo en pantallas pequeñas la
+                // tabla se desplaza de lado, y ahí "Acciones" queda fija a la
+                // derecha (en pantallas grandes no hace falta fijarla).
+                <Table className="table-fixed min-w-[860px]">
                   <TableHeader>
                     <TableRow>
                       <TableHead>Tarea</TableHead>
-                      <TableHead>Cliente</TableHead>
-                      <TableHead>Responsable</TableHead>
-                      <TableHead>Fecha Límite</TableHead>
-                      <TableHead>Prioridad</TableHead>
-                      <TableHead>Estado</TableHead>
-                      <TableHead className="text-right sticky right-0 bg-background z-10 shadow-[-4px_0_4px_-4px_rgba(0,0,0,0.15)]">Acciones</TableHead>
+                      <TableHead className="w-[14%]">Cliente</TableHead>
+                      <TableHead className="w-[11%]">Responsable</TableHead>
+                      <TableHead className="w-[112px]">Fecha Límite</TableHead>
+                      <TableHead className="w-[88px]">Prioridad</TableHead>
+                      <TableHead className="w-[138px]">Estado</TableHead>
+                      <TableHead className={`${isAdmin ? "w-[136px] min-[1500px]:w-[256px]" : "w-[200px]"} text-right ${ACCIONES_FIJA}`}>Acciones</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {filteredTasks.map((task: any) => (
                       <TableRow key={task.id}>
-                        <TableCell>
-                          <div>
-                            <p className="font-medium">{task.title}</p>
-                            {task.description && (
-                              <p className="text-xs text-muted-foreground truncate max-w-[200px]">{task.description}</p>
-                            )}
-                          </div>
+                        <TableCell className="whitespace-normal">
+                          <p className="font-medium leading-snug break-words">{task.title}</p>
+                          {task.description && (
+                            <p className="mt-0.5 text-xs text-muted-foreground truncate" title={task.description}>{task.description}</p>
+                          )}
+                          {/* Aviso de tarea devuelta: va con la tarea (no entre los botones),
+                              donde hay espacio para leer la observación. */}
+                          {task.status !== "completada" && task.reviewStatus === "correccion" && (
+                            <Badge
+                              variant="outline"
+                              className="mt-1 max-w-full bg-orange-50 text-orange-700 border-orange-200 cursor-help"
+                              title={`Devuelta para corrección${task.reviewedByName ? ` por ${task.reviewedByName}` : ""}${task.reviewNotes ? `: ${task.reviewNotes}` : ""}`}
+                            >
+                              <RotateCcw className="w-3 h-3 mr-1 shrink-0" />
+                              <span className="truncate min-w-0">Corregir{task.reviewNotes ? `: ${task.reviewNotes}` : ""}</span>
+                            </Badge>
+                          )}
+                          {task.status !== "completada" && task.reviewStatus === "completar" && (
+                            <Badge
+                              variant="outline"
+                              className="mt-1 max-w-full bg-blue-50 text-blue-700 border-blue-200 cursor-help"
+                              title={`Falta una acción más${task.reviewedByName ? `, indicado por ${task.reviewedByName}` : ""}${task.reviewNotes ? `: ${task.reviewNotes}` : ""}`}
+                            >
+                              <ClipboardList className="w-3 h-3 mr-1 shrink-0" />
+                              <span className="truncate min-w-0">Completar{task.reviewNotes ? `: ${task.reviewNotes}` : ""}</span>
+                            </Badge>
+                          )}
                         </TableCell>
-                        <TableCell className="text-sm">{task.clientName || "-"}</TableCell>
-                        <TableCell className="text-sm">{task.assignedToName || "Sin asignar"}</TableCell>
+                        {/* Cliente y responsable: máximo 3 y 2 líneas (el nombre completo sale al pasar el mouse),
+                            para que el alto de la fila lo marque el nombre de la tarea. */}
+                        <TableCell className="text-sm whitespace-normal leading-snug">
+                          <span className="line-clamp-3 break-words" title={task.clientName || undefined}>{task.clientName || "-"}</span>
+                        </TableCell>
+                        <TableCell className="text-sm whitespace-normal leading-snug">
+                          <span className="line-clamp-2 break-words" title={task.assignedToName || undefined}>{task.assignedToName || "Sin asignar"}</span>
+                        </TableCell>
                         <TableCell className="text-sm">
                           {task.dueDate ? (
                             <span className="flex items-center gap-1">
-                              <Calendar className="h-3 w-3" />
+                              <Calendar className="h-3 w-3 shrink-0" />
                               {new Date(task.dueDate).toLocaleDateString("es-CO", { timeZone: "UTC" })}
                             </span>
                           ) : "-"}
@@ -432,7 +473,7 @@ export default function Tareas() {
                             </Badge>
                           ) : isAdmin ? (
                             <Select value={task.status} onValueChange={(v) => handleStatusChange(task.id, v)}>
-                              <SelectTrigger className="h-7 w-[140px]">
+                              <SelectTrigger className="h-7 w-full px-1.5">
                                 <Badge variant="outline" className={statusColors[task.status]}>
                                   {statusLabels[task.status]}
                                 </Badge>
@@ -450,33 +491,15 @@ export default function Tareas() {
                             </Badge>
                           )}
                         </TableCell>
-                        <TableCell className="text-right sticky right-0 bg-background z-10 shadow-[-4px_0_4px_-4px_rgba(0,0,0,0.15)]">
-                          <div className="flex gap-1 justify-end flex-wrap max-w-[280px] ml-auto">
+                        <TableCell className={`text-right ${ACCIONES_FIJA}`}>
+                          <div className="flex gap-1 justify-end items-center flex-wrap">
                             <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleViewDetail(task)} title="Ver detalle">
                               <Eye className="w-4 h-4" />
                             </Button>
                             {(isAdmin || task.createdById === user?.id) && task.status !== "completada" && task.status !== "cancelada" && (
-                              <Button variant="ghost" size="sm" onClick={() => handleEdit(task)}>Editar</Button>
-                            )}
-                            {task.status !== "completada" && task.reviewStatus === "correccion" && (
-                              <Badge
-                                variant="outline"
-                                className="bg-orange-50 text-orange-700 border-orange-200 max-w-[140px] cursor-help"
-                                title={`Devuelta para corrección${task.reviewedByName ? ` por ${task.reviewedByName}` : ""}${task.reviewNotes ? `: ${task.reviewNotes}` : ""}`}
-                              >
-                                <RotateCcw className="w-3 h-3 mr-1 shrink-0" />
-                                <span className="truncate min-w-0">Corregir{task.reviewNotes ? `: ${task.reviewNotes}` : ""}</span>
-                              </Badge>
-                            )}
-                            {task.status !== "completada" && task.reviewStatus === "completar" && (
-                              <Badge
-                                variant="outline"
-                                className="bg-blue-50 text-blue-700 border-blue-200 max-w-[140px] cursor-help"
-                                title={`Falta una acción más${task.reviewedByName ? `, indicado por ${task.reviewedByName}` : ""}${task.reviewNotes ? `: ${task.reviewNotes}` : ""}`}
-                              >
-                                <ClipboardList className="w-3 h-3 mr-1 shrink-0" />
-                                <span className="truncate min-w-0">Completar{task.reviewNotes ? `: ${task.reviewNotes}` : ""}</span>
-                              </Badge>
+                              <Button variant="ghost" size="sm" className="px-2" onClick={() => handleEdit(task)} title="Editar tarea" aria-label="Editar tarea">
+                                <Pencil className="w-3.5 h-3.5" />{isAdmin && <span className="hidden min-[1500px]:inline">Editar</span>}
+                              </Button>
                             )}
                             {!isAdmin && task.status !== "completada" && task.status !== "cancelada" && task.assignedToId === user?.id && (
                               <Button
@@ -489,13 +512,13 @@ export default function Tareas() {
                               </Button>
                             )}
                             {task.status === "completada" && isAdmin && (
-                              <Button variant="ghost" size="sm" className="text-orange-600" onClick={() => handleReopen(task.id)} title="Reabrir tarea">
-                                <RotateCcw className="w-3.5 h-3.5 mr-1" /> Reabrir
+                              <Button variant="ghost" size="sm" className="px-2 text-orange-600" onClick={() => handleReopen(task.id)} title="Reabrir tarea" aria-label="Reabrir tarea">
+                                <RotateCcw className="w-3.5 h-3.5" /><span className="hidden min-[1500px]:inline">Reabrir</span>
                               </Button>
                             )}
                             {isAdmin && task.status !== "completada" && task.status !== "cancelada" && (
-                              <Button variant="ghost" size="sm" className="text-red-600" onClick={() => handleCancelTask(task)} title="Cancelar tarea">
-                                <XCircle className="w-3.5 h-3.5 mr-1" /> Cancelar
+                              <Button variant="ghost" size="sm" className="px-2 text-red-600" onClick={() => handleCancelTask(task)} title="Cancelar tarea" aria-label="Cancelar tarea">
+                                <XCircle className="w-3.5 h-3.5" /><span className="hidden min-[1500px]:inline">Cancelar</span>
                               </Button>
                             )}
                           </div>
