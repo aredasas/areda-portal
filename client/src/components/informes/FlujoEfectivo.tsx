@@ -276,17 +276,20 @@ function SaldosCard({ clienteId, anio, informe, onCambio }: { clienteId: number;
     onError: (err) => toast.error(err.message || "No se pudieron guardar los saldos"),
   });
 
+  // Con balance de prueba cargado para el mes, los saldos salen de ahí y
+  // la tabla es solo de consulta.
+  const deBalance = informe.resumen[mes].saldosDeBalance;
   const filas = useMemo(() => {
     const delInforme = informe.efectivo
-      .filter(e => e.porMes[mes]?.requerida || e.porMes[mes]?.sugeridoInicial != null)
+      .filter(e => e.porMes[mes]?.requerida || (!deBalance && e.porMes[mes]?.sugeridoInicial != null))
       .map(e => ({ cuenta: e.cuenta, nombre: e.nombre, ...e.porMes[mes] }));
     const extra = agregadas.filter(c => !delInforme.some(f => f.cuenta === c)).map(cuenta => ({
       cuenta, nombre: informe.efectivo.find(e => e.cuenta === cuenta)?.nombre || "",
       debitos: 0, creditos: 0, variacion: 0, lineas: 0, saldoInicial: null, saldoFinal: null, sugeridoInicial: null,
-      finalCalculado: null, diferencia: null, requerida: false,
+      finalCalculado: null, diferencia: null, requerida: false, origen: null,
     }));
-    return [...delInforme, ...extra];
-  }, [informe, mes, agregadas]);
+    return deBalance ? delInforme : [...delInforme, ...extra];
+  }, [informe, mes, agregadas, deBalance]);
 
   const clave = (cuenta: string) => `${mes}|${cuenta}`;
   const texto = (f: (typeof filas)[number]) => digitado[clave(f.cuenta)] ?? { ini: enCaja(f.saldoInicial), fin: enCaja(f.saldoFinal) };
@@ -300,8 +303,9 @@ function SaldosCard({ clienteId, anio, informe, onCambio }: { clienteId: number;
 
   const calculadas = filas.map(f => {
     const t = texto(f);
-    const ini = parsearPesos(t.ini);
-    const fin = parsearPesos(t.fin);
+    // Con balance, valen los saldos del balance aunque antes se hubiera digitado algo.
+    const ini = deBalance ? f.saldoInicial : parsearPesos(t.ini);
+    const fin = deBalance ? f.saldoFinal : parsearPesos(t.fin);
     const finalCalculado = ini === null ? null : ini + f.variacion;
     return { ...f, t, ini, fin, finalCalculado, diferencia: finalCalculado === null || fin === null ? null : finalCalculado - fin };
   });
@@ -347,19 +351,28 @@ function SaldosCard({ clienteId, anio, informe, onCambio }: { clienteId: number;
       <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 space-y-0">
         <CardTitle className="text-base flex items-center gap-2"><Landmark className="w-4 h-4" /> Saldos de caja y bancos</CardTitle>
         <Select value={String(mes)} onValueChange={(v) => setMes(Number(v))}>
-          <SelectTrigger className="w-44 h-9" aria-label="Mes de los saldos"><SelectValue /></SelectTrigger>
+          <SelectTrigger className="w-56 h-9" aria-label="Mes de los saldos"><SelectValue /></SelectTrigger>
           <SelectContent>
             {informe.meses.map(m => (
-              <SelectItem key={m} value={String(m)}>{MESES[m]}{informe.resumen[m].saldosCompletos ? "" : " · sin saldos"}</SelectItem>
+              <SelectItem key={m} value={String(m)}>{MESES[m]}{informe.resumen[m].saldosDeBalance ? " · del balance" : informe.resumen[m].saldosCompletos ? "" : " · sin saldos"}</SelectItem>
             ))}
           </SelectContent>
         </Select>
       </CardHeader>
       <CardContent className="space-y-3">
-        <p className="text-sm text-muted-foreground">
-          Digita el saldo de cada cuenta al inicio y al final de {MESES[mes].toLowerCase()}, tal como está en el balance. Con el inicial, el portal calcula a cuánto debería cerrar cada cuenta y lo compara con el final que digites.
-        </p>
-        {conSugerido.length > 0 && (
+        {deBalance ? (
+          <p className="flex items-start gap-1.5 rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-900 leading-relaxed">
+            <CheckCircle2 className="w-4 h-4 mt-0.5 shrink-0" />
+            <span>
+              Los saldos de {MESES[mes].toLowerCase()} salen del <span className="font-medium">balance de prueba</span> cargado para ese mes, no hay que digitarlos. El portal calcula a cuánto debería cerrar cada cuenta con el movimiento del auxiliar y lo compara con el saldo final del balance.
+            </span>
+          </p>
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            Digita el saldo de cada cuenta al inicio y al final de {MESES[mes].toLowerCase()}, tal como está en el balance. Con el inicial, el portal calcula a cuánto debería cerrar cada cuenta y lo compara con el final que digites. Si subes el balance de prueba del mes en la pestaña Balance, se toman de ahí.
+          </p>
+        )}
+        {!deBalance && conSugerido.length > 0 && (
           <div className="flex flex-wrap items-center gap-2 rounded-md border border-dashed px-3 py-2">
             <span className="text-xs text-muted-foreground flex-1 min-w-48">
               {conSugerido.length === 1 ? "Hay 1 cuenta" : `Hay ${conSugerido.length} cuentas`} con saldo final guardado en {mesAnterior}: puede servir como saldo inicial.
@@ -378,7 +391,7 @@ function SaldosCard({ clienteId, anio, informe, onCambio }: { clienteId: number;
                 <th className="px-3 py-2 text-right font-medium" title="Débitos − créditos de la cuenta en el mes, según el auxiliar">Movimiento del mes</th>
                 <th className="px-3 py-2 text-right font-medium">Final calculado</th>
                 <th className="px-3 py-2 text-right font-medium w-40">Saldo final</th>
-                <th className="px-3 py-2 text-right font-medium" title="Final calculado − saldo final digitado">Diferencia</th>
+                <th className="px-3 py-2 text-right font-medium" title="Final calculado − saldo final">Diferencia</th>
               </tr>
             </thead>
             <tbody className="divide-y">
@@ -388,18 +401,22 @@ function SaldosCard({ clienteId, anio, informe, onCambio }: { clienteId: number;
                     <span className="font-mono text-xs">{f.cuenta}</span>
                     {f.nombre && <span className="ml-2 text-xs text-muted-foreground">{f.nombre}</span>}
                   </td>
-                  <td className="px-2 py-1">
-                    <Input value={f.t.ini} onChange={(e) => escribir(f, "ini", e.target.value)} onBlur={() => formatear(f, "ini")} inputMode="decimal"
-                      placeholder={f.sugeridoInicial != null ? enCaja(f.sugeridoInicial) : ""} aria-label={`Saldo inicial de la cuenta ${f.cuenta}`}
-                      className={`h-8 text-right tabular-nums text-sm ${f.t.ini.trim() && f.ini === null ? "border-red-400" : ""}`} />
-                  </td>
+                  {deBalance ? <td className={`${celdaNumero} pr-5`}>{f.ini === null ? "—" : pesos(f.ini)}</td> : (
+                    <td className="px-2 py-1">
+                      <Input value={f.t.ini} onChange={(e) => escribir(f, "ini", e.target.value)} onBlur={() => formatear(f, "ini")} inputMode="decimal"
+                        placeholder={f.sugeridoInicial != null ? enCaja(f.sugeridoInicial) : ""} aria-label={`Saldo inicial de la cuenta ${f.cuenta}`}
+                        className={`h-8 text-right tabular-nums text-sm ${f.t.ini.trim() && f.ini === null ? "border-red-400" : ""}`} />
+                    </td>
+                  )}
                   <td className={`${celdaNumero} ${f.variacion < 0 ? "text-red-700" : ""}`}>{pesos(f.variacion)}</td>
                   <td className={`${celdaNumero} text-muted-foreground`}>{f.finalCalculado === null ? "—" : pesos(f.finalCalculado)}</td>
-                  <td className="px-2 py-1">
-                    <Input value={f.t.fin} onChange={(e) => escribir(f, "fin", e.target.value)} onBlur={() => formatear(f, "fin")} inputMode="decimal"
-                      aria-label={`Saldo final de la cuenta ${f.cuenta}`}
-                      className={`h-8 text-right tabular-nums text-sm ${f.t.fin.trim() && f.fin === null ? "border-red-400" : ""}`} />
-                  </td>
+                  {deBalance ? <td className={`${celdaNumero} pr-5`}>{f.fin === null ? "—" : pesos(f.fin)}</td> : (
+                    <td className="px-2 py-1">
+                      <Input value={f.t.fin} onChange={(e) => escribir(f, "fin", e.target.value)} onBlur={() => formatear(f, "fin")} inputMode="decimal"
+                        aria-label={`Saldo final de la cuenta ${f.cuenta}`}
+                        className={`h-8 text-right tabular-nums text-sm ${f.t.fin.trim() && f.fin === null ? "border-red-400" : ""}`} />
+                    </td>
+                  )}
                   <td className={celdaNumero}><Diferencia valor={f.diferencia} /></td>
                 </tr>
               ))}
@@ -416,7 +433,7 @@ function SaldosCard({ clienteId, anio, informe, onCambio }: { clienteId: number;
             </tfoot>
           </table>
         </div>
-        <div className="flex flex-wrap items-center justify-between gap-3">
+        {!deBalance && <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-2">
             <Input value={nueva} onChange={(e) => setNueva(e.target.value)} placeholder="Código de cuenta" className="h-8 w-40 shrink-0 font-mono text-xs"
               aria-label="Agregar una cuenta de efectivo sin movimiento" onKeyDown={(e) => { if (e.key === "Enter") agregar(); }} />
@@ -429,7 +446,7 @@ function SaldosCard({ clienteId, anio, informe, onCambio }: { clienteId: number;
             {guardarMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
             Guardar saldos de {MESES[mes].toLowerCase()}
           </Button>
-        </div>
+        </div>}
       </CardContent>
     </Card>
   );

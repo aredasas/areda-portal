@@ -9,6 +9,7 @@ import { storageGetBuffer } from "./storage";
 import { leerFilasXlsxRobusto } from "./xlsxRobusto";
 import { calcularFlujoMes } from "./informesFlujoCalculo";
 import { NOMBRES_PUC } from "./informesFlujoPuc";
+import { saldosEfectivoDeBalance } from "./informesBalanceDb";
 import {
   PREFIJOS_EFECTIVO_DEFECTO, SECCIONES_FLUJO, TITULO_SECCION, normalizarPrefijos, seccionPorDefecto, type SeccionFlujo,
 } from "../shared/flujoEfectivo";
@@ -189,8 +190,11 @@ export type CuentaEfectivoMes = {
   /** El saldo final del mes anterior, para proponerlo como inicial. */
   sugeridoInicial: number | null;
   finalCalculado: number | null; diferencia: number | null;
-  /** Entra en la conciliación del mes: tuvo movimiento o tiene saldo digitado. */
+  /** Entra en la conciliación del mes: tuvo movimiento o tiene saldo. */
   requerida: boolean;
+  /** De dónde salen los saldos: del balance de prueba del mes, si está
+   * cargado; si no, de lo que digitó el contador. */
+  origen: "balance" | "digitado" | null;
 };
 
 export type ResumenMesFlujo = {
@@ -198,6 +202,8 @@ export type ResumenMesFlujo = {
   /** null mientras falte digitar algún saldo de las cuentas del mes. */
   saldoInicial: number | null; finalCalculado: number | null; saldoFinal: number | null; variacion: number | null;
   saldosCompletos: boolean; cuentasSinSaldo: number;
+  /** El mes tiene balance de prueba cargado: sus saldos salen de ahí y no se digitan. */
+  saldosDeBalance: boolean;
 };
 
 export type InformeFlujo = {
@@ -252,6 +258,7 @@ export async function armarInformeFlujo(clienteId: number, anio: number): Promis
   const vacio: ResumenMesFlujo = {
     recaudos: 0, egresos: 0, operativo: 0, inversion: 0, financiacion: 0, aumentoNeto: 0,
     saldoInicial: null, finalCalculado: null, saldoFinal: null, variacion: null, saldosCompletos: false, cuentasSinSaldo: 0,
+    saldosDeBalance: false,
   };
   const informe: InformeFlujo = {
     anio, prefijos, prefijosPorDefecto: porDefecto, estados: [], meses: [], secciones: [], sinEfecto: [], efectivo: [],
@@ -259,7 +266,7 @@ export async function armarInformeFlujo(clienteId: number, anio: number): Promis
   };
   if (!db) return informe;
 
-  const [cargas, calculos, movimientos, saldos, ajustes, catalogo, puc] = await Promise.all([
+  const [cargas, calculos, movimientos, saldos, ajustes, catalogo, puc, delBalance] = await Promise.all([
     listarCargas(clienteId, anio),
     db.select().from(informesFlujoCalculos).where(and(eq(informesFlujoCalculos.clienteId, clienteId), eq(informesFlujoCalculos.anio, anio))),
     db.select().from(informesFlujoMovimientos).where(and(eq(informesFlujoMovimientos.clienteId, clienteId), eq(informesFlujoMovimientos.anio, anio))),
@@ -271,6 +278,11 @@ export async function armarInformeFlujo(clienteId: number, anio: number): Promis
     db.select().from(informesFlujoSecciones).where(eq(informesFlujoSecciones.clienteId, clienteId)),
     getCatalogoCliente(clienteId),
     getCuentasPucConocidas(),
+    // Sin las tablas del balance (o si fallan), el flujo sigue con los saldos digitados.
+    saldosEfectivoDeBalance(clienteId, anio, prefijos).catch((error: any) => {
+      console.error("[Informes/Flujo] No se pudieron leer los saldos del balance:", String(error?.message || error).slice(0, 300));
+      return new Map<number, Map<string, { nombre: string; saldoInicial: number; saldoFinal: number }>>();
+    }),
   ]);
 
   const prefijosTexto = prefijos.join(",");
@@ -388,25 +400,49 @@ export async function armarInformeFlujo(clienteId: number, anio: number): Promis
   // ---- Cuentas de efectivo y saldos ----
   const saldoDe = new Map<string, (typeof saldos)[number]>();
   for (const s of saldos) saldoDe.set(`${s.anio}|${s.mes}|${s.cuenta}`, s);
-  const cuentasEfectivo = Array.from(new Set([...Array.from(efectivo.keys()), ...saldos.filter(s => s.anio === anio).map(s => s.cuenta)])).sort();
+  const nombreEnBalance = new Map<string, string>();
+  for (const cuentasDelMes of Array.from(delBalance.values())) {
+    for (const [cuenta, b] of Array.from(cuentasDelMes.entries())) if (b.nombre) nombreEnBalance.set(cuenta, b.nombre);
+  }
+  const cuentasEfectivo = Array.from(new Set([
+    ...Array.from(efectivo.keys()), ...saldos.filter(s => s.anio === anio).map(s => s.cuenta), ...Array.from(nombreEnBalance.keys()),
+  ])).sort();
   informe.efectivo = cuentasEfectivo.map(cuenta => {
     const porMes: Record<number, CuentaEfectivoMes> = {};
     for (const m of meses) {
       const mov = efectivo.get(cuenta)?.[m];
-      const saldo = saldoDe.get(`${anio}|${m}|${cuenta}`);
-      const anterior = m === 1 ? saldoDe.get(`${anio - 1}|12|${cuenta}`) : saldoDe.get(`${anio}|${m - 1}|${cuenta}`);
       const variacion = redondear((mov?.debitos || 0) - (mov?.creditos || 0));
-      const saldoInicial = saldo?.saldoInicial ?? null;
-      const saldoFinal = saldo?.saldoFinal ?? null;
+      const balanceDelMes = delBalance.get(m);
+      let saldoInicial: number | null, saldoFinal: number | null, sugeridoInicial: number | null = null;
+      let requerida: boolean, origen: CuentaEfectivoMes["origen"];
+      if (balanceDelMes) {
+        // Con balance de prueba cargado, los saldos salen de ahí. Una cuenta
+        // que se movió en el auxiliar pero no está en el balance vale cero:
+        // así la diferencia queda a la vista en vez de esconderse.
+        const b = balanceDelMes.get(cuenta);
+        requerida = !!mov || !!b;
+        saldoInicial = requerida ? b?.saldoInicial ?? 0 : null;
+        saldoFinal = requerida ? b?.saldoFinal ?? 0 : null;
+        origen = requerida ? "balance" : null;
+      } else {
+        const saldo = saldoDe.get(`${anio}|${m}|${cuenta}`);
+        const anterior = m === 1 ? saldoDe.get(`${anio - 1}|12|${cuenta}`) : saldoDe.get(`${anio}|${m - 1}|${cuenta}`);
+        saldoInicial = saldo?.saldoInicial ?? null;
+        saldoFinal = saldo?.saldoFinal ?? null;
+        // Si el mes anterior tiene balance, su saldo final es el inicial de este.
+        sugeridoInicial = anterior?.saldoFinal ?? delBalance.get(m - 1)?.get(cuenta)?.saldoFinal ?? null;
+        requerida = !!mov || !!saldo;
+        origen = saldo ? "digitado" : null;
+      }
       const finalCalculado = saldoInicial === null ? null : redondear(saldoInicial + variacion);
       porMes[m] = {
         debitos: redondear(mov?.debitos || 0), creditos: redondear(mov?.creditos || 0), variacion, lineas: mov?.lineas || 0,
-        saldoInicial, saldoFinal, sugeridoInicial: anterior?.saldoFinal ?? null,
+        saldoInicial, saldoFinal, sugeridoInicial,
         finalCalculado, diferencia: finalCalculado === null || saldoFinal === null ? null : redondear(finalCalculado - saldoFinal),
-        requerida: !!mov || !!saldo,
+        requerida, origen,
       };
     }
-    return { cuenta, nombre: catalogo.get(cuenta) || NOMBRES_PUC[cuenta.slice(0, 4)] || "", grupo: cuenta.slice(0, 4), porMes };
+    return { cuenta, nombre: catalogo.get(cuenta) || nombreEnBalance.get(cuenta) || NOMBRES_PUC[cuenta.slice(0, 4)] || "", grupo: cuenta.slice(0, 4), porMes };
   });
 
   // ---- Resumen por mes y acumulado ----
@@ -427,7 +463,7 @@ export async function armarInformeFlujo(clienteId: number, anio: number): Promis
     informe.resumen[m] = {
       recaudos, egresos, operativo, inversion, financiacion, aumentoNeto, saldoInicial, finalCalculado, saldoFinal,
       variacion: finalCalculado === null || saldoFinal === null ? null : redondear(finalCalculado - saldoFinal),
-      saldosCompletos, cuentasSinSaldo,
+      saldosCompletos, cuentasSinSaldo, saldosDeBalance: delBalance.has(m),
     };
   }
   if (meses.length > 0) {
@@ -446,6 +482,7 @@ export async function armarInformeFlujo(clienteId: number, anio: number): Promis
       financiacion: suma("financiacion"), aumentoNeto, saldoInicial, finalCalculado, saldoFinal,
       variacion: finalCalculado === null || saldoFinal === null ? null : redondear(finalCalculado - saldoFinal),
       saldosCompletos: todosCompletos && seguidos, cuentasSinSaldo: meses.reduce((s, m) => s + informe.resumen[m].cuentasSinSaldo, 0),
+      saldosDeBalance: meses.every(m => informe.resumen[m].saldosDeBalance),
     };
   }
 

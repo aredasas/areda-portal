@@ -1447,3 +1447,78 @@ export const informesFlujoSecciones = mysqlTable("informesFlujoSecciones", {
   clienteCuentaIdx: uniqueIndex("informesFlujoSecciones_cliente_cuenta_idx").on(table.clienteId, table.cuenta),
 }));
 export type InformeFlujoSeccion = typeof informesFlujoSecciones.$inferSelect;
+
+/**
+ * ============================================================
+ * BALANCE DE PRUEBA (módulo Informes) — el contador sube, mes a mes, el
+ * balance de prueba del cliente (por cuenta o por tercero). Con eso se
+ * arma el historial del Estado de Situación Financiera (hoja "ESF" del
+ * Estado de Resultados Mensual) y el Flujo de Efectivo toma de ahí los
+ * saldos de caja y bancos, sin tener que digitarlos.
+ * ============================================================
+ */
+
+/** Un registro por cliente + mes con balance cargado, y el resultado de
+ * las comprobaciones que se le hacen al subirlo. */
+export const informesBalanceCargas = mysqlTable("informesBalanceCargas", {
+  id: int("id").autoincrement().primaryKey(),
+  clienteId: int("clienteId").notNull(),
+  anio: int("anio").notNull(),
+  mes: int("mes").notNull(),
+  nombreArchivo: varchar("nombreArchivo", { length: 255 }).notNull(),
+  fileKey: varchar("fileKey", { length: 500 }),
+  /** Cuentas de detalle (las de último nivel, que son las que se suman). */
+  cuentasDetalle: int("cuentasDetalle").notNull(),
+  /** El archivo venía por tercero y se sumó por cuenta. */
+  porTercero: boolean("porTercero").default(false).notNull(),
+  /** Activo − Pasivo − Patrimonio − Resultado del ejercicio: cero si la
+   * contabilidad cuadra. */
+  diferenciaEcuacion: double("diferenciaEcuacion").notNull(),
+  /** Débitos − créditos del mes: cero si el movimiento tiene sumas iguales. */
+  diferenciaMovimiento: double("diferenciaMovimiento").notNull(),
+  /** Cuentas en las que saldo anterior ± movimiento no da el saldo final. */
+  cuentasInconsistentes: int("cuentasInconsistentes").default(0).notNull(),
+  cargadoPorId: int("cargadoPorId").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().onUpdateNow().notNull(),
+}, (table) => ({
+  periodoIdx: uniqueIndex("informesBalanceCargas_periodo_idx").on(table.clienteId, table.anio, table.mes),
+}));
+export type InformeBalanceCarga = typeof informesBalanceCargas.$inferSelect;
+
+/** Las cuentas del balance de un mes, en todos los niveles que traiga el
+ * archivo (clase, grupo, cuenta, subcuenta). Los saldos se guardan con el
+ * signo natural de cada clase: activo, gastos y costos positivos cuando
+ * son débito; pasivo, patrimonio e ingresos positivos cuando son crédito.
+ * `esDetalle` marca las de último nivel — las únicas que se suman. */
+export const informesBalanceSaldos = mysqlTable("informesBalanceSaldos", {
+  id: int("id").autoincrement().primaryKey(),
+  clienteId: int("clienteId").notNull(),
+  anio: int("anio").notNull(),
+  mes: int("mes").notNull(),
+  cuenta: varchar("cuenta", { length: 20 }).notNull(),
+  nombre: varchar("nombre", { length: 255 }).notNull(),
+  saldoInicial: double("saldoInicial").notNull(),
+  debitos: double("debitos").notNull(),
+  creditos: double("creditos").notNull(),
+  saldoFinal: double("saldoFinal").notNull(),
+  esDetalle: boolean("esDetalle").notNull(),
+}, (table) => ({
+  periodoCuentaIdx: uniqueIndex("informesBalanceSaldos_periodo_cuenta_idx").on(table.clienteId, table.anio, table.mes, table.cuenta),
+}));
+export type InformeBalanceSaldo = typeof informesBalanceSaldos.$inferSelect;
+
+/** Estado de conciliación (OK / PE / RE) y observación de una cuenta del
+ * balance, por cliente. No dependen del mes: se escriben una vez y salen
+ * en la hoja ESF hasta que el contador las cambie. */
+export const informesBalanceNotas = mysqlTable("informesBalanceNotas", {
+  id: int("id").autoincrement().primaryKey(),
+  clienteId: int("clienteId").notNull(),
+  cuenta: varchar("cuenta", { length: 20 }).notNull(),
+  estado: mysqlEnum("estado", ["OK", "PE", "RE"]),
+  observacion: text("observacion"),
+  actualizadoPorId: int("actualizadoPorId").notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (table) => ({
+  clienteCuentaIdx: uniqueIndex("informesBalanceNotas_cliente_cuenta_idx").on(table.clienteId, table.cuenta),
+}));
+export type InformeBalanceNota = typeof informesBalanceNotas.$inferSelect;

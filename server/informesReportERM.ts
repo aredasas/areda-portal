@@ -4,6 +4,9 @@ import {
   MESES_CORTO, FONT_BOLD, FONT_TITLE, MONEY, PCT,
   styleHeaderRow, styleSubtotalRow, a4Digitos, colLetter, finalizarLibro,
 } from "./informesReportUtils";
+import { armarESF } from "./informesBalanceDb";
+import { agregarHojaESF } from "./informesReportESF";
+import { getClientById } from "./db";
 
 type FilaCuenta = { tipo: TipoSaldo; codigo: string; valores: Record<number, number> };
 
@@ -147,6 +150,21 @@ export async function generarReporteERM(
     `${nombreNivel} · Todos los centros de costo combinados · Cuenta 4=Ingreso, 5=Gasto, 6=Costo`,
     saldos, nivel, cuentasConocidas, catalogoCliente,
   );
+
+  // Si el cliente tiene balance de prueba cargado en el año, el libro
+  // lleva además la hoja "ESF" con el historial del balance por mes.
+  // Un fallo aquí (por ejemplo, las tablas del balance todavía sin crear)
+  // no puede dejar al cliente sin su Estado de Resultados: se omite la hoja.
+  try {
+    const esf = await armarESF(clienteId, anio);
+    if (esf.meses.length > 0) {
+      const cliente = await getClientById(clienteId);
+      const nit = cliente?.nit ? `${cliente.nit}${cliente.digitoVerificacion ? `-${cliente.digitoVerificacion}` : ""}` : null;
+      agregarHojaESF(wb, esf, { razonSocial: cliente?.razonSocial || "", nit });
+    }
+  } catch (error: any) {
+    console.error("[Informes/ERM] No se pudo agregar la hoja ESF:", String(error?.message || error).slice(0, 300));
+  }
 
   finalizarLibro(wb);
   const buffer = await wb.xlsx.writeBuffer();

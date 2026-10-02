@@ -97,6 +97,7 @@ import * as informesDb from "./informesDb";
 import { generarReporteERI } from "./informesReportERI";
 import { generarReporteERM } from "./informesReportERM";
 import * as informesFlujo from "./informesFlujoDb";
+import * as informesBalance from "./informesBalanceDb";
 import { generarReporteFlujo } from "./informesReportFlujo";
 import * as informesDian from "./informesDianDb";
 import * as informesGestionCliente from "./informesGestionClienteDb";
@@ -2085,6 +2086,51 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
         .input(z.object({ fileKey: z.string() }))
         .query(async ({ input, ctx }) => {
           return { signedUrl: await storageGetSignedUrl(input.fileKey) };
+        }),
+    }),
+    // Balance de prueba mensual — el contador lo sube mes a mes (por cuenta
+    // o por tercero). Alimenta la hoja "ESF" del Estado de Resultados
+    // Mensual y los saldos de caja y bancos del Flujo de Efectivo.
+    balance: router({
+      // Historial del año: meses cargados con sus comprobaciones y el
+      // estado de situación financiera comparativo.
+      esf: protectedProcedure
+        .input(z.object({ clienteId: z.number(), anio: z.number() }))
+        .query(async ({ input, ctx }) => {
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
+          return informesBalance.armarESF(input.clienteId, input.anio);
+        }),
+      // `anio` y `mes` en null = tomar el mes de los títulos del archivo.
+      cargar: protectedProcedure
+        .input(z.object({
+          clienteId: z.number(), nombreArchivo: z.string().min(1).max(255), archivoBase64: z.string().min(1),
+          anio: z.number().min(2000).max(2100).nullable(), mes: z.number().min(1).max(12).nullable(),
+        }))
+        .mutation(async ({ input, ctx }) => {
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
+          return informesBalance.cargarBalance({
+            clienteId: input.clienteId, buffer: Buffer.from(input.archivoBase64, "base64"), nombreArchivo: input.nombreArchivo,
+            anio: input.anio, mes: input.mes, userId: ctx.user.id,
+          });
+        }),
+      eliminar: protectedProcedure
+        .input(z.object({ clienteId: z.number(), anio: z.number(), mes: z.number().min(1).max(12) }))
+        .mutation(async ({ input, ctx }) => {
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
+          await informesBalance.eliminarBalance(input.clienteId, input.anio, input.mes);
+          return { success: true };
+        }),
+      // Estado de conciliación (OK / PE / RE) y observación de una cuenta:
+      // se guardan por cliente y salen en la hoja ESF todos los meses.
+      guardarNota: protectedProcedure
+        .input(z.object({
+          clienteId: z.number(), cuenta: z.string().min(1).max(20),
+          estado: z.enum(["OK", "PE", "RE"]).nullable(), observacion: z.string().max(2000).nullable(),
+        }))
+        .mutation(async ({ input, ctx }) => {
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
+          await informesBalance.guardarNotaCuenta(input.clienteId, input.cuenta, { estado: input.estado, observacion: input.observacion }, ctx.user.id);
+          return { success: true };
         }),
     }),
     // Flujo de efectivo — se arma con el libro auxiliar ya cargado en

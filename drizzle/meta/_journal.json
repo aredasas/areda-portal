@@ -484,6 +484,13 @@
       "when": 1790982050270,
       "tag": "0068_abnormal_dreadnoughts",
       "breakpoints": true
+    },
+    {
+      "idx": 69,
+      "version": "5",
+      "when": 1790984731368,
+      "tag": "0069_shiny_orphan",
+      "breakpoints": true
     }
   ]
 }

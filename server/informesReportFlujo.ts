@@ -47,6 +47,7 @@ export function construirLibroFlujo(
   styleHeaderRow(wsEfe.addRow([
     "Mes", "Nombre del mes", "Cuenta", "Nombre", "Grupo", "Saldo inicial", "Débitos", "Créditos",
     "Variación del mes (débitos − créditos)", "Saldo final calculado", "Saldo final contabilidad", "Diferencia (calculado − contabilidad)",
+    "Origen de los saldos",
   ]));
   for (const m of meses) {
     for (const e of informe.efectivo) {
@@ -58,14 +59,15 @@ export function construirLibroFlujo(
       if (c.saldoInicial !== null) r.getCell(10).value = f(`F${i}+I${i}`, c.finalCalculado!);
       r.getCell(11).value = c.saldoFinal;
       if (c.diferencia !== null) r.getCell(12).value = f(`J${i}-K${i}`, c.diferencia);
+      r.getCell(13).value = c.origen === "balance" ? "Balance de prueba" : c.origen === "digitado" ? "Digitado" : "";
     }
   }
   const finEfe = Math.max(wsEfe.rowCount, 2);
   for (let c = 6; c <= 12; c++) wsEfe.getColumn(c).numFmt = MONEY;
-  [6, 16, 14, 34, 8, 16, 16, 16, 20, 18, 18, 20].forEach((w, i) => { wsEfe.getColumn(i + 1).width = w; });
+  [6, 16, 14, 34, 8, 16, 16, 16, 20, 18, 18, 20, 20].forEach((w, i) => { wsEfe.getColumn(i + 1).width = w; });
   wsEfe.views = [{ state: "frozen", ySplit: 1 }];
   wsEfe.addRow([]);
-  wsEfe.addRow(["Los saldos inicial y final los digita el contador por cada cuenta; una celda vacía es un saldo todavía sin digitar."]).font = NOTA as any;
+  wsEfe.addRow(["Los saldos inicial y final salen del balance de prueba del mes cuando está cargado; si no, los digita el contador por cada cuenta. Una celda vacía es un saldo todavía sin digitar."]).font = NOTA as any;
   const rangoEfe = (col: string) => `${ref(HOJA_EFECTIVO)}$${col}$2:$${col}$${finEfe}`;
 
   // =================== Agrupación (una fila por cuenta contrapartida) ===================
@@ -200,9 +202,9 @@ export function construirLibroFlujo(
       for (const r of [rIni, rCal, rCon, rVar]) { r.getCell(colAcum).value = "—"; r.getCell(colAcum).alignment = { horizontal: "right" }; }
     }
   }
-  rIni.getCell(colObs).value = "Saldo digitado por el contador, cuenta por cuenta (hoja «Cuentas de efectivo»)";
-  rCon.getCell(colObs).value = "Saldo digitado por el contador, cuenta por cuenta (hoja «Cuentas de efectivo»)";
-  rVar.getCell(colObs).value = "Menos de $1 son centavos del auxiliar; más que eso, los saldos digitados no coinciden con el auxiliar";
+  rIni.getCell(colObs).value = "Del balance de prueba del mes o, si no está cargado, digitado por el contador; cuenta por cuenta en la hoja «Cuentas de efectivo»";
+  rCon.getCell(colObs).value = "Del balance de prueba del mes o, si no está cargado, digitado por el contador; cuenta por cuenta en la hoja «Cuentas de efectivo»";
+  rVar.getCell(colObs).value = "Menos de $1 son centavos del auxiliar; más que eso, los saldos no coinciden con el movimiento del auxiliar";
   for (const r of [rIni, rCal, rCon]) r.font = FONT_BOLD as any;
   styleSubtotalRow(rVar);
   rEst.eachCell(c => { c.alignment = { horizontal: Number(c.col) === 1 ? "left" : "right" }; });
