@@ -59,6 +59,9 @@ export default function Oficina() {
   };
 
   const [agenteAbiertoId, setAgenteAbiertoId] = useState<number | null>(null);
+  // Al abrir el Agente de Correo desde el aviso de publicidad, su bandeja
+  // se abre directamente en esa vista.
+  const [correoEnPublicidad, setCorreoEnPublicidad] = useState(false);
 
   // "Revisar ahora" pone a trabajar a los dos agentes a la vez. Cada uno
   // reporta por su cuenta: si uno falla, el otro igual entrega su resultado.
@@ -204,7 +207,10 @@ export default function Oficina() {
                 {solicitudesPendientes.map((s: any) => (
                   <SolicitudRow
                     key={s.id} solicitud={s} agenteNombre={nombreAgente.get(s.agenteId)}
-                    onAbrirAgente={s.tipo === "correo" ? () => setAgenteAbiertoId(s.agenteId) : undefined}
+                    onAbrirAgente={s.tipo === "correo" || s.tipo === "correo_publicidad"
+                      ? () => { setCorreoEnPublicidad(s.tipo === "correo_publicidad"); setAgenteAbiertoId(s.agenteId); }
+                      : undefined}
+                    tituloAbrir={s.tipo === "correo_publicidad" ? "Abrir la publicidad en el Agente de Correo para autorizar qué se elimina" : undefined}
                   />
                 ))}
               </div>
@@ -223,7 +229,10 @@ export default function Oficina() {
       </div>
 
       {agenteAbierto && (
-        <AgenteDialog agente={agenteAbierto} onClose={() => setAgenteAbiertoId(null)} />
+        <AgenteDialog
+          agente={agenteAbierto} vistaCorreoInicial={correoEnPublicidad ? "publicidad" : "atencion"}
+          onClose={() => { setAgenteAbiertoId(null); setCorreoEnPublicidad(false); }}
+        />
       )}
     </DashboardLayout>
   );
@@ -305,11 +314,12 @@ function EscritorioProximamente({ left, label, personaje }: { left: string; labe
   );
 }
 
-function SolicitudRow({ solicitud, agenteNombre, onAbrirAgente }: {
+function SolicitudRow({ solicitud, agenteNombre, onAbrirAgente, tituloAbrir }: {
   solicitud: any; agenteNombre?: string;
   /** Si viene, la solicitud se puede abrir en el diálogo de su agente
    * (las de correo: para redactar el borrador o crear la tarea). */
   onAbrirAgente?: () => void;
+  tituloAbrir?: string;
 }) {
   const utils = trpc.useUtils();
   const resolverMutation = trpc.oficina.solicitudes.resolver.useMutation({
@@ -334,7 +344,7 @@ function SolicitudRow({ solicitud, agenteNombre, onAbrirAgente }: {
       </div>
       <div className="flex gap-1 shrink-0">
         {onAbrirAgente && (
-          <Button size="sm" variant="outline" className="h-7 px-2 text-xs" onClick={onAbrirAgente} title="Abrir en el Agente de Correo para redactar el borrador o crear la tarea">
+          <Button size="sm" variant="outline" className="h-7 px-2 text-xs" onClick={onAbrirAgente} title={tituloAbrir || "Abrir en el Agente de Correo para redactar el borrador o crear la tarea"}>
             <ArrowUpRight className="w-3.5 h-3.5 mr-1" /> Abrir
           </Button>
         )}
@@ -359,7 +369,7 @@ function SolicitudRow({ solicitud, agenteNombre, onAbrirAgente }: {
   );
 }
 
-function AgenteDialog({ agente, onClose }: { agente: any; onClose: () => void }) {
+function AgenteDialog({ agente, onClose, vistaCorreoInicial = "atencion" }: { agente: any; onClose: () => void; vistaCorreoInicial?: "atencion" | "publicidad" }) {
   const esCorreo = agente.tipo === "correo";
   // El Agente de Correo abre en su Bandeja (ahí están sus pendientes, cada
   // uno con borrador y tarea) en lugar de la lista genérica de solicitudes.
@@ -401,7 +411,7 @@ function AgenteDialog({ agente, onClose }: { agente: any; onClose: () => void })
           </TabsList>
           {esCorreo && (
             <TabsContent value="bandeja" className="mt-4 min-w-0">
-              <BandejaCorreoTab onIrABuzones={() => setPestana("buzones")} />
+              <BandejaCorreoTab onIrABuzones={() => setPestana("buzones")} vistaInicial={vistaCorreoInicial} />
             </TabsContent>
           )}
           {esEstadista && (

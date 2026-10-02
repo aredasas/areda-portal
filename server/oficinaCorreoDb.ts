@@ -1,7 +1,7 @@
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { getDb, createTask, assertClienteActivo, getTaskById } from "./db";
 import {
-  oficinaAgentes, oficinaBuzones, oficinaCorreos, oficinaSolicitudes, oficinaRevisiones,
+  oficinaAgentes, oficinaBuzones, oficinaCorreos, oficinaSolicitudes, oficinaRevisiones, oficinaCarpetasCliente,
   clients, OficinaBuzon,
 } from "../drizzle/schema";
 import { invokeLLM } from "./_core/llm";
@@ -67,7 +67,12 @@ export async function listarBuzones() {
     .where(and(eq(oficinaCorreos.estado, "pendiente"), inArray(oficinaCorreos.prioridad, ["urgente", "atencion"])))
     .groupBy(oficinaCorreos.buzonId);
   const porBuzon = new Map(conteos.map(c => [c.buzonId, Number(c.cantidad)]));
-  return buzones.map(b => ({ ...b, requierenAtencion: porBuzon.get(b.id) || 0 }));
+  // La firma de Gmail va al navegador solo como texto (para mostrar cuál
+  // se usará), no el HTML crudo.
+  return buzones.map(({ firmaGmail, ...b }) => ({
+    ...b, requierenAtencion: porBuzon.get(b.id) || 0,
+    firmaGmailTexto: firmaGmail ? firmaHtmlATexto(firmaGmail) : null,
+  }));
 }
 
 async function getBuzon(db: Db, id: number): Promise<OficinaBuzon> {
@@ -81,8 +86,16 @@ async function getBuzon(db: Db, id: number): Promise<OficinaBuzon> {
 async function probarYRegistrar(db: Db, buzon: { id: number; email: string }): Promise<{ ok: boolean; mensaje: string }> {
   try {
     const perfil = await gmail.probarBuzon(buzon.email);
-    await db.update(oficinaBuzones).set({ ultimaConexionAt: new Date(), ultimoError: null }).where(eq(oficinaBuzones.id, buzon.id));
-    return { ok: true, mensaje: `Conectado a ${perfil.correo}.` };
+    const firmaGmail = await gmail.obtenerFirmaGmail(buzon.email);
+    await db.update(oficinaBuzones).set({
+      ultimaConexionAt: new Date(), ultimoError: null, permisoCompleto: perfil.permisoCompleto, firmaGmail,
+    }).where(eq(oficinaBuzones.id, buzon.id));
+    return {
+      ok: true,
+      mensaje: perfil.permisoCompleto
+        ? `Conectado a ${perfil.correo}, con permiso para leer, redactar, mover y eliminar.`
+        : `Conectado a ${perfil.correo}, pero con el permiso anterior: puede leer y redactar; para mover y eliminar falta actualizar el permiso en Workspace.`,
+    };
   } catch (error: any) {
     const mensaje = error?.message || "No se pudo conectar con el buzón.";
     await db.update(oficinaBuzones).set({ ultimoError: mensaje }).where(eq(oficinaBuzones.id, buzon.id));
@@ -143,6 +156,7 @@ export async function eliminarBuzon(id: number): Promise<void> {
       ));
   }
   await db.delete(oficinaCorreos).where(eq(oficinaCorreos.buzonId, id));
+  await db.delete(oficinaCarpetasCliente).where(eq(oficinaCarpetasCliente.buzonId, id));
   await db.delete(oficinaBuzones).where(eq(oficinaBuzones.id, id));
   await recalcularEstadoPorSolicitudes(agente.id);
 }
@@ -268,6 +282,8 @@ async function clasificarLote(lote: CorreoParaClasificar[], dominiosDeLaFirma: s
 
 type ResultadoBuzon = {
   buzon: OficinaBuzon; nuevos: number; atencion: number; urgentes: number;
+  /** Correos de publicidad/boletines que llegaron en esta revisión. */
+  publicidad: number;
   porProcesar: number; sinClasificar: number; solicitudesCreadas: number; error: string | null;
 };
 
@@ -286,7 +302,7 @@ async function revisarBuzon(
   db: Db, agente: { id: number; especialidad: string | null }, buzon: OficinaBuzon,
   indice: IndiceClientes, nombresClientes: Map<number, string>, dominiosDeLaFirma: string[],
 ): Promise<ResultadoBuzon> {
-  const resultado: ResultadoBuzon = { buzon, nuevos: 0, atencion: 0, urgentes: 0, porProcesar: 0, sinClasificar: 0, solicitudesCreadas: 0, error: null };
+  const resultado: ResultadoBuzon = { buzon, nuevos: 0, atencion: 0, urgentes: 0, publicidad: 0, porProcesar: 0, sinClasificar: 0, solicitudesCreadas: 0, error: null };
   try {
     const ids = await gmail.listarIdsBandeja(buzon.email, diasARevisar(buzon.ultimaRevisionAt), 200);
     const yaVistos = new Set<string>();
@@ -357,6 +373,7 @@ async function revisarBuzon(
         throw error;
       }
       resultado.nuevos++;
+      if (c.categoria === "boletin") resultado.publicidad++;
       if (c.prioridad === "urgente" || c.prioridad === "atencion") {
         if (c.prioridad === "urgente") resultado.urgentes++; else resultado.atencion++;
         const quien = m.remitenteNombre || m.remitenteEmail || "remitente desconocido";
@@ -371,8 +388,15 @@ async function revisarBuzon(
     }
 
     const completa = resultado.porProcesar === 0 && resultado.sinClasificar === 0;
+    // De paso se actualiza qué permiso tiene el buzón y su firma de Gmail.
+    const [permisoCompleto, firmaGmail] = await Promise.all([
+      gmail.tienePermisoCompleto(buzon.email).catch(() => buzon.permisoCompleto),
+      gmail.obtenerFirmaGmail(buzon.email),
+    ]);
     await db.update(oficinaBuzones).set({
-      ultimaConexionAt: new Date(), ultimoError: null,
+      ultimaConexionAt: new Date(), ultimoError: null, permisoCompleto,
+      // Si la firma no se pudo leer esta vez, se conserva la que ya se tenía.
+      ...(firmaGmail != null ? { firmaGmail } : {}),
       // La fecha de revisión solo avanza cuando no quedó nada pendiente —
       // si no, la siguiente corrida debe volver a mirar la misma ventana.
       ...(completa ? { ultimaRevisionAt: new Date() } : {}),
@@ -387,7 +411,7 @@ async function revisarBuzon(
 const plural = (n: number, uno: string, varios: string) => `${n} ${n === 1 ? uno : varios}`;
 
 /** Resumen de la revisión — armado con los conteos reales, sin IA. */
-export function redactarResumenCorreo(resultados: { nombre: string; nuevos: number; atencion: number; urgentes: number; porProcesar: number; sinClasificar: number; error: string | null }[]): string {
+export function redactarResumenCorreo(resultados: { nombre: string; nuevos: number; atencion: number; urgentes: number; publicidad?: number; porProcesar: number; sinClasificar: number; error: string | null }[]): string {
   const ok = resultados.filter(r => !r.error);
   const conError = resultados.filter(r => r.error);
   const nuevos = ok.reduce((s, r) => s + r.nuevos, 0);
@@ -410,6 +434,8 @@ export function redactarResumenCorreo(resultados: { nombre: string; nuevos: numb
     }
     partes.push(frase);
   }
+  const publicidad = ok.reduce((s, r) => s + (r.publicidad || 0), 0);
+  if (publicidad > 0) partes.push(`${plural(publicidad, "es publicidad", "son publicidad")}: ${publicidad === 1 ? "queda" : "quedan"} en la lista de Publicidad esperando tu autorización para ${publicidad === 1 ? "eliminarlo" : "eliminarlos"}.`);
   if (porProcesar > 0) partes.push(`Quedaron ${plural(porProcesar, "correo", "correos")} por leer; vuelve a revisar para continuar.`);
   if (sinClasificar > 0) partes.push(`${plural(sinClasificar, "correo no se pudo", "correos no se pudieron")} clasificar por una falla de la IA; se reintenta en la próxima revisión.`);
   for (const r of conError) partes.push(`No pude leer el buzón ${r.nombre}: ${r.error}`);
@@ -444,7 +470,7 @@ export async function revisarAhoraCorreo(): Promise<{ resumen: string; solicitud
     const resultados = await Promise.all(buzones.map(b => revisarBuzon(db, agente, b, indice, nombresClientes, dominiosDeLaFirma)));
 
     const resumen = redactarResumenCorreo(resultados.map(r => ({ ...r, nombre: r.buzon.nombre })));
-    const solicitudesCreadas = resultados.reduce((s, r) => s + r.solicitudesCreadas, 0);
+    let solicitudesCreadas = resultados.reduce((s, r) => s + r.solicitudesCreadas, 0);
     const correosNuevos = resultados.reduce((s, r) => s + r.nuevos, 0);
     const buzonesConError = resultados.filter(r => r.error).length;
 
@@ -452,6 +478,11 @@ export async function revisarAhoraCorreo(): Promise<{ resumen: string; solicitud
       // Ningún buzón se pudo leer: es un fallo de la revisión, no un "sin novedades".
       throw new Error(mensajeTodosFallaron(resultados.map(r => ({ email: r.buzon.email, error: r.error! }))));
     }
+
+    // Publicidad nueva → el agente levanta la mano pidiendo autorización
+    // para eliminarla (una sola solicitud, con el total acumulado).
+    const llegoPublicidad = resultados.some(r => r.publicidad > 0);
+    if (await actualizarSolicitudPublicidad(db, agente.id, { crearSiNoHay: llegoPublicidad })) solicitudesCreadas++;
 
     await db.insert(oficinaRevisiones).values({ agenteId: agente.id, finalizadaAt: new Date(), estado: "ok", resumen, solicitudesCreadas });
     await db.update(oficinaAgentes).set({ estado: "libre", ultimaRevisionAt: new Date(), ultimoErrorMensaje: null }).where(eq(oficinaAgentes.id, agente.id));
@@ -469,12 +500,18 @@ export async function revisarAhoraCorreo(): Promise<{ resumen: string; solicitud
 // Bandeja
 // ---------------------------------------------------------------------
 
-export async function listarCorreos(filtros: { vista: "atencion" | "todos"; buzonId?: number; limite?: number }) {
+/** Condición de "publicidad pendiente de autorización": clasificada como
+ * boletín, sin decidir todavía (ni conservada ni enviada a la Papelera). */
+const esPublicidadPendiente = () => and(eq(oficinaCorreos.categoria, "boletin"), eq(oficinaCorreos.estado, "pendiente"), isNull(oficinaCorreos.enPapeleraAt));
+
+export async function listarCorreos(filtros: { vista: "atencion" | "publicidad" | "todos"; buzonId?: number; limite?: number }) {
   const db = await getDb();
   if (!db) return [];
   const condiciones = [];
   if (filtros.vista === "atencion") {
     condiciones.push(eq(oficinaCorreos.estado, "pendiente"), inArray(oficinaCorreos.prioridad, ["urgente", "atencion"]));
+  } else if (filtros.vista === "publicidad") {
+    condiciones.push(esPublicidadPendiente()!);
   }
   if (filtros.buzonId) condiciones.push(eq(oficinaCorreos.buzonId, filtros.buzonId));
   const consulta = db.select({
@@ -485,6 +522,7 @@ export async function listarCorreos(filtros: { vista: "atencion" | "todos"; buzo
     resumen: oficinaCorreos.resumen, accionSugerida: oficinaCorreos.accionSugerida,
     clientId: oficinaCorreos.clientId, estado: oficinaCorreos.estado,
     borradorTexto: oficinaCorreos.borradorTexto, borradorAt: oficinaCorreos.borradorAt, taskId: oficinaCorreos.taskId,
+    carpeta: oficinaCorreos.carpeta, enPapeleraAt: oficinaCorreos.enPapeleraAt,
     buzonEmail: oficinaBuzones.email, buzonNombre: oficinaBuzones.nombre,
     clienteNombre: clients.razonSocial,
   }).from(oficinaCorreos)
@@ -498,6 +536,14 @@ export async function listarCorreos(filtros: { vista: "atencion" | "todos"; buzo
   return (condiciones.length > 0 ? consulta.where(and(...condiciones)) : consulta)
     .orderBy(...orden)
     .limit(Math.min(Math.max(filtros.limite ?? 100, 1), 300));
+}
+
+/** Cuántos correos de publicidad esperan autorización (para la pestaña). */
+export async function contarPublicidadPendiente(): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const [fila] = await db.select({ n: sql<number>`count(*)` }).from(oficinaCorreos).where(esPublicidadPendiente());
+  return Number(fila?.n || 0);
 }
 
 async function getCorreoConBuzon(db: Db, id: number) {
@@ -517,8 +563,7 @@ export async function marcarCorreo(id: number, estado: "pendiente" | "gestionado
   const { correo } = await getCorreoConBuzon(db, id);
   await db.update(oficinaCorreos).set({ estado }).where(eq(oficinaCorreos.id, id));
   if (estado !== "pendiente") {
-    await db.update(oficinaSolicitudes).set({ estado: estado === "gestionado" ? "atendida" : "descartada", resueltaAt: new Date() })
-      .where(and(eq(oficinaSolicitudes.tipo, TIPO_SOLICITUD_CORREO), eq(oficinaSolicitudes.refId, id), eq(oficinaSolicitudes.estado, "pendiente")));
+    await cerrarSolicitudDeCorreo(db, id, estado === "gestionado" ? "atendida" : "descartada");
   } else if (correo.prioridad === "urgente" || correo.prioridad === "atencion") {
     // Reabrir un correo que requería atención vuelve a levantar la mano.
     await crearSolicitudSiNueva(
@@ -532,8 +577,276 @@ export async function marcarCorreo(id: number, estado: "pendiente" | "gestionado
 }
 
 // ---------------------------------------------------------------------
+// Carpetas de clientes (mover lo ya gestionado)
+// ---------------------------------------------------------------------
+
+/** Palabras que no distinguen a un cliente de otro. */
+const PALABRAS_VACIAS = new Set([
+  "DE", "DEL", "LA", "LAS", "EL", "LOS", "Y", "E", "EN", "SAS", "SA", "LTDA", "LIMITADA", "CIA", "S", "A",
+  "SOCIEDAD", "POR", "ACCIONES", "SIMPLIFICADA", "CLIENTE", "CLIENTES", "EMPRESA", "GRUPO",
+]);
+
+/** Palabras significativas de un nombre, sin tildes ni signos:
+ * "Droguerías Colfamil S.A.S." → ["DROGUERIAS", "COLFAMIL"]. */
+export function palabrasClave(nombre: string): string[] {
+  return Array.from(new Set(
+    nombre.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase()
+      .replace(/[^A-Z0-9]+/g, " ").trim().split(" ")
+      .filter(p => p.length >= 2 && !PALABRAS_VACIAS.has(p)),
+  ));
+}
+
+/** Busca la carpeta de un cliente entre las carpetas del buzón.
+ *   - `segura`: una sola carpeta cuyo nombre es EL MISMO del cliente
+ *     (ignorando tildes, mayúsculas y "S.A.S."). Se usa sin preguntar.
+ *   - `sugerida`: la mejor candidata cuando solo coincide en parte
+ *     ("Colfamil" para "Droguerías Colfamil S.A.S."). Se propone, pero la
+ *     primera vez Arlex la confirma — mover a la carpeta equivocada
+ *     esconde el correo.
+ * Las carpetas anidadas ("Clientes/Colfamil") se comparan por su último tramo. */
+export function buscarCarpetaDeCliente(carpetas: gmail.CarpetaGmail[], razonSocial: string): { segura: gmail.CarpetaGmail | null; sugerida: gmail.CarpetaGmail | null } {
+  const delCliente = new Set(palabrasClave(razonSocial));
+  if (delCliente.size === 0) return { segura: null, sugerida: null };
+  const exactas: gmail.CarpetaGmail[] = [];
+  const parciales: { carpeta: gmail.CarpetaGmail; comunes: number }[] = [];
+  for (const carpeta of carpetas) {
+    const deLaCarpeta = palabrasClave(carpeta.nombre.split("/").pop() || "");
+    if (deLaCarpeta.length === 0) continue;
+    const comunes = deLaCarpeta.filter(p => delCliente.has(p)).length;
+    if (comunes === 0) continue;
+    if (comunes === deLaCarpeta.length && comunes === delCliente.size) exactas.push(carpeta);
+    // Parcial: una contiene a la otra por completo.
+    else if (comunes === deLaCarpeta.length || comunes === delCliente.size) parciales.push({ carpeta, comunes });
+  }
+  if (exactas.length === 1) return { segura: exactas[0], sugerida: exactas[0] };
+  if (exactas.length > 1) return { segura: null, sugerida: exactas[0] };
+  parciales.sort((a, b) => b.comunes - a.comunes || a.carpeta.nombre.localeCompare(b.carpeta.nombre, "es"));
+  return { segura: null, sugerida: parciales[0]?.carpeta || null };
+}
+
+export async function listarCarpetasBuzon(buzonId: number): Promise<gmail.CarpetaGmail[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return gmail.listarCarpetas((await getBuzon(db, buzonId)).email);
+}
+
+/** Cierra (atendida/descartada) la solicitud pendiente de un correo. */
+async function cerrarSolicitudDeCorreo(db: Db, correoId: number, como: "atendida" | "descartada"): Promise<void> {
+  await db.update(oficinaSolicitudes).set({ estado: como, resueltaAt: new Date() })
+    .where(and(eq(oficinaSolicitudes.tipo, TIPO_SOLICITUD_CORREO), eq(oficinaSolicitudes.refId, correoId), eq(oficinaSolicitudes.estado, "pendiente")));
+}
+
+export type ResultadoMover =
+  | { movido: true; carpeta: string }
+  /** No se movió. `elegir_carpeta`: hay que decirle cuál (viene la
+   * sugerencia, si la hay); `sin_cliente`: el remitente no es un cliente
+   * reconocido; `sin_permiso`: falta actualizar el permiso en Workspace. */
+  | { movido: false; motivo: "elegir_carpeta" | "sin_cliente" | "sin_permiso"; mensaje: string; sugerida?: gmail.CarpetaGmail | null };
+
+async function moverYRegistrar(db: Db, correo: { id: number; threadId: string; clientId: number | null; buzonId: number }, buzonEmail: string, carpeta: gmail.CarpetaGmail, recordar: boolean): Promise<void> {
+  await gmail.moverHiloACarpeta(buzonEmail, correo.threadId, carpeta.id);
+  await db.update(oficinaCorreos).set({ carpeta: carpeta.nombre, estado: "gestionado" }).where(eq(oficinaCorreos.id, correo.id));
+  if (recordar && correo.clientId != null) {
+    await db.insert(oficinaCarpetasCliente)
+      .values({ buzonId: correo.buzonId, clientId: correo.clientId, carpetaId: carpeta.id, carpetaNombre: carpeta.nombre })
+      .onDuplicateKeyUpdate({ set: { carpetaId: carpeta.id, carpetaNombre: carpeta.nombre } });
+  }
+}
+
+/** Intenta mover un correo ya gestionado a la carpeta de su cliente, sin
+ * preguntar: usa la carpeta que ya se le confirmó antes para ese cliente,
+ * o una cuyo nombre coincide exactamente. Nunca lanza por algo esperable
+ * (sin carpeta, sin permiso): devuelve el motivo. */
+async function moverACarpetaDelCliente(db: Db, correoId: number): Promise<ResultadoMover> {
+  const { correo, buzon } = await getCorreoConBuzon(db, correoId);
+  if (correo.clientId == null) return { movido: false, motivo: "sin_cliente", mensaje: "El remitente no es un cliente reconocido, así que el correo se queda en Recibidos. Puedes elegirle una carpeta." };
+  try {
+    const [conocida] = await db.select().from(oficinaCarpetasCliente)
+      .where(and(eq(oficinaCarpetasCliente.buzonId, buzon.id), eq(oficinaCarpetasCliente.clientId, correo.clientId))).limit(1);
+    if (conocida) {
+      try {
+        await moverYRegistrar(db, correo, buzon.email, { id: conocida.carpetaId, nombre: conocida.carpetaNombre }, false);
+        return { movido: true, carpeta: conocida.carpetaNombre };
+      } catch (error: any) {
+        if (!(error instanceof gmail.ErrorGmailDirecto) || error.motivo !== "carpeta_inexistente") throw error;
+        // La carpeta que se había aprendido ya no existe: se olvida y se vuelve a buscar.
+        await db.delete(oficinaCarpetasCliente).where(eq(oficinaCarpetasCliente.id, conocida.id));
+      }
+    }
+    if (!buzon.permisoCompleto && !(await gmail.tienePermisoCompleto(buzon.email))) {
+      return { movido: false, motivo: "sin_permiso", mensaje: gmail.MENSAJE_PERMISO_INSUFICIENTE };
+    }
+    const [cliente] = await db.select({ razonSocial: clients.razonSocial }).from(clients).where(eq(clients.id, correo.clientId)).limit(1);
+    const carpetas = await gmail.listarCarpetas(buzon.email);
+    const { segura, sugerida } = buscarCarpetaDeCliente(carpetas, cliente?.razonSocial || "");
+    if (segura) {
+      await moverYRegistrar(db, correo, buzon.email, segura, true);
+      return { movido: true, carpeta: segura.nombre };
+    }
+    return {
+      movido: false, motivo: "elegir_carpeta", sugerida,
+      mensaje: sugerida
+        ? `No hay una carpeta con el nombre exacto de «${cliente?.razonSocial}». ¿Es «${sugerida.nombre}»? Confírmala una vez y la recordaré.`
+        : `No encontré en el buzón de ${buzon.nombre} una carpeta para «${cliente?.razonSocial}». Elige cuál es y la recordaré.`,
+    };
+  } catch (error: any) {
+    if (error instanceof gmail.ErrorGmailDirecto && error.motivo === "permiso_insuficiente") {
+      return { movido: false, motivo: "sin_permiso", mensaje: error.message };
+    }
+    throw error;
+  }
+}
+
+/** "Gestionado": marca el correo, cierra su solicitud y, si es de un
+ * cliente, lo traslada a la carpeta de ese cliente en Gmail. Que no se
+ * pueda mover (sin carpeta, sin permiso) NO impide marcarlo gestionado. */
+export async function gestionarCorreo(id: number): Promise<{ traslado: ResultadoMover }> {
+  const db = await getDb();
+  if (!db) throw new Error("Base de datos no disponible");
+  const agente = await getAgenteCorreo(db);
+  await db.update(oficinaCorreos).set({ estado: "gestionado" }).where(eq(oficinaCorreos.id, id));
+  await cerrarSolicitudDeCorreo(db, id, "atendida");
+  await recalcularEstadoPorSolicitudes(agente.id);
+  let traslado: ResultadoMover;
+  try {
+    traslado = await moverACarpetaDelCliente(db, id);
+  } catch (error: any) {
+    // Un fallo de Gmail al mover no deshace el "gestionado".
+    traslado = { movido: false, motivo: "elegir_carpeta", mensaje: `Quedó gestionado, pero no se pudo mover: ${error?.message || "error de Gmail"}` };
+  }
+  return { traslado };
+}
+
+/** Mueve un correo a la carpeta que Arlex eligió. Si el correo es de un
+ * cliente, esa carpeta queda como la de ese cliente en este buzón. */
+export async function moverCorreoACarpeta(id: number, carpetaId: string): Promise<{ carpeta: string }> {
+  const db = await getDb();
+  if (!db) throw new Error("Base de datos no disponible");
+  const agente = await getAgenteCorreo(db);
+  const { correo, buzon } = await getCorreoConBuzon(db, id);
+  if (correo.enPapeleraAt) throw new Error("Ese correo ya está en la Papelera.");
+  // El id de la carpeta viene del navegador: se valida contra las carpetas reales del buzón.
+  const carpeta = (await gmail.listarCarpetas(buzon.email)).find(c => c.id === carpetaId);
+  if (!carpeta) throw new Error("Esa carpeta ya no existe en el buzón. Vuelve a abrir la lista de carpetas.");
+  await moverYRegistrar(db, correo, buzon.email, carpeta, true);
+  await cerrarSolicitudDeCorreo(db, id, "atendida");
+  await recalcularEstadoPorSolicitudes(agente.id);
+  return { carpeta: carpeta.nombre };
+}
+
+// ---------------------------------------------------------------------
+// Publicidad: eliminar con autorización
+// ---------------------------------------------------------------------
+
+const TIPO_SOLICITUD_PUBLICIDAD = "correo_publicidad";
+
+/** Mantiene al día la solicitud "hay publicidad para eliminar": la crea
+ * (si se pide y hay), le actualiza el número, o la cierra cuando ya no
+ * queda nada por autorizar. Devuelve true si creó una nueva. */
+async function actualizarSolicitudPublicidad(db: Db, agenteId: number, opciones: { crearSiNoHay: boolean }): Promise<boolean> {
+  const [conteo] = await db.select({ n: sql<number>`count(*)` }).from(oficinaCorreos).where(esPublicidadPendiente());
+  const cantidad = Number(conteo?.n || 0);
+  const [pendiente] = await db.select().from(oficinaSolicitudes)
+    .where(and(eq(oficinaSolicitudes.agenteId, agenteId), eq(oficinaSolicitudes.tipo, TIPO_SOLICITUD_PUBLICIDAD), eq(oficinaSolicitudes.estado, "pendiente"))).limit(1);
+  const titulo = `${plural(cantidad, "correo de publicidad", "correos de publicidad")} para eliminar`;
+  const detalle = "Revísalos y autoriza cuáles van a la Papelera en el Agente de Correo → Bandeja → Publicidad.";
+  if (cantidad === 0) {
+    if (pendiente) await db.update(oficinaSolicitudes).set({ estado: "atendida", resueltaAt: new Date() }).where(eq(oficinaSolicitudes.id, pendiente.id));
+    return false;
+  }
+  if (pendiente) {
+    if (pendiente.titulo !== titulo) await db.update(oficinaSolicitudes).set({ titulo }).where(eq(oficinaSolicitudes.id, pendiente.id));
+    return false;
+  }
+  if (!opciones.crearSiNoHay) return false;
+  await db.insert(oficinaSolicitudes).values({ agenteId, tipo: TIPO_SOLICITUD_PUBLICIDAD, refId: null, titulo, detalle, severidad: "info" });
+  return true;
+}
+
+/** Envía a la Papelera de Gmail los correos de publicidad que Arlex
+ * autorizó. Solo acepta correos clasificados como publicidad y aún sin
+ * decidir — por esta vía nunca se puede eliminar el correo de un cliente.
+ * La Papelera de Gmail los conserva 30 días. */
+export async function eliminarPublicidad(ids: number[]): Promise<{ eliminados: number; fallidos: number; error: string | null }> {
+  const db = await getDb();
+  if (!db) throw new Error("Base de datos no disponible");
+  if (ids.length === 0) return { eliminados: 0, fallidos: 0, error: null };
+  const agente = await getAgenteCorreo(db);
+  const filas = await db.select({ id: oficinaCorreos.id, gmailId: oficinaCorreos.gmailId, buzonEmail: oficinaBuzones.email })
+    .from(oficinaCorreos).innerJoin(oficinaBuzones, eq(oficinaCorreos.buzonId, oficinaBuzones.id))
+    .where(and(inArray(oficinaCorreos.id, ids), esPublicidadPendiente()));
+  let eliminados = 0, fallidos = 0;
+  let error: string | null = null;
+  const porBuzon = new Map<string, typeof filas>();
+  for (const fila of filas) porBuzon.set(fila.buzonEmail, [...(porBuzon.get(fila.buzonEmail) || []), fila]);
+  for (const [buzonEmail, delBuzon] of Array.from(porBuzon)) {
+    // Si el buzón no tiene el permiso nuevo, ninguno de los suyos se puede
+    // eliminar: se dice una vez, sin intentar uno por uno.
+    try {
+      if (!(await gmail.tienePermisoCompleto(buzonEmail))) throw new Error(gmail.MENSAJE_PERMISO_INSUFICIENTE);
+    } catch (e: any) {
+      fallidos += delBuzon.length;
+      // Se nombra el buzón: con varios conectados, hay que saber cuál falló.
+      error = `${buzonEmail}: ${e?.message || "no se pudo conectar con el buzón."}`;
+      continue;
+    }
+    await gmail.enParalelo(delBuzon, 5, async (fila) => {
+      try {
+        await gmail.enviarAPapelera(fila.buzonEmail, fila.gmailId);
+        await db.update(oficinaCorreos).set({ enPapeleraAt: new Date(), estado: "descartado" }).where(eq(oficinaCorreos.id, fila.id));
+        eliminados++;
+      } catch (e: any) {
+        fallidos++;
+        error = e?.message || "No se pudo enviar a la Papelera.";
+      }
+    });
+  }
+  await actualizarSolicitudPublicidad(db, agente.id, { crearSiNoHay: false });
+  await recalcularEstadoPorSolicitudes(agente.id);
+  return { eliminados, fallidos, error: fallidos > 0 ? error : null };
+}
+
+/** "Conservar": no es publicidad para eliminar. Sale de la lista y se
+ * queda en Gmail tal como está. */
+export async function conservarPublicidad(ids: number[]): Promise<{ conservados: number }> {
+  const db = await getDb();
+  if (!db) throw new Error("Base de datos no disponible");
+  if (ids.length === 0) return { conservados: 0 };
+  const agente = await getAgenteCorreo(db);
+  const filas = await db.select({ id: oficinaCorreos.id }).from(oficinaCorreos).where(and(inArray(oficinaCorreos.id, ids), esPublicidadPendiente()));
+  if (filas.length > 0) await db.update(oficinaCorreos).set({ estado: "gestionado" }).where(inArray(oficinaCorreos.id, filas.map(f => f.id)));
+  await actualizarSolicitudPublicidad(db, agente.id, { crearSiNoHay: false });
+  await recalcularEstadoPorSolicitudes(agente.id);
+  return { conservados: filas.length };
+}
+
+// ---------------------------------------------------------------------
 // Borrador de respuesta
 // ---------------------------------------------------------------------
+
+export type FirmaResuelta = { texto: string; html: string | null; origen: "portal" | "gmail" | "nombre" };
+
+/** Firma de texto plano a partir de la firma HTML de Gmail. */
+export function firmaHtmlATexto(html: string): string {
+  return gmail.htmlATexto(html).split("\n").map(linea => linea.replace(/\s+/g, " ").trim()).filter(Boolean).join("\n");
+}
+
+/** Qué firma lleva el borrador de un buzón, en orden de prioridad:
+ *   1. la escrita a mano en el portal (pestaña Buzones → Firma),
+ *   2. la firma predeterminada que el buzón tiene configurada en Gmail
+ *      (se lee en vivo; si no se puede, la última que se alcanzó a leer),
+ *   3. el nombre del buzón. */
+async function resolverFirma(db: Db, buzon: OficinaBuzon): Promise<FirmaResuelta> {
+  if (buzon.firma?.trim()) return { texto: buzon.firma.trim(), html: null, origen: "portal" };
+  const enVivo = await gmail.obtenerFirmaGmail(buzon.email);
+  if (enVivo && enVivo !== buzon.firmaGmail) {
+    await db.update(oficinaBuzones).set({ firmaGmail: enVivo }).where(eq(oficinaBuzones.id, buzon.id));
+  }
+  const html = enVivo || buzon.firmaGmail;
+  const texto = html ? firmaHtmlATexto(html) : "";
+  if (html && texto) return { texto, html, origen: "gmail" };
+  return { texto: buzon.nombre, html: null, origen: "nombre" };
+}
 
 const PARECE_AUTOMATICO = /(^|[._-])(no-?reply|noreply|no-?responder|notificaciones?|notifications?|mailer-daemon|donotreply)([._-]|@)/i;
 
@@ -542,6 +855,8 @@ const PARECE_AUTOMATICO = /(^|[._-])(no-?reply|noreply|no-?responder|notificacio
  * del buzón la revisa y la envía desde Gmail. */
 export async function redactarBorrador(correoId: number, instrucciones?: string): Promise<{
   texto: string; buzonEmail: string; buzonNombre: string; paraEmail: string; advertencia: string | null;
+  /** De dónde salió la firma del borrador. */
+  firma: FirmaResuelta["origen"];
 }> {
   const db = await getDb();
   if (!db) throw new Error("Base de datos no disponible");
@@ -586,19 +901,23 @@ export async function redactarBorrador(correoId: number, instrucciones?: string)
   });
   const cuerpoIa = (respuesta.choices[0]?.message?.content || "").trim();
   if (!cuerpoIa) throw new Error("La IA no devolvió ningún texto para el borrador. Intenta de nuevo.");
-  const texto = `${cuerpoIa}\n\n${buzon.firma?.trim() || buzon.nombre}`;
+  const firma = await resolverFirma(db, buzon);
+  const texto = `${cuerpoIa}\n\n${firma.texto}`;
 
   const { borradorId } = await gmail.guardarBorradorRespuesta(buzon.email, {
     threadId: correo.threadId, deNombre: buzon.nombre,
     paraEmail, paraNombre: paraEmail === objetivo.remitenteEmail ? objetivo.remitenteNombre : null,
     asunto: gmail.asuntoDeRespuesta(objetivo.asunto || correo.asunto), cuerpo: texto,
+    // Con la firma de Gmail el borrador va también en HTML, para que la
+    // firma conserve su diseño (logo, colores, enlaces).
+    cuerpoHtml: firma.html ? gmail.componerCuerpoHtml(cuerpoIa, firma.html) : null,
     inReplyTo: objetivo.messageIdHeader, references: objetivo.references,
     borradorIdExistente: correo.borradorId,
   });
   await db.update(oficinaCorreos).set({ borradorId, borradorTexto: texto, borradorAt: new Date() }).where(eq(oficinaCorreos.id, correoId));
 
   return {
-    texto, buzonEmail: buzon.email, buzonNombre: buzon.nombre, paraEmail,
+    texto, buzonEmail: buzon.email, buzonNombre: buzon.nombre, paraEmail, firma: firma.origen,
     advertencia: PARECE_AUTOMATICO.test(paraEmail)
       ? `El destinatario (${paraEmail}) parece una dirección automática que no recibe respuestas — revísalo antes de enviar.`
       : null,

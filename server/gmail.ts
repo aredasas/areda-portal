@@ -15,14 +15,26 @@ import { getServiceAccountCredentials } from "./googleDrive";
  *      todo el dominio: autorizar el ID de cliente de la cuenta de
  *      servicio con EXACTAMENTE los permisos de GMAIL_SCOPES.
  *
- * Permisos: leer correo + gestionar borradores. Google no ofrece un
- * permiso de "solo borradores" — gmail.compose también permitiría enviar,
- * pero este módulo NO tiene ninguna función que envíe: solo deja el
- * borrador en el buzón para que una persona lo revise y lo envíe. */
-export const GMAIL_SCOPES = [
+ * Permiso: gmail.modify — leer, crear borradores, poner/quitar etiquetas
+ * (mover a la carpeta de un cliente) y enviar a la Papelera. NO permite
+ * borrar definitivamente. Técnicamente también dejaría enviar, pero este
+ * módulo NO tiene ninguna función que envíe: los borradores quedan en el
+ * buzón para que una persona los revise y los envíe.
+ *
+ * Compatibilidad: la primera versión del agente pedía dos permisos más
+ * limitados (GMAIL_SCOPES_ANTERIORES: leer + borradores). Un buzón que
+ * todavía tenga solo esos sigue funcionando para leer y redactar (nivel
+ * "basico"); mover y eliminar exigen el permiso nuevo (nivel "completo"). */
+export const GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.modify"];
+const GMAIL_SCOPES_ANTERIORES = [
   "https://www.googleapis.com/auth/gmail.readonly",
   "https://www.googleapis.com/auth/gmail.compose",
 ];
+
+/** Error que ya viene redactado para el usuario: conBuzon lo deja pasar tal cual. */
+export class ErrorGmailDirecto extends Error {
+  constructor(mensaje: string, public readonly motivo: "permiso_insuficiente" | "carpeta_inexistente") { super(mensaje); }
+}
 
 export type MensajeGmail = {
   id: string;
@@ -191,12 +203,30 @@ function direccionParaEncabezado(nombre: string | null | undefined, email: strin
   return /^[\x20-\x7E]*$/.test(limpio) ? `"${limpio}" <${correo}>` : `${codificarEncabezado(limpio)} <${correo}>`;
 }
 
-/** Arma el mensaje RFC 822 de una respuesta en texto plano (UTF-8), listo
- * para guardarse como borrador dentro del mismo hilo. */
+/** Texto plano → HTML seguro (escapa los símbolos y conserva los saltos de línea). */
+export function textoAHtml(texto: string): string {
+  return texto
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;")
+    .replace(/\r\n?/g, "\n").replace(/\n/g, "<br>\n");
+}
+
+/** Cuerpo HTML de un borrador: el texto redactado y debajo la firma, en el
+ * mismo contenedor que usa Gmail para las firmas (así el buzón la reconoce
+ * como firma y no la duplica al abrir el borrador). */
+export function componerCuerpoHtml(cuerpoTexto: string, firmaHtml: string): string {
+  return `<div dir="ltr">${textoAHtml(cuerpoTexto)}<br><br><div dir="ltr" class="gmail_signature" data-smartmail="gmail_signature">${firmaHtml}</div></div>`;
+}
+
+const enBase64DeCorreo = (texto: string) => Buffer.from(texto, "utf-8").toString("base64").replace(/(.{76})/g, "$1\r\n").trimEnd();
+
+/** Arma el mensaje RFC 822 de una respuesta (UTF-8), listo para guardarse
+ * como borrador dentro del mismo hilo. Con `cuerpoHtml` va en los dos
+ * formatos (texto plano + HTML, para que la firma conserve su diseño); sin
+ * él, solo en texto plano. */
 export function construirMimeRespuesta(datos: {
   deEmail: string; deNombre?: string | null;
   paraEmail: string; paraNombre?: string | null;
-  asunto: string; cuerpo: string;
+  asunto: string; cuerpo: string; cuerpoHtml?: string | null;
   inReplyTo?: string | null; references?: string | null;
 }): string {
   const encabezados = [
@@ -210,10 +240,16 @@ export function construirMimeRespuesta(datos: {
     const refs = [datos.references ? sinSaltos(datos.references) : "", inReplyTo].filter(Boolean).join(" ");
     encabezados.push(`References: ${refs}`);
   }
-  encabezados.push("MIME-Version: 1.0", 'Content-Type: text/plain; charset="UTF-8"', "Content-Transfer-Encoding: base64");
-  const cuerpoBase64 = Buffer.from(datos.cuerpo.replace(/\r\n?/g, "\n").replace(/\n/g, "\r\n"), "utf-8")
-    .toString("base64").replace(/(.{76})/g, "$1\r\n").trimEnd();
-  return `${encabezados.join("\r\n")}\r\n\r\n${cuerpoBase64}\r\n`;
+  const textoPlano = enBase64DeCorreo(datos.cuerpo.replace(/\r\n?/g, "\n").replace(/\n/g, "\r\n"));
+  if (!datos.cuerpoHtml) {
+    encabezados.push("MIME-Version: 1.0", 'Content-Type: text/plain; charset="UTF-8"', "Content-Transfer-Encoding: base64");
+    return `${encabezados.join("\r\n")}\r\n\r\n${textoPlano}\r\n`;
+  }
+  const limite = "=_areda_borrador_=";
+  encabezados.push("MIME-Version: 1.0", `Content-Type: multipart/alternative; boundary="${limite}"`);
+  const parte = (tipo: string, contenido: string) =>
+    `--${limite}\r\nContent-Type: ${tipo}; charset="UTF-8"\r\nContent-Transfer-Encoding: base64\r\n\r\n${contenido}\r\n`;
+  return `${encabezados.join("\r\n")}\r\n\r\n${parte("text/plain", textoPlano)}${parte("text/html", enBase64DeCorreo(datos.cuerpoHtml))}--${limite}--\r\n`;
 }
 
 function aBase64Url(texto: string): string {
@@ -279,7 +315,7 @@ export function traducirErrorGmail(error: any, buzon: string): string {
     return "Google limitó temporalmente las consultas de correo — intenta de nuevo en unos minutos.";
   }
   if (todo.includes("insufficient") && todo.includes("permission")) {
-    return "A la autorización del Workspace le falta alguno de los dos permisos de Gmail — copia de nuevo los permisos tal como aparecen en los pasos de conexión.";
+    return "A la autorización del Workspace le falta el permiso de Gmail — copia de nuevo el permiso tal como aparece en los pasos de conexión.";
   }
   return `No se pudo consultar el buzón ${buzon}: ${descripcion.slice(0, 200) || "error desconocido"}`;
 }
@@ -292,43 +328,161 @@ export function isGmailConfigured(): boolean {
   return getServiceAccountCredentials() !== null;
 }
 
-const clientesPorBuzon = new Map<string, gmail_v1.Gmail>();
+export type NivelPermiso = "completo" | "basico";
 
-function getGmailClient(buzon: string): gmail_v1.Gmail {
+const clientesPorBuzon = new Map<string, gmail_v1.Gmail>();
+const autorizadores = new Map<string, InstanceType<typeof google.auth.JWT>>();
+/** Qué nivel de permiso tiene cada buzón, con vencimiento: el "basico" se
+ * vuelve a comprobar a los pocos minutos, para notar pronto cuando Arlex
+ * actualice el permiso en Workspace. */
+const nivelPorBuzon = new Map<string, { nivel: NivelPermiso; hasta: number }>();
+const MIN = 60 * 1000;
+
+function autorizadorDe(buzon: string, nivel: NivelPermiso) {
   const credenciales = getServiceAccountCredentials();
   if (!credenciales) throw new Error("Falta configurar la cuenta de servicio de Google (las mismas variables de entorno que usa Drive).");
-  const clave = buzon.toLowerCase();
-  let cliente = clientesPorBuzon.get(clave);
-  if (!cliente) {
-    const auth = new google.auth.JWT({
+  const clave = `${buzon}|${nivel}`;
+  let auth = autorizadores.get(clave);
+  if (!auth) {
+    auth = new google.auth.JWT({
       email: credenciales.email,
       key: credenciales.privateKey,
-      scopes: GMAIL_SCOPES,
-      subject: clave, // el buzón en cuyo nombre actúa la cuenta de servicio
+      scopes: nivel === "completo" ? GMAIL_SCOPES : GMAIL_SCOPES_ANTERIORES,
+      subject: buzon, // el buzón en cuyo nombre actúa la cuenta de servicio
     });
-    cliente = google.gmail({ version: "v1", auth });
-    clientesPorBuzon.set(clave, cliente);
+    autorizadores.set(clave, auth);
   }
-  return cliente;
+  return auth;
 }
 
+const esNoAutorizado = (error: any) => {
+  let crudo = "";
+  try { crudo = JSON.stringify(error?.response?.data || {}); } catch { /* sin detalle */ }
+  return `${crudo} ${error?.message || ""}`.toLowerCase().includes("unauthorized_client");
+};
+
+/** Cliente de Gmail para el buzón, con el mejor permiso que tenga
+ * autorizado: primero intenta el permiso nuevo; si Workspace todavía no lo
+ * tiene autorizado, cae al anterior (leer + borradores). */
+async function resolverCliente(buzon: string): Promise<{ gmail: gmail_v1.Gmail; nivel: NivelPermiso }> {
+  const clave = buzon.toLowerCase();
+  let estado = nivelPorBuzon.get(clave);
+  if (!estado || estado.hasta < Date.now()) {
+    try {
+      await autorizadorDe(clave, "completo").authorize();
+      estado = { nivel: "completo", hasta: Date.now() + 6 * 60 * MIN };
+    } catch (error: any) {
+      // Cualquier otro fallo (buzón inexistente, API apagada, sin red) no
+      // dice nada del permiso: se deja que lo reporte la llamada real.
+      if (!esNoAutorizado(error)) throw error;
+      estado = { nivel: "basico", hasta: Date.now() + 3 * MIN };
+    }
+    nivelPorBuzon.set(clave, estado);
+  }
+  const claveCliente = `${clave}|${estado.nivel}`;
+  let gmail = clientesPorBuzon.get(claveCliente);
+  if (!gmail) {
+    gmail = google.gmail({ version: "v1", auth: autorizadorDe(clave, estado.nivel) });
+    clientesPorBuzon.set(claveCliente, gmail);
+  }
+  return { gmail, nivel: estado.nivel };
+}
+
+export const MENSAJE_PERMISO_INSUFICIENTE =
+  "Este buzón todavía tiene el permiso anterior, que solo deja leer y redactar. Para mover correos a carpetas y enviar publicidad a la Papelera, actualiza el permiso en Workspace: los pasos están en la pestaña Buzones.";
+
 /** Envuelve una llamada a Gmail: deja el error técnico en el log y lanza
- * uno traducido. */
-async function conBuzon<T>(buzon: string, operacion: string, fn: (gmail: gmail_v1.Gmail) => Promise<T>): Promise<T> {
+ * uno traducido. Con `requiereCompleto`, la operación (mover, eliminar)
+ * solo se intenta si el buzón tiene el permiso nuevo. */
+async function conBuzon<T>(
+  buzon: string, operacion: string, fn: (gmail: gmail_v1.Gmail, nivel: NivelPermiso) => Promise<T>,
+  opciones: { requiereCompleto?: boolean } = {},
+): Promise<T> {
   try {
-    return await fn(getGmailClient(buzon));
+    const { gmail, nivel } = await resolverCliente(buzon);
+    if (opciones.requiereCompleto && nivel !== "completo") throw new ErrorGmailDirecto(MENSAJE_PERMISO_INSUFICIENTE, "permiso_insuficiente");
+    return await fn(gmail, nivel);
   } catch (error: any) {
+    if (error instanceof ErrorGmailDirecto) throw error;
     console.error(`[Gmail] ${operacion} (${buzon}):`, String(error?.response?.data ? JSON.stringify(error.response.data) : error?.message || error).slice(0, 600));
     throw new Error(traducirErrorGmail(error, buzon));
   }
 }
 
 /** Comprueba que la cuenta de servicio sí puede entrar a ese buzón. */
-export async function probarBuzon(buzon: string): Promise<{ correo: string; totalMensajes: number }> {
-  return conBuzon(buzon, "probar", async (gmail) => {
+export async function probarBuzon(buzon: string): Promise<{ correo: string; totalMensajes: number; permisoCompleto: boolean }> {
+  // Se olvida lo que se sabía del permiso: "Probar" es justo lo que Arlex
+  // pulsa después de actualizarlo en Workspace.
+  nivelPorBuzon.delete(buzon.toLowerCase());
+  return conBuzon(buzon, "probar", async (gmail, nivel) => {
     const perfil = await gmail.users.getProfile({ userId: "me" });
-    return { correo: perfil.data.emailAddress || buzon, totalMensajes: perfil.data.messagesTotal || 0 };
+    return { correo: perfil.data.emailAddress || buzon, totalMensajes: perfil.data.messagesTotal || 0, permisoCompleto: nivel === "completo" };
   });
+}
+
+/** ¿El buzón tiene ya el permiso nuevo (mover y eliminar)? */
+export async function tienePermisoCompleto(buzon: string): Promise<boolean> {
+  return conBuzon(buzon, "consultar permiso", async (_gmail, nivel) => nivel === "completo");
+}
+
+export type CarpetaGmail = { id: string; nombre: string };
+
+/** Las carpetas (etiquetas) que el dueño del buzón ha creado en Gmail,
+ * ordenadas por nombre. No incluye las del sistema (Recibidos, Enviados…). */
+export async function listarCarpetas(buzon: string): Promise<CarpetaGmail[]> {
+  return conBuzon(buzon, "listar carpetas", async (gmail) => {
+    const respuesta = await gmail.users.labels.list({ userId: "me" });
+    return (respuesta.data.labels || [])
+      .filter(l => l.type === "user" && l.id && l.name)
+      .map(l => ({ id: l.id!, nombre: l.name! }))
+      .sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
+  });
+}
+
+/** Mueve la conversación completa a una carpeta: le pone la etiqueta y la
+ * saca de Recibidos (lo mismo que "Mover a" en Gmail). No borra nada. */
+export async function moverHiloACarpeta(buzon: string, threadId: string, carpetaId: string): Promise<void> {
+  await conBuzon(buzon, "mover a carpeta", async (gmail) => {
+    try {
+      await gmail.users.threads.modify({ userId: "me", id: threadId, requestBody: { addLabelIds: [carpetaId], removeLabelIds: ["INBOX"] } });
+    } catch (error: any) {
+      const detalle = `${error?.message || ""} ${JSON.stringify(error?.response?.data || {})}`.toLowerCase();
+      if (detalle.includes("label") && (detalle.includes("invalid") || detalle.includes("not found"))) {
+        throw new ErrorGmailDirecto("Esa carpeta ya no existe en Gmail (pudo haberse borrado o renombrado). Elige otra.", "carpeta_inexistente");
+      }
+      throw error;
+    }
+  }, { requiereCompleto: true });
+}
+
+/** Envía un mensaje a la Papelera de Gmail (recuperable durante 30 días).
+ * Si el mensaje ya no existe, se da por hecho. */
+export async function enviarAPapelera(buzon: string, id: string): Promise<void> {
+  await conBuzon(buzon, "enviar a la papelera", async (gmail) => {
+    try {
+      await gmail.users.messages.trash({ userId: "me", id });
+    } catch (error: any) {
+      if (Number(error?.code || error?.response?.status || 0) !== 404) throw error;
+    }
+  }, { requiereCompleto: true });
+}
+
+/** La firma que el buzón tiene configurada en Gmail como predeterminada
+ * (en HTML), o null si no tiene. Google solo expone esa — una firma
+ * adicional que no sea la predeterminada no se puede leer por nombre. Un
+ * fallo aquí nunca impide redactar: se devuelve null y se sigue. */
+export async function obtenerFirmaGmail(buzon: string): Promise<string | null> {
+  try {
+    return await conBuzon(buzon, "leer firma", async (gmail) => {
+      const respuesta = await gmail.users.settings.sendAs.list({ userId: "me" });
+      const identidades = respuesta.data.sendAs || [];
+      const propia = identidades.find(i => i.sendAsEmail?.toLowerCase() === buzon.toLowerCase()) || identidades.find(i => i.isPrimary) || identidades.find(i => i.isDefault);
+      const firma = propia?.signature?.trim();
+      return firma ? firma : null;
+    });
+  } catch {
+    return null;
+  }
 }
 
 /** IDs de los correos de la bandeja de entrada de los últimos `dias` días,
@@ -372,14 +526,14 @@ export async function obtenerHilo(buzon: string, threadId: string, maxTextoPorMe
 export async function guardarBorradorRespuesta(buzon: string, datos: {
   threadId: string; deNombre?: string | null;
   paraEmail: string; paraNombre?: string | null;
-  asunto: string; cuerpo: string;
+  asunto: string; cuerpo: string; cuerpoHtml?: string | null;
   inReplyTo?: string | null; references?: string | null;
   borradorIdExistente?: string | null;
 }): Promise<{ borradorId: string }> {
   const raw = aBase64Url(construirMimeRespuesta({
     deEmail: buzon, deNombre: datos.deNombre,
     paraEmail: datos.paraEmail, paraNombre: datos.paraNombre,
-    asunto: datos.asunto, cuerpo: datos.cuerpo,
+    asunto: datos.asunto, cuerpo: datos.cuerpo, cuerpoHtml: datos.cuerpoHtml,
     inReplyTo: datos.inReplyTo, references: datos.references,
   }));
   const requestBody = { message: { raw, threadId: datos.threadId } };

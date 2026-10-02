@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
-  asuntoDeRespuesta, codificarEncabezado, construirMimeRespuesta, decodificarEncabezado,
-  extraerTexto, htmlATexto, interpretarMensaje, limpiarCuerpo, parsearDireccion, traducirErrorGmail,
+  asuntoDeRespuesta, codificarEncabezado, componerCuerpoHtml, construirMimeRespuesta, decodificarEncabezado,
+  extraerTexto, htmlATexto, interpretarMensaje, limpiarCuerpo, parsearDireccion, textoAHtml, traducirErrorGmail,
 } from "./gmail";
 import {
-  construirIndiceClientes, detectarCliente, diasARevisar, interpretarRespuestaClasificacion, mensajeTodosFallaron,
-  redactarResumenCorreo,
+  buscarCarpetaDeCliente, construirIndiceClientes, detectarCliente, diasARevisar, firmaHtmlATexto,
+  interpretarRespuestaClasificacion, mensajeTodosFallaron, palabrasClave, redactarResumenCorreo,
 } from "./oficinaCorreoDb";
 
 const b64url = (texto: string) => Buffer.from(texto, "utf-8").toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
@@ -263,5 +263,79 @@ describe("agente de correo — ventana y resumen", () => {
     ])).toBe("No pude leer ninguno de los 2 buzones. No se pudo consultar el buzón a@x.co: timeout");
     expect(mensajeTodosFallaron([{ email: "a@x.co", error: causa }, { email: "b@x.co", error: "Google no reconoce el buzón b@x.co." }]))
       .toContain("por causas distintas");
+  });
+});
+
+describe("carpetas de clientes", () => {
+  const carpetas = [
+    { id: "L1", nombre: "Clientes/Droguerías Colfamil" }, { id: "L2", nombre: "Clientes/SuarezPharma" },
+    { id: "L3", nombre: "Mi Tierra" }, { id: "L4", nombre: "Facturas" }, { id: "L5", nombre: "Clientes/Pérez Ospina Oscar" },
+    { id: "L6", nombre: "Clientes" }, { id: "L7", nombre: "DIAN" },
+  ];
+  it("saca las palabras que identifican a un cliente", () => {
+    expect(palabrasClave("Droguerías Colfamil S.A.S.")).toEqual(["DROGUERIAS", "COLFAMIL"]);
+    expect(palabrasClave("SERVICIOS & REPUESTOS INDUSTRIALES DEL ORIENTE S.A.S.")).toEqual(["SERVICIOS", "REPUESTOS", "INDUSTRIALES", "ORIENTE"]);
+    expect(palabrasClave("S.A.S.")).toEqual([]);
+  });
+  it("mismo nombre (sin tildes, mayúsculas ni S.A.S.) → carpeta segura, también anidada", () => {
+    expect(buscarCarpetaDeCliente(carpetas, "DROGUERIAS COLFAMIL S.A.S.").segura?.id).toBe("L1");
+    expect(buscarCarpetaDeCliente(carpetas, "SuarezPharma SAS").segura?.id).toBe("L2");
+  });
+  it("coincidencia parcial → solo sugerida, nunca automática", () => {
+    // la carpeta tiene menos palabras que el cliente
+    expect(buscarCarpetaDeCliente(carpetas, "Miradores Mi Tierra S.A.S.")).toEqual({ segura: null, sugerida: carpetas[2] });
+    // la carpeta tiene más palabras que el cliente
+    expect(buscarCarpetaDeCliente(carpetas, "Pérez Ospina")).toEqual({ segura: null, sugerida: carpetas[4] });
+  });
+  it("sin coincidencia no propone nada; carpetas genéricas no cuentan", () => {
+    expect(buscarCarpetaDeCliente(carpetas, "Inversiones El Roble Ltda.")).toEqual({ segura: null, sugerida: null });
+    expect(buscarCarpetaDeCliente(carpetas, "Clientes Varios S.A.S.").segura).toBeNull();
+    expect(buscarCarpetaDeCliente([], "Droguerías Colfamil")).toEqual({ segura: null, sugerida: null });
+  });
+  it("dos carpetas con el mismo nombre del cliente: no elige sola", () => {
+    const dobles = [{ id: "A", nombre: "Clientes/Colfamil" }, { id: "B", nombre: "Archivo 2025/Colfamil" }];
+    const r = buscarCarpetaDeCliente(dobles, "Colfamil S.A.S.");
+    expect(r.segura).toBeNull();
+    expect(r.sugerida).not.toBeNull();
+  });
+});
+
+describe("firma y borrador en HTML", () => {
+  const firmaHtml = '<div><b>Arlex Pineda Ocampo</b></div><div>Contador P&uacute;blico &amp; Especialista NIIF</div><div><img src="https://x/logo.png"><br>Tel. 318 793 5393</div>';
+  it("la firma de Gmail se pasa a texto limpio para la vista previa", () => {
+    expect(firmaHtmlATexto(firmaHtml)).toBe("Arlex Pineda Ocampo\nContador P blico & Especialista NIIF\nTel. 318 793 5393");
+  });
+  it("el texto redactado se escapa y la firma HTML se conserva intacta", () => {
+    expect(textoAHtml('Hola <b>Laura</b> & "equipo"\nSegunda línea')).toBe("Hola &lt;b&gt;Laura&lt;/b&gt; &amp; &quot;equipo&quot;<br>\nSegunda línea");
+    const html = componerCuerpoHtml("Buenos días.\n\nQuedo atento.", firmaHtml);
+    expect(html).toContain("Buenos días.<br>\n<br>\nQuedo atento.");
+    expect(html).toContain(`<div dir="ltr" class="gmail_signature" data-smartmail="gmail_signature">${firmaHtml}</div>`);
+  });
+  it("con cuerpo HTML el borrador va en los dos formatos, enlazado al hilo", () => {
+    const mime = construirMimeRespuesta({
+      deEmail: "contacto@aredasas.com", paraEmail: "laura@colfamil.com.co", asunto: "Re: Certificado",
+      cuerpo: "Buenos días.\n\nArlex Pineda Ocampo", cuerpoHtml: componerCuerpoHtml("Buenos días.", firmaHtml), inReplyTo: "<abc@mail>",
+    });
+    const [encabezados, ...resto] = mime.split("\r\n\r\n");
+    expect(encabezados).toMatch(/Content-Type: multipart\/alternative; boundary="([^"]+)"/);
+    expect(encabezados).toContain("In-Reply-To: <abc@mail>");
+    const limite = /boundary="([^"]+)"/.exec(encabezados)![1];
+    const partes = mime.split(`--${limite}`).slice(1, -1);
+    expect(partes.length).toBe(2);
+    const decodificar = (parte: string) => Buffer.from(parte.split("\r\n\r\n")[1].replace(/\r\n/g, ""), "base64").toString("utf-8");
+    expect(partes[0]).toContain('Content-Type: text/plain; charset="UTF-8"');
+    expect(decodificar(partes[0])).toBe("Buenos días.\r\n\r\nArlex Pineda Ocampo");
+    expect(partes[1]).toContain('Content-Type: text/html; charset="UTF-8"');
+    expect(decodificar(partes[1])).toContain(firmaHtml);
+    expect(mime.endsWith(`--${limite}--\r\n`)).toBe(true);
+    expect(resto.length).toBeGreaterThan(0);
+    for (const linea of mime.split("\r\n")) expect(linea.length).toBeLessThanOrEqual(78);
+  });
+  it("el resumen de la revisión avisa de la publicidad que espera autorización", () => {
+    const base = { atencion: 0, urgentes: 0, porProcesar: 0, sinClasificar: 0, error: null };
+    expect(redactarResumenCorreo([{ ...base, nombre: "Arlex", nuevos: 6, publicidad: 4 }]))
+      .toBe("Revisé 1 buzón: 6 correos nuevos, ninguno requiere tu atención. 4 son publicidad: quedan en la lista de Publicidad esperando tu autorización para eliminarlos.");
+    expect(redactarResumenCorreo([{ ...base, nombre: "Arlex", nuevos: 1, publicidad: 1 }]))
+      .toBe("Revisé 1 buzón: 1 correo nuevo, ninguno requiere tu atención. 1 es publicidad: queda en la lista de Publicidad esperando tu autorización para eliminarlo.");
   });
 });

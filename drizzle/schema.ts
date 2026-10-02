@@ -1228,6 +1228,14 @@ export const oficinaBuzones = mysqlTable("oficinaBuzones", {
   ultimaRevisionAt: timestamp("ultimaRevisionAt"),
   /** Mensaje del último fallo de conexión; NULL si la última vez funcionó. */
   ultimoError: text("ultimoError"),
+  /** true si Workspace ya autorizó el permiso nuevo (gmail.modify), que
+   * deja mover a carpetas y enviar a la Papelera; false = solo el permiso
+   * anterior (leer y redactar). Se actualiza en cada prueba/revisión. */
+  permisoCompleto: boolean("permisoCompleto").default(false).notNull(),
+  /** La firma predeterminada que el buzón tiene configurada en Gmail (HTML),
+   * leída en la última prueba/revisión. Se usa en los borradores cuando
+   * `firma` (la escrita a mano en el portal) está vacía. */
+  firmaGmail: text("firmaGmail"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 export type OficinaBuzon = typeof oficinaBuzones.$inferSelect;
@@ -1266,6 +1274,11 @@ export const oficinaCorreos = mysqlTable("oficinaCorreos", {
   borradorAt: timestamp("borradorAt"),
   /** Tarea de AREDA Work creada a partir de este correo. */
   taskId: int("taskId"),
+  /** Nombre de la carpeta de Gmail a la que el agente movió la
+   * conversación al quedar gestionada (NULL = sigue en Recibidos). */
+  carpeta: varchar("carpeta", { length: 255 }),
+  /** Cuándo se envió a la Papelera de Gmail (publicidad autorizada por Arlex). */
+  enPapeleraAt: timestamp("enPapeleraAt"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 }, (table) => ({
   mensajeIdx: uniqueIndex("oficinaCorreos_buzon_gmail_idx").on(table.buzonId, table.gmailId),
@@ -1274,6 +1287,22 @@ export const oficinaCorreos = mysqlTable("oficinaCorreos", {
 }));
 export type OficinaCorreo = typeof oficinaCorreos.$inferSelect;
 export type InsertOficinaCorreo = typeof oficinaCorreos.$inferInsert;
+
+/** En qué carpeta (etiqueta) de Gmail va el correo de cada cliente, por
+ * buzón — cada buzón tiene sus propias carpetas. El agente lo aprende: la
+ * primera vez se confirma la carpeta y de ahí en adelante mueve solo. */
+export const oficinaCarpetasCliente = mysqlTable("oficinaCarpetasCliente", {
+  id: int("id").autoincrement().primaryKey(),
+  buzonId: int("buzonId").notNull(),
+  clientId: int("clientId").notNull(),
+  /** Id interno de la etiqueta en Gmail (estable aunque la renombren). */
+  carpetaId: varchar("carpetaId", { length: 64 }).notNull(),
+  carpetaNombre: varchar("carpetaNombre", { length: 255 }).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (table) => ({
+  buzonClienteIdx: uniqueIndex("oficinaCarpetasCliente_buzon_cliente_idx").on(table.buzonId, table.clientId),
+}));
+export type OficinaCarpetaCliente = typeof oficinaCarpetasCliente.$inferSelect;
 
 /** Cuentas de cobro para clientes GENERALES (empresas, distinto de las de
  * Renta Persona Natural en rentaCuentasCobro) — prefijo propio "AP",

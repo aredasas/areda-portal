@@ -470,6 +470,13 @@
       "when": 1790963140222,
       "tag": "0066_needy_mantis",
       "breakpoints": true
+    },
+    {
+      "idx": 67,
+      "version": "5",
+      "when": 1790969660370,
+      "tag": "0067_zippy_the_professor",
+      "breakpoints": true
     }
   ]
 }

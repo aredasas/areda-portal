@@ -3675,13 +3675,53 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
       }),
       listar: protectedProcedure
         .input(z.object({
-          vista: z.enum(["atencion", "todos"]).default("atencion"),
+          vista: z.enum(["atencion", "publicidad", "todos"]).default("atencion"),
           buzonId: z.number().optional(),
         }))
         .query(async ({ input, ctx }) => {
           assertOficinaAccess(ctx.user.cedula);
           return oficinaCorreoDb.listarCorreos(input);
         }),
+      // "Gestionado": además de marcarlo, traslada el correo a la carpeta
+      // del cliente en Gmail (si la reconoce; si no, pide elegirla).
+      gestionar: protectedProcedure
+        .input(z.object({ id: z.number() }))
+        .mutation(async ({ input, ctx }) => {
+          assertOficinaAccess(ctx.user.cedula);
+          return oficinaCorreoDb.gestionarCorreo(input.id);
+        }),
+      carpetas: protectedProcedure
+        .input(z.object({ buzonId: z.number() }))
+        .query(async ({ input, ctx }) => {
+          assertOficinaAccess(ctx.user.cedula);
+          return oficinaCorreoDb.listarCarpetasBuzon(input.buzonId);
+        }),
+      moverACarpeta: protectedProcedure
+        .input(z.object({ id: z.number(), carpetaId: z.string().min(1).max(64) }))
+        .mutation(async ({ input, ctx }) => {
+          assertOficinaAccess(ctx.user.cedula);
+          return oficinaCorreoDb.moverCorreoACarpeta(input.id, input.carpetaId);
+        }),
+      // Publicidad: el agente la identifica; solo se envía a la Papelera
+      // lo que Arlex autoriza aquí, correo por correo o en bloque.
+      publicidad: router({
+        contar: protectedProcedure.query(async ({ ctx }) => {
+          assertOficinaAccess(ctx.user.cedula);
+          return { cantidad: await oficinaCorreoDb.contarPublicidadPendiente() };
+        }),
+        eliminar: protectedProcedure
+          .input(z.object({ ids: z.array(z.number()).min(1).max(300) }))
+          .mutation(async ({ input, ctx }) => {
+            assertOficinaAccess(ctx.user.cedula);
+            return oficinaCorreoDb.eliminarPublicidad(input.ids);
+          }),
+        conservar: protectedProcedure
+          .input(z.object({ ids: z.array(z.number()).min(1).max(300) }))
+          .mutation(async ({ input, ctx }) => {
+            assertOficinaAccess(ctx.user.cedula);
+            return oficinaCorreoDb.conservarPublicidad(input.ids);
+          }),
+      }),
       marcar: protectedProcedure
         .input(z.object({ id: z.number(), estado: z.enum(["pendiente", "gestionado", "descartado"]) }))
         .mutation(async ({ input, ctx }) => {
