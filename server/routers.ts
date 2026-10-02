@@ -108,6 +108,7 @@ import { generarCuentaCobroClientePdf, leerConceptosCuentaCobro, fechaCalendario
 import { bogotaTodayUTCMidnight } from "./dateUtils";
 import * as oficinaDb from "./oficinaDb";
 import * as oficinaCorreoDb from "./oficinaCorreoDb";
+import * as oficinaEstadistaDb from "./oficinaEstadistaDb";
 import { invokeLLM } from "./_core/llm";
 import { isDriveConfigured, extractFolderIdFromUrl, testFolderAccess, listSubfoldersRecursive, listAllFilesRecursive, uploadFileToDrive, resolveUploadFolder } from "./googleDrive";
 import { sdk } from "./_core/sdk";
@@ -3571,7 +3572,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
         .input(z.object({ agenteId: z.number(), mensaje: z.string().min(1) }))
         .mutation(async ({ input, ctx }) => {
           assertOficinaAccess(ctx.user.cedula);
-          return oficinaDb.enviarMensajeChat(input.agenteId, input.mensaje);
+          return oficinaDb.enviarMensajeChat(input.agenteId, input.mensaje, ctx.user.id);
         }),
     }),
     solicitudes: router({
@@ -3600,6 +3601,26 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
         assertOficinaAccess(ctx.user.cedula);
         return oficinaDb.revisarAhoraEstadista();
       }),
+      // Informe del equipo: pendientes/devueltas/por completar por persona,
+      // horas (día anterior, semana, mes), ranking de eficiencia y la
+      // actividad de hoy — con el texto listo para leerse en voz alta.
+      informe: protectedProcedure.query(async ({ ctx }) => {
+        assertOficinaAccess(ctx.user.cedula);
+        return oficinaEstadistaDb.calcularInformeEquipo({ excluirUsuarioId: ctx.user.id });
+      }),
+    }),
+    // Lo que va haciendo el equipo (entregas, comentarios, lecturas) desde
+    // un momento dado — lo consulta cada rato el aviso de voz, desde
+    // cualquier página del portal.
+    actividad: router({
+      nuevas: protectedProcedure
+        .input(z.object({ desde: z.string().datetime() }))
+        .query(async ({ input, ctx }) => {
+          assertOficinaAccess(ctx.user.cedula);
+          // Como mucho 24 horas hacia atrás, aunque el navegador pida más.
+          const desde = new Date(Math.max(new Date(input.desde).getTime(), Date.now() - 24 * 60 * 60 * 1000));
+          return oficinaEstadistaDb.listarActividad({ desde, excluirUsuarioId: ctx.user.id, limite: 100 });
+        }),
     }),
     // ---- Agente de Correo: buzones del Workspace (cuenta de servicio con
     // delegación de dominio — ver server/gmail.ts). Lee, clasifica y

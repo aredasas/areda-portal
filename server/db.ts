@@ -1,7 +1,7 @@
 import { eq, and, desc, asc, like, sql, inArray, gte, lte, or, ne, isNull } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { alias } from "drizzle-orm/mysql-core";
-import { InsertUser, users, clients, InsertClient, taxObligations, InsertTaxObligation, clientObligations, InsertClientObligation, taxDeadlines, InsertTaxDeadline, tasks, InsertTask, taskAttachments, InsertTaskAttachment, deadlineAttachments, InsertDeadlineAttachment, appSettings, InsertAppSetting, dianCalendar, InsertDianCalendar, clientDriveSubfolders, timeEntries, InsertTimeEntry, comments, InsertComment, historyEvents, notifications, workLocationEntries, taskRecurrences, InsertTaskRecurrence, boardPosts, boardAttachments, rentaClientes, InsertRentaCliente, rentaExogena, InsertRentaExogena, rentaExogenaItems, InsertRentaExogenaItem, rentaDeclaracionAnterior, InsertRentaDeclaracionAnterior, rentaLiquidacionItems, InsertRentaLiquidacionItem, rentaDependientes, InsertRentaDependiente, rentaReportes, InsertRentaReporte, rentaCuentasCobro, InsertRentaCuentaCobro, cuentasCobroClientes, InsertCuentaCobroCliente } from "../drizzle/schema";
+import { InsertUser, users, clients, InsertClient, taxObligations, InsertTaxObligation, clientObligations, InsertClientObligation, taxDeadlines, InsertTaxDeadline, tasks, InsertTask, taskAttachments, InsertTaskAttachment, deadlineAttachments, InsertDeadlineAttachment, appSettings, InsertAppSetting, dianCalendar, InsertDianCalendar, clientDriveSubfolders, timeEntries, InsertTimeEntry, comments, InsertComment, historyEvents, notifications, workLocationEntries, taskRecurrences, InsertTaskRecurrence, boardPosts, boardAttachments, rentaClientes, InsertRentaCliente, rentaExogena, InsertRentaExogena, rentaExogenaItems, InsertRentaExogenaItem, rentaDeclaracionAnterior, InsertRentaDeclaracionAnterior, rentaLiquidacionItems, InsertRentaLiquidacionItem, rentaDependientes, InsertRentaDependiente, rentaReportes, InsertRentaReporte, rentaCuentasCobro, InsertRentaCuentaCobro, cuentasCobroClientes, InsertCuentaCobroCliente, oficinaActividad, InsertOficinaActividad } from "../drizzle/schema";
 import { ENV } from './_core/env';
 import { bogotaTodayUTCMidnight } from "./dateUtils";
 import { categorizar as categorizarExogena } from "./rentaDb";
@@ -916,16 +916,44 @@ export async function getUnreadNotificationCount(userId: number) {
   return Number(row?.count || 0);
 }
 
+/** Registra en la actividad de la Oficina que alguien leyó algo — nunca
+ * debe impedir que la notificación se marque como leída, así que cualquier
+ * fallo aquí (ej. la tabla aún sin migrar) solo se deja en el log. */
+async function registrarLectura(fila: InsertOficinaActividad): Promise<void> {
+  try {
+    const db = await getDb();
+    if (!db) return;
+    await db.insert(oficinaActividad).values(fila);
+  } catch (error: any) {
+    console.error("[Oficina] No se pudo registrar la lectura:", String(error?.message || error).slice(0, 200));
+  }
+}
+
 export async function markNotificationRead(id: number, userId: number) {
   const db = await getDb();
   if (!db) return;
+  // Solo cuenta como "leyó" la primera vez (si ya estaba leída no se repite).
+  const [pendiente] = await db.select().from(notifications)
+    .where(and(eq(notifications.id, id), eq(notifications.userId, userId), eq(notifications.isRead, false))).limit(1);
   await db.update(notifications).set({ isRead: true }).where(and(eq(notifications.id, id), eq(notifications.userId, userId)));
+  if (pendiente) {
+    await registrarLectura({
+      tipo: "notificacion_leida", userId,
+      entityType: pendiente.entityType, entityId: pendiente.entityId, detalle: pendiente.type,
+    });
+  }
 }
 
 export async function markAllNotificationsRead(userId: number) {
   const db = await getDb();
   if (!db) return;
+  const [pendientes] = await db.select({ count: sql<number>`count(*)` }).from(notifications)
+    .where(and(eq(notifications.userId, userId), eq(notifications.isRead, false)));
   await db.update(notifications).set({ isRead: true }).where(and(eq(notifications.userId, userId), eq(notifications.isRead, false)));
+  const cantidad = Number(pendientes?.count || 0);
+  // "Marcar todas como leídas" no es abrir cada una: se registra como un
+  // solo hecho, con la cantidad, para no anunciar lecturas que no ocurrieron.
+  if (cantidad > 0) await registrarLectura({ tipo: "notificaciones_marcadas", userId, cantidad });
 }
 
 /** Housekeeping — deletes already-read notifications older than a day, so

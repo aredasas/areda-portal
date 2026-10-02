@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import DashboardLayout from "@/components/DashboardLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -14,81 +14,12 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { trpc } from "@/lib/trpc";
 import {
   AlertCircle, Loader2, Send, RefreshCw, Volume2, VolumeX, Check, X,
-  MessageSquare, Inbox, Settings, Sparkles, Mail, AtSign, ArrowUpRight,
+  MessageSquare, Inbox, Settings, Sparkles, Mail, AtSign, ArrowUpRight, BarChart3,
 } from "lucide-react";
 import { toast } from "sonner";
 import { BandejaCorreoTab, BuzonesCorreoTab } from "@/components/oficina/CorreoAgente";
-
-const VOZ_KEY = "oficina-voz-activa";
-const VOZ_VISTOS_KEY = "oficina-voz-vistos";
-
-/** Lee/escribe en voz alta las solicitudes nuevas de los agentes mientras
- * esta pestaña siga abierta — usa la síntesis de voz del navegador (Web
- * Speech API), sin costo ni cuenta externa. Compara contra los IDs ya
- * anunciados (persistidos en localStorage) para no repetir en cada
- * refresco ni al recargar la página. */
-function useVozOficina(solicitudesPendientes: { id: number; titulo: string; severidad: string }[] | undefined) {
-  const [vozActiva, setVozActiva] = useState(() => {
-    try { return localStorage.getItem(VOZ_KEY) === "1"; } catch { return false; }
-  });
-  const vistosRef = useRef<Set<number>>(new Set());
-  const inicializado = useRef(false);
-
-  useEffect(() => {
-    try {
-      const guardados = JSON.parse(localStorage.getItem(VOZ_VISTOS_KEY) || "[]");
-      vistosRef.current = new Set(guardados);
-    } catch { /* ignora */ }
-  }, []);
-
-  useEffect(() => {
-    if (!solicitudesPendientes) return;
-    // La primera carga solo marca como "vistas" las que ya existían —
-    // evita que al abrir la página se lean en voz alta todas de golpe.
-    if (!inicializado.current) {
-      inicializado.current = true;
-      for (const s of solicitudesPendientes) vistosRef.current.add(s.id);
-      guardarVistos();
-      return;
-    }
-    const nuevas = solicitudesPendientes.filter(s => !vistosRef.current.has(s.id));
-    if (nuevas.length === 0) return;
-    for (const s of nuevas) vistosRef.current.add(s.id);
-    guardarVistos();
-
-    if (!vozActiva) return;
-    if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
-    const texto = nuevas.length === 1
-      ? `Nueva alerta de la Oficina: ${nuevas[0].titulo}`
-      : `La Oficina tiene ${nuevas.length} alertas nuevas. La más reciente: ${nuevas[nuevas.length - 1].titulo}`;
-    const utterance = new SpeechSynthesisUtterance(texto);
-    utterance.lang = "es-CO";
-    utterance.rate = 1;
-    window.speechSynthesis.speak(utterance);
-  }, [solicitudesPendientes, vozActiva]);
-
-  function guardarVistos() {
-    try { localStorage.setItem(VOZ_VISTOS_KEY, JSON.stringify(Array.from(vistosRef.current))); } catch { /* ignora */ }
-  }
-
-  const toggleVoz = () => {
-    setVozActiva(v => {
-      const nuevo = !v;
-      try { localStorage.setItem(VOZ_KEY, nuevo ? "1" : "0"); } catch { /* ignora */ }
-      if (nuevo && typeof window !== "undefined" && "speechSynthesis" in window) {
-        // Una frase corta al activar — confirma que el navegador sí puede
-        // hablar y "desbloquea" el audio (algunos navegadores exigen una
-        // interacción del usuario antes de permitir voz).
-        const u = new SpeechSynthesisUtterance("Notificaciones de voz activadas.");
-        u.lang = "es-CO";
-        window.speechSynthesis.speak(u);
-      }
-      return nuevo;
-    });
-  };
-
-  return { vozActiva, toggleVoz };
-}
+import InformeEquipo, { BotonEscucharInforme } from "@/components/oficina/InformeEquipo";
+import { hablar, setVozActivada, useVozActivada } from "@/lib/vozOficina";
 
 const esfuerzoLabels: Record<string, string> = { low: "Piensa poco", medium: "Equilibrado", high: "Piensa mucho" };
 const severidadColors: Record<string, string> = {
@@ -116,7 +47,16 @@ export default function Oficina() {
   });
 
   const solicitudesPendientes = (solicitudesQuery.data || []).filter((s: any) => s.estado === "pendiente");
-  const { vozActiva, toggleVoz } = useVozOficina(isAuthorized ? solicitudesPendientes : undefined);
+  // Los avisos de voz los dice OficinaVozGlobal (montado en todas las
+  // páginas); aquí solo está el interruptor.
+  const vozActiva = useVozActivada();
+  const toggleVoz = () => {
+    const nueva = !vozActiva;
+    setVozActivada(nueva);
+    // Una frase corta al activar: confirma que el navegador sí puede hablar
+    // y "desbloquea" el audio (exige un clic antes de permitir voz).
+    if (nueva) hablar(["Avisos de voz activados."], { interrumpir: true });
+  };
 
   const [agenteAbiertoId, setAgenteAbiertoId] = useState<number | null>(null);
 
@@ -185,10 +125,11 @@ export default function Oficina() {
             </p>
           </div>
           <div className="flex items-center gap-2">
+            <BotonEscucharInforme compacto />
             <Button
               variant="outline" size="sm" onClick={toggleVoz}
               className={vozActiva ? "border-[#EDA011] text-[#EDA011]" : ""}
-              title="Notificaciones de voz mientras esta pestaña esté abierta"
+              title="Avisos de voz: el agente dice en voz alta cuando alguien entrega una tarea, comenta o lee una observación, en cualquier página del portal"
             >
               {vozActiva ? <Volume2 className="w-4 h-4 mr-1.5" /> : <VolumeX className="w-4 h-4 mr-1.5" />}
               Voz {vozActiva ? "activada" : "desactivada"}
@@ -422,10 +363,11 @@ function AgenteDialog({ agente, onClose }: { agente: any; onClose: () => void })
   const esCorreo = agente.tipo === "correo";
   // El Agente de Correo abre en su Bandeja (ahí están sus pendientes, cada
   // uno con borrador y tarea) en lugar de la lista genérica de solicitudes.
-  const [pestana, setPestana] = useState(esCorreo ? "bandeja" : "chat");
+  const esEstadista = agente.tipo === "estadista_tareas";
+  const [pestana, setPestana] = useState(esCorreo ? "bandeja" : esEstadista ? "informe" : "chat");
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
-      <DialogContent className={`${esCorreo ? "sm:max-w-3xl" : "sm:max-w-2xl"} max-h-[88vh] min-w-0 overflow-y-auto overflow-x-hidden`}>
+      <DialogContent className={`${esCorreo || esEstadista ? "sm:max-w-3xl" : "sm:max-w-2xl"} max-h-[88vh] min-w-0 overflow-y-auto overflow-x-hidden`}>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Sparkles className="w-4 h-4 text-[#EDA011]" /> {agente.nombre}
@@ -446,6 +388,7 @@ function AgenteDialog({ agente, onClose }: { agente: any; onClose: () => void })
                 {agente.solicitudesPendientes > 0 && <Badge className="bg-red-100 text-red-800 border-red-200 ml-1 text-[10px] px-1.5 py-0">{agente.solicitudesPendientes}</Badge>}
               </TabsTrigger>
             )}
+            {esEstadista && <TabsTrigger value="informe" className="gap-1.5"><BarChart3 className="w-3.5 h-3.5" /> Informe</TabsTrigger>}
             <TabsTrigger value="chat" className="gap-1.5"><MessageSquare className="w-3.5 h-3.5" /> Chat</TabsTrigger>
             {!esCorreo && (
               <TabsTrigger value="solicitudes" className="gap-1.5">
@@ -459,6 +402,11 @@ function AgenteDialog({ agente, onClose }: { agente: any; onClose: () => void })
           {esCorreo && (
             <TabsContent value="bandeja" className="mt-4 min-w-0">
               <BandejaCorreoTab onIrABuzones={() => setPestana("buzones")} />
+            </TabsContent>
+          )}
+          {esEstadista && (
+            <TabsContent value="informe" className="mt-4 min-w-0">
+              <InformeEquipo />
             </TabsContent>
           )}
           <TabsContent value="chat" className="mt-4">

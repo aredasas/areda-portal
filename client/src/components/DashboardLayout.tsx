@@ -48,6 +48,10 @@ import { DashboardLayoutSkeleton } from "./DashboardLayoutSkeleton";
 import { LoginScreen } from "./LoginScreen";
 import TimeTrackingBar from "./TimeTrackingBar";
 import NotificationBell from "./NotificationBell";
+import OficinaVozGlobal from "./oficina/OficinaVozGlobal";
+
+/** Único usuario con acceso al menú Oficina (mismo valor que restrictedToCedula abajo). */
+const OFICINA_CEDULA = "5820262";
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
 
@@ -329,6 +333,8 @@ function DashboardLayoutContent({
             </div>
             <NotificationBell />
           </div>
+          {/* Avisos de voz de la Oficina: activos en todas las páginas, solo para su usuario. */}
+          {user?.cedula === OFICINA_CEDULA && <OficinaVozGlobal />}
           {children}
         </main>
       </SidebarInset>

@@ -1178,6 +1178,35 @@ export const oficinaRevisiones = mysqlTable("oficinaRevisiones", {
 export type OficinaRevision = typeof oficinaRevisiones.$inferSelect;
 export type InsertOficinaRevision = typeof oficinaRevisiones.$inferInsert;
 
+/** Actividad del equipo que NO queda registrada en ninguna otra tabla y
+ * que el Estadista de Tareas anuncia en voz alta y resume en el informe
+ * del día. Hoy: cuándo un colaborador LEE una notificación (comentario,
+ * observación de corrección/completar, aprobación) — la tabla
+ * `notifications` solo guarda si está leída, no cuándo, y además se borra
+ * al día siguiente. Las entregas salen de `historyEvents` y los
+ * comentarios de `comments`; no se duplican aquí. */
+export const oficinaActividad = mysqlTable("oficinaActividad", {
+  id: int("id").autoincrement().primaryKey(),
+  /** "notificacion_leida" (abrió una notificación) o
+   * "notificaciones_marcadas" (pulsó "marcar todas como leídas", sin
+   * abrirlas — `cantidad` dice cuántas). */
+  tipo: varchar("tipo", { length: 40 }).notNull(),
+  /** Quién hizo la acción. */
+  userId: int("userId").notNull(),
+  /** Sobre qué: "task" | "deadline" | "board_post" (NULL en "marcadas"). */
+  entityType: varchar("entityType", { length: 20 }),
+  entityId: int("entityId"),
+  /** Tipo de la notificación leída: "comentario", "correccion_solicitada",
+   * "completar_solicitado", "aprobada"… */
+  detalle: varchar("detalle", { length: 60 }),
+  cantidad: int("cantidad").default(1).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (table) => ({
+  fechaIdx: index("oficinaActividad_fecha_idx").on(table.createdAt),
+}));
+export type OficinaActividad = typeof oficinaActividad.$inferSelect;
+export type InsertOficinaActividad = typeof oficinaActividad.$inferInsert;
+
 /** ---- Agente de Correo (Oficina) ---- */
 
 /** Un buzón del Google Workspace de la firma que el Agente de Correo

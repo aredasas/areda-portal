@@ -463,6 +463,13 @@
       "when": 1790946797099,
       "tag": "0065_living_scalphunter",
       "breakpoints": true
+    },
+    {
+      "idx": 66,
+      "version": "5",
+      "when": 1790963140222,
+      "tag": "0066_needy_mantis",
+      "breakpoints": true
     }
   ]
 }

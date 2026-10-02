@@ -10,6 +10,7 @@ import {
 } from "../drizzle/schema";
 import { invokeLLM } from "./_core/llm";
 import { bogotaTodayUTCMidnight } from "./dateUtils";
+import { calcularInformeEquipo, contextoChatEstadista, entregadaATiempo, DIAS_RANKING } from "./oficinaEstadistaDb";
 
 // ---------------------------------------------------------------------
 // Agentes — perfil y estado
@@ -154,7 +155,7 @@ function construirSystemPrompt(agente: { nombre: string; personalidad: string | 
 
 export const ESFUERZO_A_MAX_TOKENS: Record<string, number> = { low: 500, medium: 1200, high: 2200 };
 
-export async function enviarMensajeChat(agenteId: number, mensajeUsuario: string): Promise<{ respuesta: string }> {
+export async function enviarMensajeChat(agenteId: number, mensajeUsuario: string, usuarioId?: number): Promise<{ respuesta: string }> {
   const db = await getDb();
   if (!db) throw new Error("Base de datos no disponible");
   const agente = await getAgenteById(agenteId);
@@ -172,9 +173,13 @@ export async function enviarMensajeChat(agenteId: number, mensajeUsuario: string
   if (agente.tipo === "estadista_tareas") {
     const solicitudesPendientes = await db.select().from(oficinaSolicitudes)
       .where(and(eq(oficinaSolicitudes.agenteId, agenteId), eq(oficinaSolicitudes.estado, "pendiente")));
-    contexto = solicitudesPendientes.length > 0
-      ? solicitudesPendientes.map(s => `- [${s.severidad}] ${s.titulo}: ${s.detalle || ""}`).join("\n")
+    const hallazgos = solicitudesPendientes.length > 0
+      ? `Hallazgos pendientes:\n${solicitudesPendientes.map(s => `- [${s.severidad}] ${s.titulo}: ${s.detalle || ""}`).join("\n")}`
       : "No hay hallazgos pendientes en este momento — la última revisión no encontró nada que requiera tu atención.";
+    // El informe del equipo (pendientes, horas, ranking y actividad de hoy)
+    // con las mismas cifras de la pestaña Informe: así, cuando Arlex pide
+    // "el informe" por chat, responde con datos reales y no inventa.
+    contexto = `${hallazgos}\n\n${await contextoChatEstadista(usuarioId)}`;
   } else if (agente.tipo === "correo") {
     // Import dinámico: oficinaCorreoDb ya importa este módulo.
     const { contextoChatCorreo } = await import("./oficinaCorreoDb");
@@ -334,7 +339,7 @@ async function calcularHallazgos(db: NonNullable<Awaited<ReturnType<typeof getDb
     if (!t.assignedToName || !t.dueDate || !t.completedAt) continue;
     const key = t.assignedToName;
     const stats = cumplimientoPorColaborador.get(key) || { aTiempo: 0, tarde: 0 };
-    if (new Date(t.completedAt) <= new Date(t.dueDate)) stats.aTiempo++; else stats.tarde++;
+    if (entregadaATiempo(t.completedAt, t.dueDate)) stats.aTiempo++; else stats.tarde++;
     cumplimientoPorColaborador.set(key, stats);
   }
   const cumplimiento = Array.from(cumplimientoPorColaborador.entries()).map(([nombre, s]) => ({
@@ -364,6 +369,14 @@ export async function revisarAhoraEstadista(): Promise<{ resumen: string; solici
 
   try {
     const { hallazgos, metricas } = await calcularHallazgos(db);
+    // Cómo va cada persona (pendientes, devueltas, horas y ranking) — las
+    // mismas cifras de la pestaña Informe, para que el resumen las mencione.
+    const informe = await calcularInformeEquipo();
+    (metricas as Record<string, unknown>).equipo = informe.colaboradores.map(f => ({
+      nombre: f.nombreCorto, porTerminar: f.porTerminar, vencidas: f.vencidas, devueltas: f.devueltas, porCompletar: f.porCompletar,
+      puestoRanking: f.posicion, puntaje: f.eficiencia.puntaje,
+    }));
+    (metricas as Record<string, unknown>).rankingDias = DIAS_RANKING;
 
     let solicitudesCreadas = 0;
     for (const h of hallazgos) {
@@ -398,7 +411,7 @@ async function redactarResumen(agente: { nombre: string; personalidad: string | 
   try {
     const respuesta = await invokeLLM({
       messages: [
-        { role: "system", content: construirSystemPrompt(agente as any) + "\nRedacta un resumen ejecutivo de máximo 4-5 líneas en español, directo, sin adornos, basado ÚNICAMENTE en las métricas que te paso — no inventes nombres ni cifras que no estén ahí." },
+        { role: "system", content: construirSystemPrompt(agente as any) + "\nRedacta un resumen ejecutivo de máximo 5-6 líneas en español, directo, sin adornos, basado ÚNICAMENTE en las métricas que te paso — no inventes nombres ni cifras que no estén ahí. Si viene la lista \"equipo\", menciona quién va primero en el ranking de eficiencia y quién tiene más tareas devueltas o vencidas." },
         { role: "user", content: `Métricas de esta revisión (JSON):\n${JSON.stringify(metricas)}\n\nHallazgos totales: ${totalHallazgos}. Nuevos (no vistos antes): ${nuevos}.` },
       ],
       max_tokens: 400,

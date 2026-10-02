@@ -22,6 +22,7 @@ import {
   Tablet,
   MapPin,
 } from "lucide-react";
+import { calcularJornada, formatearHoras } from "@shared/jornada";
 
 const typeLabels: Record<string, string> = {
   inicio: "Inicio",
@@ -49,12 +50,7 @@ const deviceLabels: Record<string, string> = {
   desconocido: "Dispositivo desconocido",
 };
 
-function formatHours(ms: number) {
-  const totalMinutes = Math.round(ms / 60000);
-  const h = Math.floor(totalMinutes / 60);
-  const m = totalMinutes % 60;
-  return `${h}h ${m}m`;
-}
+const formatHours = formatearHoras;
 
 const blockHourLabels: Record<string, string[]> = {
   morning: ["8-9", "9-10", "10-11", "11-12"],
@@ -182,13 +178,9 @@ export default function Asistencia() {
               const entryByType: Record<string, any> = {};
               data.entries.forEach((e: any) => { marksByType[e.type] = new Date(e.timestamp); entryByType[e.type] = e; });
 
-              let workedMs = 0;
-              if (marksByType.inicio && marksByType.salida_almuerzo) {
-                workedMs += marksByType.salida_almuerzo.getTime() - marksByType.inicio.getTime();
-              }
-              if (marksByType.regreso_almuerzo && marksByType.fin) {
-                workedMs += marksByType.fin.getTime() - marksByType.regreso_almuerzo.getTime();
-              }
+              // Misma regla que usa el informe del Estadista en la Oficina
+              // (shared/jornada.ts), para que las horas coincidan en ambos.
+              const workedMs = calcularJornada(data.entries).ms;
 
               const userTasks = log?.completedTasks?.filter((t: any) => t.completedById === parseInt(userId)) || [];
               const userDeadlines = log?.completedDeadlines?.filter((d: any) => d.completedById === parseInt(userId)) || [];
