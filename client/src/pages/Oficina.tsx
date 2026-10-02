@@ -212,6 +212,7 @@ export default function Oficina() {
             <EscritorioAgente
               agente={estadista}
               left="16%"
+              personaje="estadista"
               onAbrir={() => setAgenteAbiertoId(estadista.id)}
             />
           )}
@@ -220,16 +221,16 @@ export default function Oficina() {
           {agenteCorreo ? (
             <EscritorioAgente
               agente={agenteCorreo}
-              left="46%"
-              sprite="correo"
+              left="45%"
+              personaje="correo"
               onAbrir={() => setAgenteAbiertoId(agenteCorreo.id)}
             />
           ) : (
-            <EscritorioProximamente left="48%" label="Agente de Correo" />
+            <EscritorioProximamente left="45%" label="Agente de Correo" personaje="correo" />
           )}
 
           {/* Escritorio "próximamente" */}
-          <EscritorioProximamente left="72%" label="Monitor de Desarrollo" />
+          <EscritorioProximamente left="74%" label="Monitor de Desarrollo" personaje="desarrollo" />
         </div>
 
         {/* ---- Panel de solicitudes pendientes (todas, cualquier agente) ---- */}
@@ -287,14 +288,42 @@ export default function Oficina() {
   );
 }
 
-function EscritorioAgente({ agente, left, onAbrir, sprite: personaje = "administrativo" }: {
-  agente: any; left: string; onAbrir: () => void;
-  /** Prefijo de las imágenes del personaje en /oficina (…-normal.png y
-   * …-mano-levantada.png). */
-  sprite?: "administrativo" | "correo";
+/** Personaje de cada agente: prefijo de sus dos imágenes en /oficina
+ * (…-normal.png y …-mano-levantada.png, mismo encuadre en ambas para que
+ * no "salte" al cambiar de pose). */
+type Personaje = "estadista" | "correo" | "desarrollo";
+
+/** Un puesto de trabajo: el personaje DETRÁS del escritorio. El escritorio
+ * se dibuja encima y le tapa las piernas; el personaje queda de pie al
+ * lado del monitor (no detrás de él) para que se le vean el cuerpo y la
+ * mano levantada. Todas las medidas son porcentajes del ancho/alto del
+ * escritorio, así la composición se conserva a cualquier tamaño. */
+function PuestoDeTrabajo({ personaje, pose, alt, apagado = false }: {
+  personaje: Personaje; pose: "normal" | "mano-levantada"; alt: string;
+  /** Puesto "próximamente": en gris y atenuado. */
+  apagado?: boolean;
+}) {
+  return (
+    <div className={`relative w-[115%] ${apagado ? "grayscale opacity-45" : ""}`}>
+      <img
+        src={`/oficina/${personaje}-${pose}.png`} alt={alt}
+        className="absolute max-w-none drop-shadow-md transition-transform group-hover:-translate-y-1"
+        style={{
+          width: "92%", left: "-17%", bottom: "7.5%",
+          // Lo que queda por debajo del tablero del escritorio no se dibuja
+          // (si no, los pies asomarían por el hueco entre las patas).
+          clipPath: "inset(-10% -10% 28% -10%)",
+        }}
+      />
+      <img src="/oficina/escritorio.png" alt="" className="relative block w-full pointer-events-none" />
+    </div>
+  );
+}
+
+function EscritorioAgente({ agente, left, onAbrir, personaje }: {
+  agente: any; left: string; onAbrir: () => void; personaje: Personaje;
 }) {
   const tieneAtencion = agente.solicitudesPendientes > 0;
-  const sprite = `${personaje}-${tieneAtencion ? "mano-levantada" : "normal"}.png`;
   return (
     <button
       onClick={onAbrir}
@@ -302,24 +331,19 @@ function EscritorioAgente({ agente, left, onAbrir, sprite: personaje = "administ
       className="absolute bottom-0 flex flex-col items-center group"
       style={{ left, width: "20%" }}
     >
-      <img
-        src={`/oficina/${sprite}`} alt={agente.nombre}
-        className="w-full drop-shadow-md transition-transform group-hover:-translate-y-1"
-        style={{ imageRendering: "pixelated" }}
-      />
-      <img src="/oficina/escritorio.png" alt="" className="w-[115%] -mt-[38%] pointer-events-none" />
-      <div className="mt-1 flex flex-col items-center gap-1">
-        <span className="text-xs font-medium bg-white/90 px-2 py-0.5 rounded-full border shadow-sm">{agente.nombre}</span>
+      <PuestoDeTrabajo personaje={personaje} pose={tieneAtencion ? "mano-levantada" : "normal"} alt={agente.nombre} />
+      <div className="mt-1 flex w-full flex-col items-center gap-1">
+        <span className="text-[9px] sm:text-xs font-medium max-w-[140%] truncate bg-white/90 px-1.5 sm:px-2 py-0.5 rounded-full border shadow-sm">{agente.nombre}</span>
         {/* Fila de alto fijo: el personaje no sube ni baja según tenga
             pendientes o error, y todos los agentes quedan alineados. */}
         <div className="flex h-[18px] items-center gap-1">
           {tieneAtencion && (
-            <Badge className="bg-red-100 text-red-800 border-red-200 text-[10px] px-1.5 py-0">
+            <Badge className="bg-red-100 text-red-800 border-red-200 text-[8px] sm:text-[10px] px-1.5 py-0 whitespace-nowrap">
               {agente.solicitudesPendientes} pendiente{agente.solicitudesPendientes > 1 ? "s" : ""}
             </Badge>
           )}
           {agente.estado === "error" && (
-            <Badge className="bg-red-600 text-white border-red-700 text-[10px] px-1.5 py-0">Error</Badge>
+            <Badge className="bg-red-600 text-white border-red-700 text-[8px] sm:text-[10px] px-1.5 py-0">Error</Badge>
           )}
         </div>
       </div>
@@ -327,12 +351,15 @@ function EscritorioAgente({ agente, left, onAbrir, sprite: personaje = "administ
   );
 }
 
-function EscritorioProximamente({ left, label }: { left: string; label: string }) {
+function EscritorioProximamente({ left, label, personaje }: { left: string; label: string; personaje: Personaje }) {
   return (
-    <div className="absolute bottom-0 flex flex-col items-center opacity-40" style={{ left, width: "20%" }}>
-      <div style={{ height: "34%" }} />
-      <img src="/oficina/escritorio.png" alt="" className="w-[115%] pointer-events-none grayscale" />
-      <span className="mt-1 text-xs font-medium bg-white/80 px-2 py-0.5 rounded-full border">{label} — próximamente</span>
+    <div className="absolute bottom-0 flex flex-col items-center" style={{ left, width: "20%" }}>
+      <PuestoDeTrabajo personaje={personaje} pose="normal" alt="" apagado />
+      {/* Mismo alto que la etiqueta + fila de avisos de un agente activo, para que los tres escritorios queden alineados. */}
+      <div className="mt-1 flex w-full flex-col items-center gap-1 opacity-60">
+        <span className="text-[9px] sm:text-xs font-medium max-w-[140%] truncate bg-white/80 px-1.5 sm:px-2 py-0.5 rounded-full border">{label}</span>
+        <span className="flex h-[18px] items-center text-[8px] sm:text-[10px] font-medium text-muted-foreground bg-white/70 px-1.5 rounded-full border">próximamente</span>
+      </div>
     </div>
   );
 }
