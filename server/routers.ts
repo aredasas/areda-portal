@@ -96,6 +96,8 @@ import * as db from "./db";
 import * as informesDb from "./informesDb";
 import { generarReporteERI } from "./informesReportERI";
 import { generarReporteERM } from "./informesReportERM";
+import * as informesFlujo from "./informesFlujoDb";
+import { generarReporteFlujo } from "./informesReportFlujo";
 import * as informesDian from "./informesDianDb";
 import * as informesGestionCliente from "./informesGestionClienteDb";
 import * as informesIva from "./informesIvaDb";
@@ -2083,6 +2085,78 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
         .input(z.object({ fileKey: z.string() }))
         .query(async ({ input, ctx }) => {
           return { signedUrl: await storageGetSignedUrl(input.fileKey) };
+        }),
+    }),
+    // Flujo de efectivo — se arma con el libro auxiliar ya cargado en
+    // Estado de Resultados: documentos que mueven caja o bancos, agrupados
+    // por cuenta contrapartida y conciliados contra los saldos que digita
+    // el contador (ver server/informesFlujoCalculo.ts para el método).
+    flujo: router({
+      // Todo lo que muestra la pestaña: configuración, estado de cada mes,
+      // el comparativo del año y las cuentas de efectivo con sus saldos.
+      informe: protectedProcedure
+        .input(z.object({ clienteId: z.number(), anio: z.number() }))
+        .query(async ({ input, ctx }) => {
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
+          return informesFlujo.armarInformeFlujo(input.clienteId, input.anio);
+        }),
+      guardarCuentasEfectivo: protectedProcedure
+        .input(z.object({ clienteId: z.number(), prefijos: z.array(z.string().max(20)).min(1).max(40) }))
+        .mutation(async ({ input, ctx }) => {
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
+          return { prefijos: await informesFlujo.guardarPrefijosEfectivo(input.clienteId, input.prefijos, ctx.user.id) };
+        }),
+      // Lee el auxiliar completo del mes (puede tardar con archivos de
+      // cientos de miles de filas): se llama un mes a la vez.
+      calcularMes: protectedProcedure
+        .input(z.object({ clienteId: z.number(), anio: z.number(), mes: z.number().min(1).max(12) }))
+        .mutation(async ({ input, ctx }) => {
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
+          return informesFlujo.calcularYGuardarMes(input.clienteId, input.anio, input.mes, ctx.user.id);
+        }),
+      guardarSaldos: protectedProcedure
+        .input(z.object({
+          clienteId: z.number(), anio: z.number(), mes: z.number().min(1).max(12),
+          saldos: z.array(z.object({
+            cuenta: z.string().min(1).max(20),
+            saldoInicial: z.number().finite().nullable(), saldoFinal: z.number().finite().nullable(),
+          })).max(300),
+        }))
+        .mutation(async ({ input, ctx }) => {
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
+          await informesFlujo.guardarSaldos(input.clienteId, input.anio, input.mes, input.saldos, ctx.user.id);
+          return { success: true };
+        }),
+      // Sección y nombre de una cuenta en el flujo de ESTE cliente; con
+      // los dos en null vuelve a la regla general.
+      ajustarCuenta: protectedProcedure
+        .input(z.object({
+          clienteId: z.number(), cuenta: z.string().min(4).max(12),
+          seccion: z.enum(["recaudos", "egresos_operacion", "inversion", "financiacion"]).nullable(),
+          nombre: z.string().max(255).nullable(),
+        }))
+        .mutation(async ({ input, ctx }) => {
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
+          await informesFlujo.guardarAjusteCuenta(input.clienteId, input.cuenta, { seccion: input.seccion, nombre: input.nombre }, ctx.user.id);
+          return { success: true };
+        }),
+      generarExcel: protectedProcedure
+        .input(z.object({ clienteId: z.number(), anio: z.number() }))
+        .mutation(async ({ input, ctx }) => {
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
+          const cliente = await db.getClientById(input.clienteId);
+          if (!cliente) throw new Error("Cliente no encontrado");
+          const nit = cliente.nit ? `${cliente.nit}${cliente.digitoVerificacion ? `-${cliente.digitoVerificacion}` : ""}` : null;
+          const buffer = await generarReporteFlujo(input.clienteId, input.anio, { razonSocial: cliente.razonSocial, nit });
+          const key = `informes/FlujoEfectivo_${input.clienteId}_${input.anio}_${Date.now()}.xlsx`;
+          const { key: fileKey } = await storagePut(
+            key, buffer, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          );
+          await informesDb.guardarReporteGenerado({
+            clienteId: input.clienteId, anio: input.anio, mes: null, tipo: "FLUJO",
+            nivel: "resumen", fileKey, generadoPorId: ctx.user.id,
+          });
+          return { signedUrl: await storageGetSignedUrl(fileKey), fileKey };
         }),
     }),
     // Informe con destino al cliente — resume, en orden cronológico, todo

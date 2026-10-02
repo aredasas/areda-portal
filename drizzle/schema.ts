@@ -1335,3 +1335,115 @@ export const cuentasCobroClientes = mysqlTable("cuentasCobroClientes", {
 }));
 export type CuentaCobroCliente = typeof cuentasCobroClientes.$inferSelect;
 export type InsertCuentaCobroCliente = typeof cuentasCobroClientes.$inferInsert;
+
+/**
+ * ============================================================
+ * FLUJO DE EFECTIVO (módulo Informes) — se arma con el mismo libro
+ * auxiliar ya cargado para el Estado de Resultados. Método: los
+ * documentos (tipo + número de comprobante) que mueven alguna cuenta de
+ * efectivo, validados por sumas iguales y agrupados por la cuenta
+ * contrapartida; el resultado se concilia contra los saldos de caja y
+ * bancos que digita el contador (el portal no guarda balance).
+ * ============================================================
+ */
+
+/** Qué cuentas son efectivo y equivalentes para este cliente, como
+ * prefijos separados por coma (ej. "1105,1110,1120" en el PUC comercial,
+ * "1101" en planes NIIF). Una sola fila por cliente. */
+export const informesFlujoConfig = mysqlTable("informesFlujoConfig", {
+  id: int("id").autoincrement().primaryKey(),
+  clienteId: int("clienteId").notNull().unique(),
+  prefijosEfectivo: varchar("prefijosEfectivo", { length: 500 }).notNull(),
+  actualizadoPorId: int("actualizadoPorId").notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+export type InformeFlujoConfig = typeof informesFlujoConfig.$inferSelect;
+
+/** Un registro por cliente + mes ya calculado: la validación del grupo
+ * de documentos y con qué archivo y qué cuentas de efectivo se calculó
+ * (si cambia alguno de los dos, el mes queda "desactualizado" y hay que
+ * recalcularlo). */
+export const informesFlujoCalculos = mysqlTable("informesFlujoCalculos", {
+  id: int("id").autoincrement().primaryKey(),
+  clienteId: int("clienteId").notNull(),
+  anio: int("anio").notNull(),
+  mes: int("mes").notNull(),
+  fileKey: varchar("fileKey", { length: 500 }).notNull(),
+  prefijosEfectivo: varchar("prefijosEfectivo", { length: 500 }).notNull(),
+  /** Documentos con movimiento en caja o bancos, y sus líneas. */
+  documentos: int("documentos").notNull(),
+  lineas: int("lineas").notNull(),
+  /** Líneas del auxiliar de ese mes (todas, estén o no en el grupo). */
+  lineasAuxiliar: int("lineasAuxiliar").notNull(),
+  totalDebitos: double("totalDebitos").notNull(),
+  totalCreditos: double("totalCreditos").notNull(),
+  /** Documentos del grupo cuya suma de débitos no iguala la de créditos. */
+  descuadrados: int("descuadrados").notNull(),
+  /** JSON `{ [cuenta4]: [{ nombre, neto }] }` — los terceros de mayor
+   * valor de cada cuenta, para la columna de observaciones. */
+  observacionesJson: text("observacionesJson"),
+  /** JSON `[{ cuenta, nombre }]` — cuentas del grupo 11 que trae el
+   * auxiliar, para sugerir cuáles son efectivo al configurar. */
+  cuentasDisponibleJson: text("cuentasDisponibleJson"),
+  calculadoPorId: int("calculadoPorId").notNull(),
+  calculadoAt: timestamp("calculadoAt").defaultNow().onUpdateNow().notNull(),
+}, (table) => ({
+  periodoIdx: uniqueIndex("informesFlujoCalculos_periodo_idx").on(table.clienteId, table.anio, table.mes),
+}));
+export type InformeFlujoCalculo = typeof informesFlujoCalculos.$inferSelect;
+
+/** Movimiento del grupo de documentos, por subcuenta y tipo de
+ * comprobante. "efectivo": las cuentas de caja y bancos; "contrapartida":
+ * lo que explica el flujo; "sin_efecto": líneas que dentro del mismo
+ * documento se cancelan entre sí sin mover plata (el costo de venta
+ * contra el inventario en cada factura) y se excluyen del flujo. */
+export const informesFlujoMovimientos = mysqlTable("informesFlujoMovimientos", {
+  id: int("id").autoincrement().primaryKey(),
+  clienteId: int("clienteId").notNull(),
+  anio: int("anio").notNull(),
+  mes: int("mes").notNull(),
+  clase: mysqlEnum("clase", ["efectivo", "contrapartida", "sin_efecto"]).notNull(),
+  cuenta: varchar("cuenta", { length: 20 }).notNull(),
+  tipoDocumento: varchar("tipoDocumento", { length: 20 }).notNull(),
+  debitos: double("debitos").notNull(),
+  creditos: double("creditos").notNull(),
+  documentos: int("documentos").notNull(),
+  lineas: int("lineas").notNull(),
+}, (table) => ({
+  periodoIdx: index("informesFlujoMovimientos_periodo_idx").on(table.clienteId, table.anio, table.mes),
+}));
+export type InformeFlujoMovimiento = typeof informesFlujoMovimientos.$inferSelect;
+
+/** Saldos de cada cuenta de efectivo al inicio y al final del mes,
+ * digitados por el contador. NULL = todavía no se ha digitado (distinto
+ * de cero). */
+export const informesFlujoSaldos = mysqlTable("informesFlujoSaldos", {
+  id: int("id").autoincrement().primaryKey(),
+  clienteId: int("clienteId").notNull(),
+  anio: int("anio").notNull(),
+  mes: int("mes").notNull(),
+  cuenta: varchar("cuenta", { length: 20 }).notNull(),
+  saldoInicial: double("saldoInicial"),
+  saldoFinal: double("saldoFinal"),
+  actualizadoPorId: int("actualizadoPorId").notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (table) => ({
+  periodoCuentaIdx: uniqueIndex("informesFlujoSaldos_periodo_cuenta_idx").on(table.clienteId, table.anio, table.mes, table.cuenta),
+}));
+export type InformeFlujoSaldo = typeof informesFlujoSaldos.$inferSelect;
+
+/** Ajustes del contador, por cliente, sobre una cuenta contrapartida (a
+ * 4 dígitos): en qué sección del flujo va y con qué nombre aparece. Sin
+ * fila, la cuenta usa la regla por defecto (ver seccionPorDefecto). */
+export const informesFlujoSecciones = mysqlTable("informesFlujoSecciones", {
+  id: int("id").autoincrement().primaryKey(),
+  clienteId: int("clienteId").notNull(),
+  cuenta: varchar("cuenta", { length: 12 }).notNull(),
+  seccion: mysqlEnum("seccion", ["recaudos", "egresos_operacion", "inversion", "financiacion"]),
+  nombre: varchar("nombre", { length: 255 }),
+  actualizadoPorId: int("actualizadoPorId").notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (table) => ({
+  clienteCuentaIdx: uniqueIndex("informesFlujoSecciones_cliente_cuenta_idx").on(table.clienteId, table.cuenta),
+}));
+export type InformeFlujoSeccion = typeof informesFlujoSecciones.$inferSelect;

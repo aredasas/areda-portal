@@ -477,6 +477,13 @@
       "when": 1790969660370,
       "tag": "0067_zippy_the_professor",
       "breakpoints": true
+    },
+    {
+      "idx": 68,
+      "version": "5",
+      "when": 1790982050270,
+      "tag": "0068_abnormal_dreadnoughts",
+      "breakpoints": true
     }
   ]
 }
