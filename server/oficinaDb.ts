@@ -5,6 +5,7 @@ import {
   oficinaMensajes,
   oficinaSolicitudes,
   oficinaRevisiones,
+  oficinaCorreos,
   tasks, users, clients,
 } from "../drizzle/schema";
 import { invokeLLM } from "./_core/llm";
@@ -14,9 +15,9 @@ import { bogotaTodayUTCMidnight } from "./dateUtils";
 // Agentes — perfil y estado
 // ---------------------------------------------------------------------
 
-/** Perfiles por defecto de los agentes de la Oficina. El "Estadista de
- * Tareas" es el único activo en esta primera entrega — correo y
- * desarrollo quedan como escritorios "próximamente" hasta conectarlos. */
+/** Perfiles por defecto de los agentes de la Oficina. Activos: el
+ * "Estadista de Tareas" y el "Agente de Correo" (ver oficinaCorreoDb.ts).
+ * El de desarrollo sigue como escritorio "próximamente". */
 const AGENTES_DEFAULT: InsertOficinaAgente[] = [
   {
     slug: "estadista_tareas",
@@ -33,8 +34,12 @@ const AGENTES_DEFAULT: InsertOficinaAgente[] = [
     slug: "correo",
     nombre: "Agente de Correo",
     tipo: "correo",
+    personalidad: "Atento y preciso — como un asistente de gerencia que lee todo el correo y solo interrumpe por lo que de verdad importa. Cordial y profesional al redactar.",
+    objetivo: "Revisar los buzones de la firma, separar lo importante del ruido y dejar listo lo que se pueda adelantar: el resumen de cada correo, un borrador de respuesta y la tarea para el responsable.",
+    especialidad: "Son urgentes los requerimientos y plazos de la DIAN, UGPP y demás entidades, y cualquier cliente que espere respuesta desde hace más de un día. La publicidad y los boletines no requieren atención.",
+    criterioTerminado: "Cada correo que requiere atención queda con su resumen y la acción sugerida; nunca se envía nada sin que una persona lo revise.",
     esfuerzo: "medium",
-    activo: false,
+    activo: true,
   },
   {
     slug: "desarrollo",
@@ -58,6 +63,16 @@ export async function asegurarAgentesPorDefecto(): Promise<void> {
       await db.insert(oficinaAgentes).values(agente);
     }
   }
+  // El Agente de Correo ya existía como fila "próximamente" (inactivo y sin
+  // perfil) desde la primera entrega de la Oficina: se activa y se le da su
+  // perfil por defecto UNA sola vez — si Arlex ya lo personalizó (tiene
+  // objetivo) o ya está activo, no se toca.
+  const correoDefault = AGENTES_DEFAULT.find(a => a.slug === "correo")!;
+  await db.update(oficinaAgentes).set({
+    activo: true,
+    personalidad: correoDefault.personalidad, objetivo: correoDefault.objetivo,
+    especialidad: correoDefault.especialidad, criterioTerminado: correoDefault.criterioTerminado,
+  }).where(and(eq(oficinaAgentes.slug, "correo"), eq(oficinaAgentes.activo, false), isNull(oficinaAgentes.objetivo)));
 }
 
 export async function listarAgentes() {
@@ -89,7 +104,7 @@ export async function actualizarAgente(id: number, data: {
   await db.update(oficinaAgentes).set(data).where(eq(oficinaAgentes.id, id));
 }
 
-async function marcarEstado(agenteId: number, estado: "libre" | "trabajando" | "esperando" | "error", errorMsg?: string | null): Promise<void> {
+export async function marcarEstado(agenteId: number, estado: "libre" | "trabajando" | "esperando" | "error", errorMsg?: string | null): Promise<void> {
   const db = await getDb();
   if (!db) return;
   await db.update(oficinaAgentes).set({
@@ -101,7 +116,7 @@ async function marcarEstado(agenteId: number, estado: "libre" | "trabajando" | "
 /** Recalcula libre/esperando según si el agente tiene solicitudes
  * pendientes — se llama después de crear o resolver solicitudes. No pisa
  * el estado "error" (ese solo lo limpia una revisión exitosa). */
-async function recalcularEstadoPorSolicitudes(agenteId: number): Promise<void> {
+export async function recalcularEstadoPorSolicitudes(agenteId: number): Promise<void> {
   const db = await getDb();
   if (!db) return;
   const agente = await getAgenteById(agenteId);
@@ -137,7 +152,7 @@ function construirSystemPrompt(agente: { nombre: string; personalidad: string | 
   ].filter(Boolean).join("\n");
 }
 
-const ESFUERZO_A_MAX_TOKENS: Record<string, number> = { low: 500, medium: 1200, high: 2200 };
+export const ESFUERZO_A_MAX_TOKENS: Record<string, number> = { low: 500, medium: 1200, high: 2200 };
 
 export async function enviarMensajeChat(agenteId: number, mensajeUsuario: string): Promise<{ respuesta: string }> {
   const db = await getDb();
@@ -160,6 +175,10 @@ export async function enviarMensajeChat(agenteId: number, mensajeUsuario: string
     contexto = solicitudesPendientes.length > 0
       ? solicitudesPendientes.map(s => `- [${s.severidad}] ${s.titulo}: ${s.detalle || ""}`).join("\n")
       : "No hay hallazgos pendientes en este momento — la última revisión no encontró nada que requiera tu atención.";
+  } else if (agente.tipo === "correo") {
+    // Import dinámico: oficinaCorreoDb ya importa este módulo.
+    const { contextoChatCorreo } = await import("./oficinaCorreoDb");
+    contexto = await contextoChatCorreo();
   }
 
   try {
@@ -184,6 +203,10 @@ export async function enviarMensajeChat(agenteId: number, mensajeUsuario: string
 // Solicitudes
 // ---------------------------------------------------------------------
 
+/** `tipo` de las solicitudes que levanta el Agente de Correo; su `refId`
+ * es el id del correo en oficinaCorreos. */
+export const TIPO_SOLICITUD_CORREO = "correo";
+
 export async function listarSolicitudes(agenteId?: number) {
   const db = await getDb();
   if (!db) return [];
@@ -204,12 +227,18 @@ export async function resolverSolicitud(id: number, accion: "atender" | "descart
     estado: accion === "atender" ? "atendida" : "descartada",
     resueltaAt: new Date(),
   }).where(eq(oficinaSolicitudes.id, id));
+  // Las solicitudes del Agente de Correo apuntan a un correo de su
+  // bandeja: resolverlas aquí también lo saca de "requieren atención" allá.
+  if (solicitud.tipo === TIPO_SOLICITUD_CORREO && solicitud.refId != null) {
+    await db.update(oficinaCorreos).set({ estado: accion === "atender" ? "gestionado" : "descartado" })
+      .where(eq(oficinaCorreos.id, solicitud.refId));
+  }
   await recalcularEstadoPorSolicitudes(solicitud.agenteId);
 }
 
 /** Crea la solicitud solo si no existe ya una pendiente con el mismo
  * tipo+refId — evita duplicar el mismo hallazgo en cada revisión. */
-async function crearSolicitudSiNueva(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, agenteId: number, tipo: string, refId: number | null, titulo: string, detalle: string, severidad: "info" | "atencion" | "urgente"): Promise<boolean> {
+export async function crearSolicitudSiNueva(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, agenteId: number, tipo: string, refId: number | null, titulo: string, detalle: string, severidad: "info" | "atencion" | "urgente"): Promise<boolean> {
   const existente = await db.select({ id: oficinaSolicitudes.id }).from(oficinaSolicitudes)
     .where(and(
       eq(oficinaSolicitudes.agenteId, agenteId),

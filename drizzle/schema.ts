@@ -1090,9 +1090,10 @@ export type InsertRentaCuentaCobro = typeof rentaCuentasCobro.$inferInsert;
 
 /** ---- Módulo Oficina — agentes de IA para Arlex (menú restringido a su
  * cédula, no a "admin" en general — ver assertOficinaAccess en routers.ts).
- * Primer agente: "Estadista de Tareas" (analiza tasks/taxDeadlines de
- * Areda Work, sin acceso externo). Agentes de correo y de desarrollo se
- * suman en entregas posteriores, reutilizando este mismo esquema. */
+ * Agentes activos: "Estadista de Tareas" (analiza tasks/taxDeadlines de
+ * Areda Work, sin acceso externo) y "Agente de Correo" (lee los buzones del
+ * Workspace — tablas oficinaBuzones/oficinaCorreos más abajo). El de
+ * desarrollo se suma en una entrega posterior con este mismo esquema. */
 
 /** Un agente de la Oficina — su perfil configurable y su estado visible
  * en la escena (libre = sin pendientes; esperando = tiene solicitudes sin
@@ -1111,7 +1112,7 @@ export const oficinaAgentes = mysqlTable("oficinaAgentes", {
   criterioTerminado: text("criterioTerminado"),
   esfuerzo: mysqlEnum("esfuerzo", ["low", "medium", "high"]).default("medium").notNull(),
   /** false = "próximamente", ocupa un escritorio pero no se puede abrir
-   * todavía (agentes de correo/desarrollo antes de su propia entrega). */
+   * todavía (el agente de desarrollo antes de su propia entrega). */
   activo: boolean("activo").default(true).notNull(),
   ultimaRevisionAt: timestamp("ultimaRevisionAt"),
   ultimoErrorMensaje: text("ultimoErrorMensaje"),
@@ -1176,6 +1177,74 @@ export const oficinaRevisiones = mysqlTable("oficinaRevisiones", {
 }));
 export type OficinaRevision = typeof oficinaRevisiones.$inferSelect;
 export type InsertOficinaRevision = typeof oficinaRevisiones.$inferInsert;
+
+/** ---- Agente de Correo (Oficina) ---- */
+
+/** Un buzón del Google Workspace de la firma que el Agente de Correo
+ * revisa. El acceso es por la cuenta de servicio con delegación de dominio
+ * (ver server/gmail.ts) — aquí no se guarda ninguna credencial, solo qué
+ * buzones mirar. */
+export const oficinaBuzones = mysqlTable("oficinaBuzones", {
+  id: int("id").autoincrement().primaryKey(),
+  email: varchar("email", { length: 320 }).notNull().unique(),
+  /** Nombre de la persona o del área dueña del buzón (ej. "Arlex",
+   * "Contabilidad") — se muestra en la bandeja y firma los borradores. */
+  nombre: varchar("nombre", { length: 120 }).notNull(),
+  /** Firma que se pone al final de los borradores de este buzón. Si está
+   * vacía se firma solo con `nombre`. */
+  firma: text("firma"),
+  activo: boolean("activo").default(true).notNull(),
+  /** Última vez que la conexión con el buzón funcionó (revisión o prueba). */
+  ultimaConexionAt: timestamp("ultimaConexionAt"),
+  ultimaRevisionAt: timestamp("ultimaRevisionAt"),
+  /** Mensaje del último fallo de conexión; NULL si la última vez funcionó. */
+  ultimoError: text("ultimoError"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+export type OficinaBuzon = typeof oficinaBuzones.$inferSelect;
+export type InsertOficinaBuzon = typeof oficinaBuzones.$inferInsert;
+
+/** Un correo recibido que el agente ya leyó y clasificó. NO se guarda el
+ * cuerpo completo — solo el extracto corto que da Gmail y el resumen del
+ * agente; cuando hace falta el texto (para redactar un borrador) se vuelve
+ * a leer en vivo de Gmail. `buzonId`+`gmailId` es único: un correo nunca
+ * se clasifica dos veces. */
+export const oficinaCorreos = mysqlTable("oficinaCorreos", {
+  id: int("id").autoincrement().primaryKey(),
+  buzonId: int("buzonId").notNull(),
+  gmailId: varchar("gmailId", { length: 32 }).notNull(),
+  threadId: varchar("threadId", { length: 32 }).notNull(),
+  remitenteNombre: varchar("remitenteNombre", { length: 255 }),
+  remitenteEmail: varchar("remitenteEmail", { length: 320 }).notNull(),
+  asunto: varchar("asunto", { length: 500 }).default("").notNull(),
+  fechaCorreo: timestamp("fechaCorreo").notNull(),
+  snippet: text("snippet"),
+  /** cliente | entidad | proveedor | interno | notificacion | boletin | otro
+   * (texto libre validado en código, para no depender de migraciones de
+   * enum cada vez que se afine la clasificación). */
+  categoria: varchar("categoria", { length: 30 }).default("otro").notNull(),
+  /** urgente/atencion levantan una solicitud en la Oficina; info/ninguna no. */
+  prioridad: mysqlEnum("prioridad", ["urgente", "atencion", "info", "ninguna"]).default("info").notNull(),
+  resumen: text("resumen"),
+  accionSugerida: text("accionSugerida"),
+  /** Cliente de la firma reconocido por el correo o dominio del remitente. */
+  clientId: int("clientId"),
+  estado: mysqlEnum("estado", ["pendiente", "gestionado", "descartado"]).default("pendiente").notNull(),
+  /** Borrador de respuesta que el agente dejó en Gmail (id del borrador,
+   * su texto y cuándo se generó). Nunca se envía solo. */
+  borradorId: varchar("borradorId", { length: 64 }),
+  borradorTexto: text("borradorTexto"),
+  borradorAt: timestamp("borradorAt"),
+  /** Tarea de AREDA Work creada a partir de este correo. */
+  taskId: int("taskId"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (table) => ({
+  mensajeIdx: uniqueIndex("oficinaCorreos_buzon_gmail_idx").on(table.buzonId, table.gmailId),
+  fechaIdx: index("oficinaCorreos_fecha_idx").on(table.fechaCorreo),
+  estadoIdx: index("oficinaCorreos_estado_idx").on(table.estado, table.prioridad),
+}));
+export type OficinaCorreo = typeof oficinaCorreos.$inferSelect;
+export type InsertOficinaCorreo = typeof oficinaCorreos.$inferInsert;
 
 /** Cuentas de cobro para clientes GENERALES (empresas, distinto de las de
  * Renta Persona Natural en rentaCuentasCobro) — prefijo propio "AP",

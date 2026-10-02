@@ -107,6 +107,7 @@ import { generarCuentaCobroPdf } from "./rentaCuentaCobro";
 import { generarCuentaCobroClientePdf, leerConceptosCuentaCobro, fechaCalendarioAUtcMidnight } from "./clienteCuentaCobroPdf";
 import { bogotaTodayUTCMidnight } from "./dateUtils";
 import * as oficinaDb from "./oficinaDb";
+import * as oficinaCorreoDb from "./oficinaCorreoDb";
 import { invokeLLM } from "./_core/llm";
 import { isDriveConfigured, extractFolderIdFromUrl, testFolderAccess, listSubfoldersRecursive, listAllFilesRecursive, uploadFileToDrive, resolveUploadFolder } from "./googleDrive";
 import { sdk } from "./_core/sdk";
@@ -3532,10 +3533,10 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
   }),
 
   // ---- Módulo Oficina — agentes de IA, solo para Arlex ----
-  // Primera entrega: solo el agente "Estadista de Tareas" (tipo
-  // "estadista_tareas") está activo y operativo. Los agentes de correo y
-  // desarrollo existen como filas (escritorios "próximamente" en la UI)
-  // pero sus propios endpoints se agregan cuando se conecten.
+  // Agentes operativos: "Estadista de Tareas" (router `estadista`) y
+  // "Agente de Correo" (router `correo`). El de desarrollo existe como
+  // fila (escritorio "próximamente" en la UI) y sus endpoints se agregan
+  // cuando se conecte.
   oficina: router({
     agentes: router({
       list: protectedProcedure.query(async ({ ctx }) => {
@@ -3599,6 +3600,94 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
         assertOficinaAccess(ctx.user.cedula);
         return oficinaDb.revisarAhoraEstadista();
       }),
+    }),
+    // ---- Agente de Correo: buzones del Workspace (cuenta de servicio con
+    // delegación de dominio — ver server/gmail.ts). Lee, clasifica y
+    // alerta; redacta BORRADORES (nunca envía) y crea tareas desde un
+    // correo. ----
+    correo: router({
+      conexion: protectedProcedure.query(async ({ ctx }) => {
+        assertOficinaAccess(ctx.user.cedula);
+        return oficinaCorreoDb.datosConexion();
+      }),
+      buzones: router({
+        listar: protectedProcedure.query(async ({ ctx }) => {
+          assertOficinaAccess(ctx.user.cedula);
+          return oficinaCorreoDb.listarBuzones();
+        }),
+        agregar: protectedProcedure
+          .input(z.object({ email: z.string().min(3).max(320), nombre: z.string().min(1).max(120) }))
+          .mutation(async ({ input, ctx }) => {
+            assertOficinaAccess(ctx.user.cedula);
+            return oficinaCorreoDb.agregarBuzon(input);
+          }),
+        actualizar: protectedProcedure
+          .input(z.object({
+            id: z.number(),
+            nombre: z.string().max(120).optional(),
+            firma: z.string().max(2000).nullable().optional(),
+            activo: z.boolean().optional(),
+          }))
+          .mutation(async ({ input, ctx }) => {
+            assertOficinaAccess(ctx.user.cedula);
+            const { id, ...datos } = input;
+            await oficinaCorreoDb.actualizarBuzon(id, datos);
+            return { success: true };
+          }),
+        probar: protectedProcedure
+          .input(z.object({ id: z.number() }))
+          .mutation(async ({ input, ctx }) => {
+            assertOficinaAccess(ctx.user.cedula);
+            return oficinaCorreoDb.probarConexionBuzon(input.id);
+          }),
+        eliminar: protectedProcedure
+          .input(z.object({ id: z.number() }))
+          .mutation(async ({ input, ctx }) => {
+            assertOficinaAccess(ctx.user.cedula);
+            await oficinaCorreoDb.eliminarBuzon(input.id);
+            return { success: true };
+          }),
+      }),
+      revisarAhora: protectedProcedure.mutation(async ({ ctx }) => {
+        assertOficinaAccess(ctx.user.cedula);
+        return oficinaCorreoDb.revisarAhoraCorreo();
+      }),
+      listar: protectedProcedure
+        .input(z.object({
+          vista: z.enum(["atencion", "todos"]).default("atencion"),
+          buzonId: z.number().optional(),
+        }))
+        .query(async ({ input, ctx }) => {
+          assertOficinaAccess(ctx.user.cedula);
+          return oficinaCorreoDb.listarCorreos(input);
+        }),
+      marcar: protectedProcedure
+        .input(z.object({ id: z.number(), estado: z.enum(["pendiente", "gestionado", "descartado"]) }))
+        .mutation(async ({ input, ctx }) => {
+          assertOficinaAccess(ctx.user.cedula);
+          await oficinaCorreoDb.marcarCorreo(input.id, input.estado);
+          return { success: true };
+        }),
+      redactarBorrador: protectedProcedure
+        .input(z.object({ id: z.number(), instrucciones: z.string().max(2000).optional() }))
+        .mutation(async ({ input, ctx }) => {
+          assertOficinaAccess(ctx.user.cedula);
+          return oficinaCorreoDb.redactarBorrador(input.id, input.instrucciones);
+        }),
+      crearTarea: protectedProcedure
+        .input(z.object({
+          correoId: z.number(),
+          title: z.string().trim().min(1).max(255),
+          description: z.string().max(5000).optional(),
+          clientId: z.number(),
+          assignedToId: z.number().optional(),
+          dueDate: z.string().optional(),
+          priority: z.enum(["baja", "media", "alta", "urgente"]).optional(),
+        }))
+        .mutation(async ({ input, ctx }) => {
+          assertOficinaAccess(ctx.user.cedula);
+          return oficinaCorreoDb.crearTareaDesdeCorreo(input, ctx.user.id);
+        }),
     }),
   }),
 });

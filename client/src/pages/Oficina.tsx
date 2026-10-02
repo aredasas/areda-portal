@@ -14,9 +14,10 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { trpc } from "@/lib/trpc";
 import {
   AlertCircle, Loader2, Send, RefreshCw, Volume2, VolumeX, Check, X,
-  MessageSquare, Inbox, Settings, Sparkles,
+  MessageSquare, Inbox, Settings, Sparkles, Mail, AtSign, ArrowUpRight,
 } from "lucide-react";
 import { toast } from "sonner";
+import { BandejaCorreoTab, BuzonesCorreoTab } from "@/components/oficina/CorreoAgente";
 
 const VOZ_KEY = "oficina-voz-activa";
 const VOZ_VISTOS_KEY = "oficina-voz-vistos";
@@ -119,16 +120,39 @@ export default function Oficina() {
 
   const [agenteAbiertoId, setAgenteAbiertoId] = useState<number | null>(null);
 
-  const revisarMutation = trpc.oficina.estadista.revisarAhora.useMutation({
-    onSuccess: (data) => {
-      toast.success(data.solicitudesCreadas > 0
-        ? `Revisión completa — ${data.solicitudesCreadas} hallazgo(s) nuevo(s)`
-        : "Revisión completa — sin novedades");
-      utils.oficina.agentes.list.invalidate();
-      utils.oficina.solicitudes.listar.invalidate();
-    },
-    onError: (err) => toast.error(err.message || "No se pudo completar la revisión"),
-  });
+  // "Revisar ahora" pone a trabajar a los dos agentes a la vez. Cada uno
+  // reporta por su cuenta: si uno falla, el otro igual entrega su resultado.
+  const revisarTareasMutation = trpc.oficina.estadista.revisarAhora.useMutation();
+  const revisarCorreoMutation = trpc.oficina.correo.revisarAhora.useMutation();
+  const revisando = revisarTareasMutation.isPending || revisarCorreoMutation.isPending;
+
+  const handleRevisarAhora = async () => {
+    const [tareas, correo] = await Promise.allSettled([
+      revisarTareasMutation.mutateAsync(),
+      revisarCorreoMutation.mutateAsync(),
+    ]);
+    utils.oficina.agentes.list.invalidate();
+    utils.oficina.solicitudes.listar.invalidate();
+    utils.oficina.correo.listar.invalidate();
+    utils.oficina.correo.buzones.listar.invalidate();
+
+    const partes: string[] = [];
+    if (tareas.status === "fulfilled") {
+      partes.push(tareas.value.solicitudesCreadas > 0 ? `Tareas: ${tareas.value.solicitudesCreadas} hallazgo(s) nuevo(s)` : "Tareas: sin novedades");
+    } else {
+      toast.error(`Tareas: ${tareas.reason?.message || "no se pudo completar la revisión"}`);
+    }
+    if (correo.status === "fulfilled") {
+      partes.push(correo.value.correosNuevos > 0
+        ? `Correo: ${correo.value.correosNuevos} nuevo(s), ${correo.value.solicitudesCreadas} para atender`
+        : "Correo: sin correos nuevos");
+      if (correo.value.buzonesConError > 0) toast.warning("Correo: algún buzón no se pudo leer — abre el Agente de Correo para ver el detalle");
+    } else if (!/no hay buzones/i.test(correo.reason?.message || "")) {
+      // Que aún no haya buzones conectados no es un error de la revisión.
+      toast.error(`Correo: ${correo.reason?.message || "no se pudo revisar"}`);
+    }
+    if (partes.length > 0) toast.success(`Revisión completa — ${partes.join(" · ")}`);
+  };
 
   if (!isAuthorized) {
     return (
@@ -146,6 +170,8 @@ export default function Oficina() {
 
   const agentes = agentesQuery.data || [];
   const estadista = agentes.find((a: any) => a.tipo === "estadista_tareas");
+  const agenteCorreo = agentes.find((a: any) => a.tipo === "correo" && a.activo);
+  const nombreAgente = new Map<number, string>(agentes.map((a: any) => [a.id, a.nombre]));
   const agenteAbierto = agentes.find((a: any) => a.id === agenteAbiertoId) || null;
 
   return (
@@ -155,7 +181,7 @@ export default function Oficina() {
           <div>
             <h1 className="text-2xl font-semibold">Oficina</h1>
             <p className="text-muted-foreground text-sm">
-              Tus agentes de IA — visible solo para tu usuario. Primera entrega: el Estadista de Tareas.
+              Tus agentes de IA — visible solo para tu usuario. Haz clic en un agente para hablarle o ver su trabajo.
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -190,8 +216,19 @@ export default function Oficina() {
             />
           )}
 
-          {/* Escritorios "próximamente" */}
-          <EscritorioProximamente left="48%" label="Agente de Correo" />
+          {/* Escritorio 2 — Agente de Correo */}
+          {agenteCorreo ? (
+            <EscritorioAgente
+              agente={agenteCorreo}
+              left="46%"
+              sprite="correo"
+              onAbrir={() => setAgenteAbiertoId(agenteCorreo.id)}
+            />
+          ) : (
+            <EscritorioProximamente left="48%" label="Agente de Correo" />
+          )}
+
+          {/* Escritorio "próximamente" */}
           <EscritorioProximamente left="72%" label="Monitor de Desarrollo" />
         </div>
 
@@ -206,11 +243,12 @@ export default function Oficina() {
             </CardTitle>
             {estadista && (
               <Button
-                size="sm" onClick={() => revisarMutation.mutate()} disabled={revisarMutation.isPending}
+                size="sm" onClick={handleRevisarAhora} disabled={revisando}
                 className="bg-[#EDA011] hover:bg-[#d48f0f] text-white"
+                title="Pone a revisar a todos los agentes: tareas y correo"
               >
-                {revisarMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-1.5" /> : <RefreshCw className="w-4 h-4 mr-1.5" />}
-                Revisar ahora
+                {revisando ? <Loader2 className="w-4 h-4 animate-spin mr-1.5" /> : <RefreshCw className="w-4 h-4 mr-1.5" />}
+                {revisando ? "Revisando…" : "Revisar ahora"}
               </Button>
             )}
           </CardHeader>
@@ -222,13 +260,20 @@ export default function Oficina() {
             ) : (
               <div className="space-y-2">
                 {solicitudesPendientes.map((s: any) => (
-                  <SolicitudRow key={s.id} solicitud={s} />
+                  <SolicitudRow
+                    key={s.id} solicitud={s} agenteNombre={nombreAgente.get(s.agenteId)}
+                    onAbrirAgente={s.tipo === "correo" ? () => setAgenteAbiertoId(s.agenteId) : undefined}
+                  />
                 ))}
               </div>
             )}
-            {estadista?.ultimaRevisionAt && (
+            {(estadista?.ultimaRevisionAt || agenteCorreo?.ultimaRevisionAt) && (
               <p className="text-xs text-muted-foreground mt-3">
-                Última revisión: {new Date(estadista.ultimaRevisionAt).toLocaleString("es-CO")}
+                Última revisión —{" "}
+                {[
+                  estadista?.ultimaRevisionAt ? `tareas: ${new Date(estadista.ultimaRevisionAt).toLocaleString("es-CO")}` : null,
+                  agenteCorreo?.ultimaRevisionAt ? `correo: ${new Date(agenteCorreo.ultimaRevisionAt).toLocaleString("es-CO")}` : null,
+                ].filter(Boolean).join(" · ")}
               </p>
             )}
           </CardContent>
@@ -242,9 +287,14 @@ export default function Oficina() {
   );
 }
 
-function EscritorioAgente({ agente, left, onAbrir }: { agente: any; left: string; onAbrir: () => void }) {
+function EscritorioAgente({ agente, left, onAbrir, sprite: personaje = "administrativo" }: {
+  agente: any; left: string; onAbrir: () => void;
+  /** Prefijo de las imágenes del personaje en /oficina (…-normal.png y
+   * …-mano-levantada.png). */
+  sprite?: "administrativo" | "correo";
+}) {
   const tieneAtencion = agente.solicitudesPendientes > 0;
-  const sprite = tieneAtencion ? "administrativo-mano-levantada.png" : "administrativo-normal.png";
+  const sprite = `${personaje}-${tieneAtencion ? "mano-levantada" : "normal"}.png`;
   return (
     <button
       onClick={onAbrir}
@@ -260,14 +310,18 @@ function EscritorioAgente({ agente, left, onAbrir }: { agente: any; left: string
       <img src="/oficina/escritorio.png" alt="" className="w-[115%] -mt-[38%] pointer-events-none" />
       <div className="mt-1 flex flex-col items-center gap-1">
         <span className="text-xs font-medium bg-white/90 px-2 py-0.5 rounded-full border shadow-sm">{agente.nombre}</span>
-        {tieneAtencion && (
-          <Badge className="bg-red-100 text-red-800 border-red-200 text-[10px] px-1.5 py-0">
-            {agente.solicitudesPendientes} pendiente{agente.solicitudesPendientes > 1 ? "s" : ""}
-          </Badge>
-        )}
-        {agente.estado === "error" && (
-          <Badge className="bg-red-600 text-white border-red-700 text-[10px] px-1.5 py-0">Error</Badge>
-        )}
+        {/* Fila de alto fijo: el personaje no sube ni baja según tenga
+            pendientes o error, y todos los agentes quedan alineados. */}
+        <div className="flex h-[18px] items-center gap-1">
+          {tieneAtencion && (
+            <Badge className="bg-red-100 text-red-800 border-red-200 text-[10px] px-1.5 py-0">
+              {agente.solicitudesPendientes} pendiente{agente.solicitudesPendientes > 1 ? "s" : ""}
+            </Badge>
+          )}
+          {agente.estado === "error" && (
+            <Badge className="bg-red-600 text-white border-red-700 text-[10px] px-1.5 py-0">Error</Badge>
+          )}
+        </div>
       </div>
     </button>
   );
@@ -283,7 +337,12 @@ function EscritorioProximamente({ left, label }: { left: string; label: string }
   );
 }
 
-function SolicitudRow({ solicitud }: { solicitud: any }) {
+function SolicitudRow({ solicitud, agenteNombre, onAbrirAgente }: {
+  solicitud: any; agenteNombre?: string;
+  /** Si viene, la solicitud se puede abrir en el diálogo de su agente
+   * (las de correo: para redactar el borrador o crear la tarea). */
+  onAbrirAgente?: () => void;
+}) {
   const utils = trpc.useUtils();
   const resolverMutation = trpc.oficina.solicitudes.resolver.useMutation({
     onSuccess: () => {
@@ -300,11 +359,17 @@ function SolicitudRow({ solicitud }: { solicitud: any }) {
           <Badge variant="outline" className={`${severidadColors[solicitud.severidad]} text-[10px] px-1.5 py-0`}>
             {severidadLabels[solicitud.severidad]}
           </Badge>
-          <p className="font-medium">{solicitud.titulo}</p>
+          <p className="font-medium break-words min-w-0">{solicitud.titulo}</p>
         </div>
-        {solicitud.detalle && <p className="text-xs text-muted-foreground mt-0.5">{solicitud.detalle}</p>}
+        {solicitud.detalle && <p className="text-xs text-muted-foreground mt-0.5 break-words">{solicitud.detalle}</p>}
+        {agenteNombre && <p className="text-[11px] text-muted-foreground/80 mt-0.5">{agenteNombre}</p>}
       </div>
       <div className="flex gap-1 shrink-0">
+        {onAbrirAgente && (
+          <Button size="sm" variant="outline" className="h-7 px-2 text-xs" onClick={onAbrirAgente} title="Abrir en el Agente de Correo para redactar el borrador o crear la tarea">
+            <ArrowUpRight className="w-3.5 h-3.5 mr-1" /> Abrir
+          </Button>
+        )}
         <Button
           size="sm" variant="outline" className="h-7 px-2"
           onClick={() => resolverMutation.mutate({ id: solicitud.id, accion: "atender" })}
@@ -327,29 +392,61 @@ function SolicitudRow({ solicitud }: { solicitud: any }) {
 }
 
 function AgenteDialog({ agente, onClose }: { agente: any; onClose: () => void }) {
+  const esCorreo = agente.tipo === "correo";
+  // El Agente de Correo abre en su Bandeja (ahí están sus pendientes, cada
+  // uno con borrador y tarea) en lugar de la lista genérica de solicitudes.
+  const [pestana, setPestana] = useState(esCorreo ? "bandeja" : "chat");
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
-      <DialogContent className="sm:max-w-2xl max-h-[85vh] overflow-y-auto">
+      <DialogContent className={`${esCorreo ? "sm:max-w-3xl" : "sm:max-w-2xl"} max-h-[88vh] min-w-0 overflow-y-auto overflow-x-hidden`}>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Sparkles className="w-4 h-4 text-[#EDA011]" /> {agente.nombre}
+            {agente.estado === "error" && <Badge className="bg-red-600 text-white border-red-700 text-[10px] px-1.5 py-0">Error</Badge>}
           </DialogTitle>
         </DialogHeader>
-        <Tabs defaultValue="chat">
-          <TabsList>
+        {agente.estado === "error" && agente.ultimoErrorMensaje && (
+          <p className="flex items-start gap-1.5 rounded-md bg-red-50 px-2.5 py-2 text-xs text-red-800 leading-relaxed">
+            <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" /> <span>Su última revisión falló: {agente.ultimoErrorMensaje}</span>
+          </p>
+        )}
+        <Tabs value={pestana} onValueChange={setPestana} className="min-w-0">
+          {/* En pantallas angostas las pestañas se desplazan de lado en vez de ensanchar el diálogo. */}
+          <TabsList className="max-w-full justify-start overflow-x-auto overflow-y-hidden">
+            {esCorreo && (
+              <TabsTrigger value="bandeja" className="gap-1.5">
+                <Mail className="w-3.5 h-3.5" /> Bandeja
+                {agente.solicitudesPendientes > 0 && <Badge className="bg-red-100 text-red-800 border-red-200 ml-1 text-[10px] px-1.5 py-0">{agente.solicitudesPendientes}</Badge>}
+              </TabsTrigger>
+            )}
             <TabsTrigger value="chat" className="gap-1.5"><MessageSquare className="w-3.5 h-3.5" /> Chat</TabsTrigger>
-            <TabsTrigger value="solicitudes" className="gap-1.5">
-              <Inbox className="w-3.5 h-3.5" /> Solicitudes
-              {agente.solicitudesPendientes > 0 && <Badge className="bg-red-100 text-red-800 border-red-200 ml-1 text-[10px] px-1.5 py-0">{agente.solicitudesPendientes}</Badge>}
-            </TabsTrigger>
+            {!esCorreo && (
+              <TabsTrigger value="solicitudes" className="gap-1.5">
+                <Inbox className="w-3.5 h-3.5" /> Solicitudes
+                {agente.solicitudesPendientes > 0 && <Badge className="bg-red-100 text-red-800 border-red-200 ml-1 text-[10px] px-1.5 py-0">{agente.solicitudesPendientes}</Badge>}
+              </TabsTrigger>
+            )}
+            {esCorreo && <TabsTrigger value="buzones" className="gap-1.5"><AtSign className="w-3.5 h-3.5" /> Buzones</TabsTrigger>}
             <TabsTrigger value="config" className="gap-1.5"><Settings className="w-3.5 h-3.5" /> Configuración</TabsTrigger>
           </TabsList>
+          {esCorreo && (
+            <TabsContent value="bandeja" className="mt-4 min-w-0">
+              <BandejaCorreoTab onIrABuzones={() => setPestana("buzones")} />
+            </TabsContent>
+          )}
           <TabsContent value="chat" className="mt-4">
             <ChatTab agenteId={agente.id} />
           </TabsContent>
-          <TabsContent value="solicitudes" className="mt-4">
-            <SolicitudesTab agenteId={agente.id} />
-          </TabsContent>
+          {!esCorreo && (
+            <TabsContent value="solicitudes" className="mt-4">
+              <SolicitudesTab agenteId={agente.id} />
+            </TabsContent>
+          )}
+          {esCorreo && (
+            <TabsContent value="buzones" className="mt-4 min-w-0">
+              <BuzonesCorreoTab />
+            </TabsContent>
+          )}
           <TabsContent value="config" className="mt-4">
             <ConfiguracionTab agente={agente} />
           </TabsContent>
@@ -463,8 +560,11 @@ function ConfiguracionTab({ agente }: { agente: any }) {
         <Textarea value={form.objetivo} onChange={(e) => setForm(f => ({ ...f, objetivo: e.target.value }))} rows={2} className="text-sm" />
       </div>
       <div className="space-y-1.5">
-        <Label className="text-xs">Especialidad</Label>
-        <Textarea value={form.especialidad} onChange={(e) => setForm(f => ({ ...f, especialidad: e.target.value }))} rows={2} className="text-sm" />
+        <Label className="text-xs">{agente.tipo === "correo" ? "Criterios para priorizar el correo" : "Especialidad"}</Label>
+        <Textarea value={form.especialidad} onChange={(e) => setForm(f => ({ ...f, especialidad: e.target.value }))} rows={agente.tipo === "correo" ? 3 : 2} className="text-sm" />
+        {agente.tipo === "correo" && (
+          <p className="text-[11px] text-muted-foreground">El agente aplica estos criterios al clasificar cada correo: qué es urgente, qué requiere atención y qué se puede ignorar.</p>
+        )}
       </div>
       <div className="space-y-1.5">
         <Label className="text-xs">Cuándo considera un encargo terminado</Label>

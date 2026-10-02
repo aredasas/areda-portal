@@ -17,7 +17,11 @@ export function isDriveConfigured(): boolean {
   return !!(process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL && process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY);
 }
 
-function getAuthClient() {
+/** Lee las credenciales de la cuenta de servicio de las variables de
+ * entorno (correo + llave privada ya normalizada a PEM). La usan Drive y
+ * también Gmail (server/gmail.ts), que es la misma cuenta de servicio pero
+ * actuando en nombre de un buzón del Workspace. */
+export function getServiceAccountCredentials(): { email: string; privateKey: string } | null {
   const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
   const rawKey = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY;
   if (!email || !rawKey) return null;
@@ -32,9 +36,15 @@ function getAuthClient() {
     privateKey = rawKey;
   }
   privateKey = privateKey.includes("\\n") ? privateKey.replace(/\\n/g, "\n") : privateKey;
+  return { email, privateKey };
+}
+
+function getAuthClient() {
+  const credenciales = getServiceAccountCredentials();
+  if (!credenciales) return null;
   return new google.auth.JWT({
-    email,
-    key: privateKey,
+    email: credenciales.email,
+    key: credenciales.privateKey,
     scopes: ["https://www.googleapis.com/auth/drive"],
   });
 }
