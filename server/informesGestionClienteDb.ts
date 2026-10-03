@@ -52,6 +52,8 @@ const NOMBRES_REPORTE: Record<string, string> = {
   ERM: "Estado de Resultados Mensual",
   ERI: "Estado de Resultados por Centro de Costo (ERI)",
   DIAN: "Comparación DIAN vs. contabilidad",
+  FLUJO: "Flujo de Efectivo",
+  GESTION: "Informe de Gestión",
 };
 
 /** Recopila, para un cliente y un rango de fechas, cada tarea y

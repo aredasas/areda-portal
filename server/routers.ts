@@ -101,6 +101,8 @@ import * as informesBalance from "./informesBalanceDb";
 import { generarReporteFlujo } from "./informesReportFlujo";
 import * as informesDian from "./informesDianDb";
 import * as informesGestionCliente from "./informesGestionClienteDb";
+import * as informesGestionFin from "./informesGestionFinDb";
+import { generarPdfGestion } from "./informesReportGestion";
 import * as informesIva from "./informesIvaDb";
 import * as informesIvaCuentas from "./informesIvaCuentasDb";
 import { generarAnexoIva, generarAnexoIvaPdf } from "./informesIvaAnexo";
@@ -2200,6 +2202,63 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
           );
           await informesDb.guardarReporteGenerado({
             clienteId: input.clienteId, anio: input.anio, mes: null, tipo: "FLUJO",
+            nivel: "resumen", fileKey, generadoPorId: ctx.user.id,
+          });
+          return { signedUrl: await storageGetSignedUrl(fileKey), fileKey };
+        }),
+    }),
+    // Informe de gestión (PDF): lectura financiera del estado de resultados
+    // por mes y centro de costo, con el balance si está cargado. Las cifras y
+    // los textos salen de reglas; el contador agrega sus puntos tributarios y
+    // el plan de acción por cada mes de corte.
+    gestionFinanciera: router({
+      // Meses con estado de resultados y, si se pide un corte, lo que el
+      // informe va a decir (para revisarlo en pantalla antes de generar).
+      resumen: protectedProcedure
+        .input(z.object({ clienteId: z.number(), anio: z.number(), mes: z.number().min(1).max(12).nullable() }))
+        .query(async ({ input, ctx }) => {
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
+          const meses = await informesGestionFin.mesesConResultados(input.clienteId, input.anio);
+          const corte = input.mes && meses.some(m => m <= input.mes!) ? input.mes : meses[meses.length - 1] ?? null;
+          if (corte === null) return { meses, corte: null, vista: null };
+          const { informe } = await informesGestionFin.armarInformeGestion(input.clienteId, input.anio, corte);
+          const puntos = informe.centros.filter(c => c.esPuntoDeVenta);
+          return {
+            meses, corte: informe.mesCorte,
+            vista: {
+              periodo: informe.periodo, indicadores: informe.indicadores, resumen: informe.resumen, alertas: informe.alertas,
+              puntosDeVenta: puntos.length, aperturas: puntos.filter(c => c.esApertura).length,
+              balance: informe.balance ? informe.balance.etiquetaFinal : null,
+            },
+          };
+        }),
+      notas: protectedProcedure
+        .input(z.object({ clienteId: z.number(), anio: z.number(), mes: z.number().min(1).max(12) }))
+        .query(async ({ input, ctx }) => {
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
+          return informesGestionFin.getNotasGestion(input.clienteId, input.anio, input.mes);
+        }),
+      guardarNotas: protectedProcedure
+        .input(z.object({
+          clienteId: z.number(), anio: z.number(), mes: z.number().min(1).max(12),
+          puntos: z.array(z.object({ nivel: z.enum(["critico", "revisar", "vigilar"]), titulo: z.string().max(160), texto: z.string().max(2000) })).max(30),
+          plan: z.array(z.object({ titulo: z.string().max(160), texto: z.string().max(2000) })).max(30),
+        }))
+        .mutation(async ({ input, ctx }) => {
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
+          await informesGestionFin.guardarNotasGestion(input.clienteId, input.anio, input.mes, { puntos: input.puntos, plan: input.plan }, ctx.user.id);
+          return { success: true };
+        }),
+      generarPdf: protectedProcedure
+        .input(z.object({ clienteId: z.number(), anio: z.number(), mes: z.number().min(1).max(12) }))
+        .mutation(async ({ input, ctx }) => {
+          await assertClienteAccesibleInformes(ctx, input.clienteId);
+          const { informe, cliente } = await informesGestionFin.armarInformeGestion(input.clienteId, input.anio, input.mes);
+          const buffer = await generarPdfGestion(informe, cliente);
+          const key = `informes/InformeGestion_${input.clienteId}_${input.anio}_${String(informe.mesCorte).padStart(2, "0")}_${Date.now()}.pdf`;
+          const { key: fileKey } = await storagePut(key, buffer, "application/pdf");
+          await informesDb.guardarReporteGenerado({
+            clienteId: input.clienteId, anio: input.anio, mes: informe.mesCorte, tipo: "GESTION",
             nivel: "resumen", fileKey, generadoPorId: ctx.user.id,
           });
           return { signedUrl: await storageGetSignedUrl(fileKey), fileKey };

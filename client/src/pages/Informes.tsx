@@ -12,11 +12,12 @@ import { trpc } from "@/lib/trpc";
 import {
   Upload, FileSpreadsheet, Loader2, Download, CheckCircle2, XCircle, AlertCircle, Clock, Plus,
   Sparkles, LineChart, Landmark, Banknote, Receipt, Construction,
-  BookOpen, Pencil, Check, X, Search, Wrench, FileBarChart, ChevronUp, ChevronDown, Wallet, Scale,
+  BookOpen, Pencil, Check, X, Search, Wrench, FileBarChart, ChevronUp, ChevronDown, Wallet, Scale, FileText,
 } from "lucide-react";
 import { toast } from "sonner";
 import FlujoEfectivo from "@/components/informes/FlujoEfectivo";
 import BalancePrueba from "@/components/informes/BalancePrueba";
+import InformeGestion from "@/components/informes/InformeGestion";
 
 const MESES = [
   "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
@@ -240,6 +241,7 @@ export default function Informes() {
               <TabsTrigger value="resultados" className="gap-1.5"><LineChart className="w-3.5 h-3.5" /> Estado de Resultados</TabsTrigger>
               <TabsTrigger value="balance" className="gap-1.5"><Scale className="w-3.5 h-3.5" /> Balance</TabsTrigger>
               <TabsTrigger value="flujo" className="gap-1.5"><Wallet className="w-3.5 h-3.5" /> Flujo de Efectivo</TabsTrigger>
+              <TabsTrigger value="gestion" className="gap-1.5"><FileText className="w-3.5 h-3.5" /> Informe de Gestión</TabsTrigger>
               <TabsTrigger value="dian" className="gap-1.5"><Landmark className="w-3.5 h-3.5" /> Comparación DIAN</TabsTrigger>
               <TabsTrigger value="bancaria" className="gap-1.5"><Banknote className="w-3.5 h-3.5" /> Conciliación Bancaria</TabsTrigger>
               <TabsTrigger value="impuestos" className="gap-1.5"><Receipt className="w-3.5 h-3.5" /> Apoyo Impuestos</TabsTrigger>
@@ -473,6 +475,8 @@ export default function Informes() {
                             ? `ERM ${r.anio} (${r.nivel})`
                             : r.tipo === "FLUJO"
                               ? `Flujo de efectivo ${r.anio}`
+                            : r.tipo === "GESTION"
+                              ? `Informe de gestión a ${MESES[r.mes - 1]} ${r.anio}`
                             : r.tipo === "DIAN"
                               ? `Comparación DIAN ${MESES[r.mes - 1]} ${r.anio}`
                               : `ERI ${MESES[r.mes - 1]} ${r.anio}`}
@@ -492,6 +496,10 @@ export default function Informes() {
             <TabsContent value="flujo" className="mt-4">
               {/* La llave reinicia la pestaña al cambiar de cliente o de año. */}
               <FlujoEfectivo key={`${clienteId}-${anio}`} clienteId={clienteId} anio={anio} />
+            </TabsContent>
+
+            <TabsContent value="gestion" className="mt-4">
+              <InformeGestion key={`${clienteId}-${anio}`} clienteId={clienteId} anio={anio} />
             </TabsContent>
 
             <TabsContent value="dian" className="mt-4">

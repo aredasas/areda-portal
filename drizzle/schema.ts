@@ -1522,3 +1522,23 @@ export const informesBalanceNotas = mysqlTable("informesBalanceNotas", {
   clienteCuentaIdx: uniqueIndex("informesBalanceNotas_cliente_cuenta_idx").on(table.clienteId, table.cuenta),
 }));
 export type InformeBalanceNota = typeof informesBalanceNotas.$inferSelect;
+
+/** Notas del contador para el Informe de Gestión de un cliente y un mes
+ * de corte: los puntos tributarios y de balance, y el plan de acción. Es
+ * lo único del informe que no sale de las cifras — requiere criterio, así
+ * que se escribe a mano y se guarda por periodo. */
+export const informesGestionNotas = mysqlTable("informesGestionNotas", {
+  id: int("id").autoincrement().primaryKey(),
+  clienteId: int("clienteId").notNull(),
+  anio: int("anio").notNull(),
+  mes: int("mes").notNull(),
+  /** JSON `[{ nivel: "critico"|"revisar"|"vigilar", titulo, texto }]`. */
+  puntosJson: text("puntosJson"),
+  /** JSON `[{ titulo, texto }]`, en el orden en que se enumeran. */
+  planJson: text("planJson"),
+  actualizadoPorId: int("actualizadoPorId").notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, (table) => ({
+  periodoIdx: uniqueIndex("informesGestionNotas_periodo_idx").on(table.clienteId, table.anio, table.mes),
+}));
+export type InformeGestionNota = typeof informesGestionNotas.$inferSelect;
