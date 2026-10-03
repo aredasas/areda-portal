@@ -147,16 +147,18 @@ export default function Oficina() {
           style={{ aspectRatio: "1586 / 992", backgroundImage: "url(/oficina/oficina-fondo.png)", backgroundSize: "cover", backgroundPosition: "center" }}
         >
           {/* Decoración fija */}
-          <img src="/oficina/planta-grande.png" alt="" className="absolute pointer-events-none" style={{ left: "1%", bottom: "2%", width: "9%" }} />
+          {/* La planta y el archivador van al fondo, contra la pared: adelante
+              el espacio es de los escritorios. */}
+          <img src="/oficina/planta-grande.png" alt="" className="absolute pointer-events-none" style={{ left: "9.5%", bottom: "61%", width: "6.5%" }} />
           <img src="/oficina/planta-pequena.png" alt="" className="absolute pointer-events-none" style={{ right: "2%", top: "4%", width: "6%" }} />
-          <img src="/oficina/archivador.png" alt="" className="absolute pointer-events-none" style={{ right: "1%", bottom: "3%", width: "8%" }} />
+          <img src="/oficina/archivador.png" alt="" className="absolute pointer-events-none" style={{ right: "10%", bottom: "61%", width: "6%" }} />
           <img src="/oficina/biblioteca.png" alt="" className="absolute pointer-events-none" style={{ left: "40%", top: "1%", width: "9%" }} />
 
           {/* Escritorio 1 — Estadista de Tareas (activo) */}
           {estadista && (
             <EscritorioAgente
               agente={estadista}
-              left="16%"
+              left={PUESTOS[0]}
               personaje="estadista"
               onAbrir={() => setAgenteAbiertoId(estadista.id)}
             />
@@ -166,16 +168,16 @@ export default function Oficina() {
           {agenteCorreo ? (
             <EscritorioAgente
               agente={agenteCorreo}
-              left="45%"
+              left={PUESTOS[1]}
               personaje="correo"
               onAbrir={() => setAgenteAbiertoId(agenteCorreo.id)}
             />
           ) : (
-            <EscritorioProximamente left="45%" label="Agente de Correo" personaje="correo" />
+            <EscritorioProximamente left={PUESTOS[1]} label="Agente de Correo" personaje="correo" />
           )}
 
           {/* Escritorio "próximamente" */}
-          <EscritorioProximamente left="74%" label="Monitor de Desarrollo" personaje="desarrollo" />
+          <EscritorioProximamente left={PUESTOS[2]} label="Monitor de Desarrollo" personaje="desarrollo" />
         </div>
 
         {/* ---- Panel de solicitudes pendientes (todas, cualquier agente) ---- */}
@@ -247,6 +249,13 @@ export default function Oficina() {
  * no "salte" al cambiar de pose). */
 type Personaje = "estadista" | "correo" | "desarrollo";
 
+/** Tamaño y lugar de los tres puestos en la escena, en porcentaje de su
+ * ancho. Con 29 % cada escritorio se ve de un cuarto del ancho de la
+ * oficina: los tres ocupan el frente, con un pasillo entre uno y otro, y
+ * las personas llegan hasta la línea donde empieza la pared. */
+const ANCHO_PUESTO = "29%";
+const PUESTOS = ["3%", "35.5%", "68%"] as const;
+
 /** Un puesto de trabajo: el personaje DETRÁS del escritorio. El escritorio
  * se dibuja encima y le tapa las piernas; el personaje queda de pie al
  * lado del monitor (no detrás de él) para que se le vean el cuerpo y la
@@ -283,11 +292,11 @@ function EscritorioAgente({ agente, left, onAbrir, personaje }: {
       onClick={onAbrir}
       title={`Abrir a ${agente.nombre}`}
       className="absolute bottom-0 flex flex-col items-center group"
-      style={{ left, width: "20%" }}
+      style={{ left, width: ANCHO_PUESTO }}
     >
       <PuestoDeTrabajo personaje={personaje} pose={tieneAtencion ? "mano-levantada" : "normal"} alt={agente.nombre} />
       <div className="mt-1 flex w-full flex-col items-center gap-1">
-        <span className="text-[9px] sm:text-xs font-medium max-w-[140%] truncate bg-white/90 px-1.5 sm:px-2 py-0.5 rounded-full border shadow-sm">{agente.nombre}</span>
+        <span className="text-[9px] sm:text-sm font-medium max-w-[110%] truncate bg-white/90 px-1.5 sm:px-2.5 py-0.5 rounded-full border shadow-sm">{agente.nombre}</span>
         {/* Fila de alto fijo: el personaje no sube ni baja según tenga
             pendientes o error, y todos los agentes quedan alineados. */}
         <div className="flex h-[18px] items-center gap-1">
@@ -307,11 +316,11 @@ function EscritorioAgente({ agente, left, onAbrir, personaje }: {
 
 function EscritorioProximamente({ left, label, personaje }: { left: string; label: string; personaje: Personaje }) {
   return (
-    <div className="absolute bottom-0 flex flex-col items-center" style={{ left, width: "20%" }}>
+    <div className="absolute bottom-0 flex flex-col items-center" style={{ left, width: ANCHO_PUESTO }}>
       <PuestoDeTrabajo personaje={personaje} pose="normal" alt="" apagado />
       {/* Mismo alto que la etiqueta + fila de avisos de un agente activo, para que los tres escritorios queden alineados. */}
       <div className="mt-1 flex w-full flex-col items-center gap-1 opacity-60">
-        <span className="text-[9px] sm:text-xs font-medium max-w-[140%] truncate bg-white/80 px-1.5 sm:px-2 py-0.5 rounded-full border">{label}</span>
+        <span className="text-[9px] sm:text-sm font-medium max-w-[110%] truncate bg-white/80 px-1.5 sm:px-2.5 py-0.5 rounded-full border">{label}</span>
         <span className="flex h-[18px] items-center text-[8px] sm:text-[10px] font-medium text-muted-foreground bg-white/70 px-1.5 rounded-full border">próximamente</span>
       </div>
     </div>
