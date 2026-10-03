@@ -1,7 +1,7 @@
-import { and, eq, gte, inArray, lt, or } from "drizzle-orm";
-import { getDb } from "./db";
+import { and, eq, gte, inArray, lt, ne, or } from "drizzle-orm";
+import { getDb, inferirRemitentes } from "./db";
 import {
-  users, tasks, taxDeadlines, taxObligations, clients, timeEntries, historyEvents, comments, oficinaActividad,
+  users, tasks, taxDeadlines, taxObligations, clients, timeEntries, historyEvents, comments, oficinaActividad, notifications,
 } from "../drizzle/schema";
 import { calcularJornada } from "../shared/jornada";
 
@@ -256,19 +256,21 @@ const recortar = (texto: string, max: number) => {
 };
 
 /** Lo que hizo el equipo desde `desde`: entregas para revisión, comentarios
- * y lecturas de notificaciones, en orden cronológico. `excluirUsuarioId`
- * deja por fuera las acciones de quien escucha (no tiene sentido avisarle a
- * Arlex de sus propios comentarios). */
+ * y lecturas, en orden cronológico. `excluirUsuarioId` es quien escucha
+ * (Arlex): se dejan por fuera sus propias acciones, las respuestas a algo
+ * que él escribió se anuncian como "te respondió", y de las lecturas solo
+ * cuentan las de mensajes que él envió. */
 export async function listarActividad(opciones: { desde: Date; excluirUsuarioId?: number; limite?: number }): Promise<EventoActividad[]> {
   const db = await getDb();
   if (!db) return [];
   const { desde } = opciones;
+  const yo = opciones.excluirUsuarioId ?? null;
 
   const [entregas, comentarios, lecturas, todosLosUsuarios] = await Promise.all([
     db.select().from(historyEvents).where(and(eq(historyEvents.eventType, "completada"), gte(historyEvents.createdAt, desde))),
     db.select().from(comments).where(and(inArray(comments.entityType, ["task", "deadline"]), gte(comments.createdAt, desde))),
-    // La tabla de lecturas es nueva: si la migración aún no se ha corrido,
-    // el informe sigue funcionando sin esa parte en vez de fallar entero.
+    // Si la migración de esta tabla aún no se ha corrido, el informe sigue
+    // funcionando sin esa parte en vez de fallar entero.
     db.select().from(oficinaActividad).where(gte(oficinaActividad.createdAt, desde)).catch((error: any) => {
       console.error("[Oficina] No se pudieron leer las lecturas (¿falta la migración?):", String(error?.message || error).slice(0, 160));
       return [] as (typeof oficinaActividad.$inferSelect)[];
@@ -285,9 +287,34 @@ export async function listarActividad(opciones: { desde: Date; excluirUsuarioId?
     ...lecturas.filter(l => esEntidad(l.entityType) && l.entityId != null).map(l => ({ tipo: l.entityType as Entidad["tipo"], id: l.entityId! })),
   ]);
 
+  // ¿En qué tareas y vencimientos ya había escrito quien escucha (un
+  // comentario o una observación de revisión)? Un comentario posterior de
+  // otra persona ahí es una respuesta para él.
+  const primerMensajeMio = new Map<string, number>();
+  const comentariosAjenos = yo == null ? [] : comentarios.filter(c => c.authorId !== yo);
+  if (yo != null && comentariosAjenos.length > 0) {
+    const anotar = (tipo: string, id: number, cuando: Date) => {
+      const clave = `${tipo}-${id}`;
+      const t = new Date(cuando).getTime();
+      if (!primerMensajeMio.has(clave) || t < primerMensajeMio.get(clave)!) primerMensajeMio.set(clave, t);
+    };
+    for (const tipo of ["task", "deadline"] as const) {
+      const ids = Array.from(new Set(comentariosAjenos.filter(c => c.entityType === tipo).map(c => c.entityId)));
+      if (ids.length === 0) continue;
+      const [mios, misRevisiones] = await Promise.all([
+        db.select({ entityId: comments.entityId, createdAt: comments.createdAt }).from(comments)
+          .where(and(eq(comments.entityType, tipo), inArray(comments.entityId, ids), eq(comments.authorId, yo))),
+        db.select({ entityId: historyEvents.entityId, createdAt: historyEvents.createdAt }).from(historyEvents)
+          .where(and(eq(historyEvents.entityType, tipo), inArray(historyEvents.entityId, ids), eq(historyEvents.userId, yo),
+            inArray(historyEvents.eventType, ["correccion_solicitada", "completar_solicitado", "aprobada"]))),
+      ]);
+      for (const m of [...mios, ...misRevisiones]) anotar(tipo, m.entityId, m.createdAt);
+    }
+  }
+
   const eventos: EventoActividad[] = [];
   const agregar = (clave: string, tipo: EventoActividad["tipo"], cuando: Date, usuarioId: number, frase: { pantalla: string; voz: string }) => {
-    if (opciones.excluirUsuarioId != null && usuarioId === opciones.excluirUsuarioId) return;
+    if (yo != null && usuarioId === yo) return;
     const quien = cortos.get(usuarioId) || "Alguien";
     eventos.push({
       clave, tipo, cuando, usuarioId, nombre: completos.get(usuarioId) || "Alguien", nombreCorto: quien,
@@ -297,35 +324,46 @@ export async function listarActividad(opciones: { desde: Date; excluirUsuarioId?
 
   for (const e of entregas) {
     const que = nombrar({ tipo: e.entityType, id: e.entityId }, "la");
-    const verbo = e.entityType === "task" ? "terminó" : "completó";
-    agregar(`h-${e.id}`, "entrega", e.createdAt, e.userId, { pantalla: `${verbo} ${que.pantalla}`, voz: `${verbo} ${que.voz}` });
+    agregar(`h-${e.id}`, "entrega", e.createdAt, e.userId, { pantalla: `envió a revisión ${que.pantalla}`, voz: `envió a revisión ${que.voz}` });
   }
   for (const c of comentarios) {
     const donde = nombrar({ tipo: c.entityType as "task" | "deadline", id: c.entityId }, "en la");
     const dicho = recortar(c.content, 110);
+    const antes = primerMensajeMio.get(`${c.entityType}-${c.entityId}`);
+    const verbo = antes != null && antes < new Date(c.createdAt).getTime() ? "te respondió" : "comentó";
     agregar(`c-${c.id}`, "comentario", c.createdAt, c.authorId, {
-      pantalla: `comentó ${donde.pantalla}: “${dicho}”`,
-      voz: `comentó ${donde.voz}: ${dicho}`,
+      pantalla: `${verbo} ${donde.pantalla}: “${dicho}”`,
+      voz: `${verbo} ${donde.voz}: ${dicho}`,
     });
   }
+  // Notificaciones marcadas sin abrir, una fila por cada una: sirven para
+  // decir cuántas de las que alguien marcó de golpe eran mensajes de quien escucha.
+  const marcadas = lecturas.filter(l => l.tipo === "notificacion_marcada");
   for (const l of lecturas) {
+    if (l.tipo === "notificacion_marcada") continue;
     if (l.tipo === "notificaciones_marcadas") {
-      const frase = `marcó como leídas ${plural(l.cantidad, "notificación", "notificaciones")} sin abrirlas`;
+      const delLote = marcadas.filter(m => m.userId === l.userId && Math.abs(new Date(m.createdAt).getTime() - new Date(l.createdAt).getTime()) <= 5000);
+      const mias = delLote.filter(m => yo != null && m.remitenteId === yo).length;
+      // Con el detalle a la mano: si ninguna era de quien escucha, no es novedad para él.
+      if (yo != null && delLote.length > 0 && mias === 0) continue;
+      const frase = `marcó como leídas ${plural(l.cantidad, "notificación", "notificaciones")} sin abrirlas${mias > 0 ? `; ${mias === 1 ? "una era un mensaje tuyo" : `${mias} eran mensajes tuyos`}` : ""}`;
       agregar(`l-${l.id}`, "lecturas_marcadas", l.createdAt, l.userId, { pantalla: frase, voz: frase });
       continue;
     }
+    // Lo que otra persona le escribió a alguien y ese alguien leyó no es novedad para quien escucha.
+    if (yo != null && l.remitenteId != null && l.remitenteId !== yo) continue;
+    const tuyo = yo != null && l.remitenteId === yo;
     const entidad = esEntidad(l.entityType) && l.entityId != null ? { tipo: l.entityType, id: l.entityId } : null;
     const de = nombrar(entidad, "de la");
     const accion =
-      l.detalle === "correccion_solicitada" ? "leyó la observación de corrección"
-      : l.detalle === "completar_solicitado" ? "leyó la observación para completar"
-      : l.detalle === "aprobada" ? "vio la aprobación"
-      : l.detalle === "tablero_post" ? "leyó"
-      : "leyó el comentario";
-    // "leyó la publicación del tablero" (sin "de la" intermedio).
+      l.detalle === "correccion_solicitada" ? `leyó ${tuyo ? "tu" : "la"} observación de corrección`
+      : l.detalle === "completar_solicitado" ? `leyó ${tuyo ? "tu" : "la"} observación para completar`
+      : l.detalle === "aprobada" ? `vio ${tuyo ? "tu" : "la"} aprobación`
+      : `leyó ${tuyo ? "tu" : "el"} comentario`;
     const tablero = l.detalle === "tablero_post" || entidad?.tipo === "board_post";
+    const fraseTablero = l.detalle === "tablero_post" ? `leyó ${tuyo ? "tu" : "la"} publicación del tablero` : `leyó ${tuyo ? "tu" : "el"} comentario del tablero`;
     agregar(`l-${l.id}`, "lectura", l.createdAt, l.userId, tablero
-      ? { pantalla: "leyó la publicación del tablero", voz: "leyó la publicación del tablero" }
+      ? { pantalla: fraseTablero, voz: fraseTablero }
       : { pantalla: `${accion} ${de.pantalla}`.trim(), voz: `${accion} ${de.voz}`.trim() });
   }
 
@@ -352,6 +390,155 @@ export function resumirActividadPorPersona(eventos: EventoActividad[]): string[]
       p.comentarios > 0 ? `comentó ${plural(p.comentarios, "vez", "veces")}` : "",
       p.lecturas > 0 ? `revisó sus notificaciones ${plural(p.lecturas, "vez", "veces")}` : "",
     ].filter(Boolean))}.`);
+}
+
+// ---------------------------------------------------------------------
+// Seguimiento: mensajes que envié y el equipo no ha leído
+// ---------------------------------------------------------------------
+
+export type MensajePendiente = {
+  clave: string;
+  /** "sin_leer": la notificación sigue sin abrir. "marcado_sin_abrir": la
+   * marcó como leída con «marcar todas» y no ha abierto la tarea después. */
+  estado: "sin_leer" | "marcado_sin_abrir";
+  destinatarioId: number;
+  tipo: string;
+  /** "Comentario en la tarea «X»", "Devolución para corrección de la tarea «X»"… */
+  descripcion: string;
+  extracto: string | null;
+  enviadoAt: Date;
+  /** Días calendario (de Bogotá) desde que se envió. */
+  dias: number;
+  /** Ruta del portal donde está el mensaje, para ir a insistir. */
+  enlace: string | null;
+};
+
+export type SeguimientoMensajes = {
+  total: number; sinLeer: number; marcadosSinAbrir: number;
+  porPersona: { usuarioId: number; nombre: string; nombreCorto: string; total: number; sinLeer: number; marcadosSinAbrir: number; masAntiguoDias: number }[];
+  mensajes: (MensajePendiente & { destinatario: string })[];
+  /** Listo para leer en voz alta. */
+  frases: string[];
+};
+
+const haceDias = (dias: number) => (dias <= 0 ? "de hoy" : dias === 1 ? "de ayer" : `de hace ${dias} días`);
+
+/** Arma el resumen por persona y las frases, a partir de los mensajes pendientes. */
+export function armarSeguimiento(mensajes: MensajePendiente[], nombres: Map<number, { nombre: string; nombreCorto: string }>): SeguimientoMensajes {
+  const persona = (id: number) => nombres.get(id) || { nombre: "Alguien", nombreCorto: "Alguien" };
+  const grupos = new Map<number, SeguimientoMensajes["porPersona"][number]>();
+  for (const m of mensajes) {
+    if (!grupos.has(m.destinatarioId)) grupos.set(m.destinatarioId, { usuarioId: m.destinatarioId, ...persona(m.destinatarioId), total: 0, sinLeer: 0, marcadosSinAbrir: 0, masAntiguoDias: 0 });
+    const g = grupos.get(m.destinatarioId)!;
+    g.total++;
+    if (m.estado === "sin_leer") g.sinLeer++; else g.marcadosSinAbrir++;
+    g.masAntiguoDias = Math.max(g.masAntiguoDias, m.dias);
+  }
+  // Primero quien más tiene; en empate, el que lleva más tiempo sin leer.
+  const porPersona = Array.from(grupos.values()).sort((a, b) => b.total - a.total || b.masAntiguoDias - a.masAntiguoDias || a.nombre.localeCompare(b.nombre, "es"));
+  const orden = new Map(porPersona.map((g, i) => [g.usuarioId, i]));
+  const ordenados = [...mensajes]
+    .sort((a, b) => orden.get(a.destinatarioId)! - orden.get(b.destinatarioId)! || a.enviadoAt.getTime() - b.enviadoAt.getTime())
+    .map(m => ({ ...m, destinatario: persona(m.destinatarioId).nombre }));
+  const sinLeer = mensajes.filter(m => m.estado === "sin_leer").length;
+
+  const frases = mensajes.length === 0
+    ? ["Mensajes: todo lo que le has escrito al equipo está leído."]
+    : [
+        `Mensajes tuyos pendientes de lectura: ${mensajes.length}.`,
+        ...porPersona.map(g => {
+          const partes = [
+            g.sinLeer > 0 ? `${g.sinLeer} sin leer` : "",
+            g.marcadosSinAbrir > 0 ? `${g.marcadosSinAbrir === 1 ? "1 marcado como leído sin abrirlo" : `${g.marcadosSinAbrir} marcados como leídos sin abrirlos`}` : "",
+          ].filter(Boolean);
+          return `${g.nombreCorto}: ${enumerar(partes)}; el más antiguo es ${haceDias(g.masAntiguoDias)}.`;
+        }),
+      ];
+  return { total: mensajes.length, sinLeer, marcadosSinAbrir: mensajes.length - sinLeer, porPersona, mensajes: ordenados, frases };
+}
+
+const DIAS_SEGUIMIENTO_MARCADOS = 45;
+
+/** Los mensajes que `usuarioId` le escribió al equipo y siguen sin leerse:
+ * comentarios, devoluciones para corregir o completar, aprobaciones con
+ * observación y publicaciones del tablero. */
+export async function seguimientoMensajes(usuarioId: number, ahora: Date = new Date()): Promise<SeguimientoMensajes> {
+  const db = await getDb();
+  if (!db) return armarSeguimiento([], new Map());
+  const hoy = diaBogota(ahora);
+  const diasDesde = (cuando: Date) => Math.max(0, Math.round((new Date(`${hoy}T00:00:00Z`).getTime() - new Date(`${diaBogota(new Date(cuando))}T00:00:00Z`).getTime()) / DIA_MS));
+
+  const [listaUsuarios, sinLeer, actividad] = await Promise.all([
+    db.select({ id: users.id, name: users.name, isActive: users.isActive }).from(users),
+    db.select().from(notifications).where(and(eq(notifications.isRead, false), ne(notifications.userId, usuarioId))),
+    // Sin la migración de esta tabla el seguimiento sale solo con las no leídas.
+    db.select().from(oficinaActividad).where(and(
+      eq(oficinaActividad.remitenteId, usuarioId),
+      inArray(oficinaActividad.tipo, ["notificacion_marcada", "notificacion_leida"]),
+      gte(oficinaActividad.createdAt, new Date(ahora.getTime() - DIAS_SEGUIMIENTO_MARCADOS * DIA_MS)),
+    )).catch(() => [] as (typeof oficinaActividad.$inferSelect)[]),
+  ]);
+  const activos = new Set(listaUsuarios.filter(u => u.isActive).map(u => u.id));
+  const cortos = nombresCortos(listaUsuarios);
+  const nombres = new Map(listaUsuarios.map(u => [u.id, { nombre: u.name || "Sin nombre", nombreCorto: cortos.get(u.id) || u.name || "Sin nombre" }]));
+
+  // 1. Notificaciones sin leer cuyo remitente es este usuario.
+  const candidatas = sinLeer.filter(n => activos.has(n.userId));
+  const remitentes = await inferirRemitentes(candidatas);
+  const mias = candidatas.filter(n => remitentes.get(n.id) === usuarioId
+    // Una aprobación sin observación no es un mensaje que haya que leer.
+    && (n.type !== "aprobada" || !!n.message?.trim()));
+
+  // 2. Marcadas como leídas sin abrir, que después no se han abierto.
+  const esEntidad = (tipo: string | null): tipo is Entidad["tipo"] => tipo === "task" || tipo === "deadline" || tipo === "board_post";
+  const claveActividad = (a: { userId: number; entityType: string | null; entityId: number | null; detalle: string | null }) => `${a.userId}|${a.entityType}|${a.entityId}|${a.detalle}`;
+  const ultimaLectura = new Map<string, number>();
+  for (const a of actividad) if (a.tipo === "notificacion_leida") ultimaLectura.set(claveActividad(a), Math.max(ultimaLectura.get(claveActividad(a)) || 0, new Date(a.createdAt).getTime()));
+  const marcadas = actividad.filter(a =>
+    a.tipo === "notificacion_marcada" && activos.has(a.userId) && esEntidad(a.entityType) && a.entityId != null && a.detalle !== "aprobada"
+    && (ultimaLectura.get(claveActividad(a)) || 0) < new Date(a.createdAt).getTime());
+
+  // Nombres de las tareas y vencimientos, y el cliente de cada vencimiento (para el enlace).
+  const entidades: Entidad[] = [
+    ...mias.map(n => ({ tipo: n.entityType, id: n.entityId })),
+    ...marcadas.map(a => ({ tipo: a.entityType as Entidad["tipo"], id: a.entityId! })),
+  ];
+  const nombrar = await cargarNombresEntidades(db, entidades);
+  const idsVencimientos = Array.from(new Set(entidades.filter(e => e.tipo === "deadline").map(e => e.id)));
+  const clienteDeVencimiento = new Map((idsVencimientos.length === 0 ? [] : await db.select({ id: taxDeadlines.id, clientId: taxDeadlines.clientId }).from(taxDeadlines).where(inArray(taxDeadlines.id, idsVencimientos))).map(v => [v.id, v.clientId]));
+
+  const descripcion = (tipo: string, e: Entidad): string => {
+    if (tipo === "tablero_post") return "Publicación en el tablero";
+    if (tipo === "correccion_solicitada") return `Devolución para corrección ${nombrar(e, "de la").pantalla}`;
+    if (tipo === "completar_solicitado") return `Observación para completar ${nombrar(e, "de la").pantalla}`;
+    if (tipo === "aprobada") return `Aprobación con observación ${nombrar(e, "de la").pantalla}`;
+    return `Comentario ${nombrar(e, "en la").pantalla}`;
+  };
+  const enlace = (e: Entidad): string | null => {
+    if (e.tipo === "task") return `/tareas?taskId=${e.id}`;
+    if (e.tipo === "board_post") return `/tablero?postId=${e.id}`;
+    const clientId = clienteDeVencimiento.get(e.id);
+    return clientId ? `/vencimientos?clientId=${clientId}&deadlineId=${e.id}` : "/vencimientos";
+  };
+
+  const mensajes: MensajePendiente[] = [
+    ...mias.map((n): MensajePendiente => {
+      const e = { tipo: n.entityType, id: n.entityId };
+      return {
+        clave: `n-${n.id}`, estado: "sin_leer", destinatarioId: n.userId, tipo: n.type, descripcion: descripcion(n.type, e),
+        extracto: n.message?.trim() ? recortar(n.message, 160) : null, enviadoAt: new Date(n.createdAt), dias: diasDesde(n.createdAt), enlace: enlace(e),
+      };
+    }),
+    ...marcadas.map((a): MensajePendiente => {
+      const e = { tipo: a.entityType as Entidad["tipo"], id: a.entityId! };
+      const enviado = new Date(a.mensajeAt ?? a.createdAt);
+      return {
+        clave: `a-${a.id}`, estado: "marcado_sin_abrir", destinatarioId: a.userId, tipo: a.detalle || "comentario", descripcion: descripcion(a.detalle || "comentario", e),
+        extracto: null, enviadoAt: enviado, dias: diasDesde(enviado), enlace: enlace(e),
+      };
+    }),
+  ];
+  return armarSeguimiento(mensajes, nombres);
 }
 
 // ---------------------------------------------------------------------
@@ -383,6 +570,8 @@ export type InformeEquipo = {
   sinResponsable: { porTerminar: number; vencidas: number; devueltas: number; porCompletar: number };
   totales: { porTerminar: number; vencidas: number; devueltas: number; porCompletar: number };
   actividadHoy: EventoActividad[];
+  /** Mensajes de quien pide el informe que el equipo no ha leído. */
+  mensajes?: SeguimientoMensajes;
   /** El informe listo para leerse en voz alta, frase por frase. */
   frases: string[];
 };
@@ -512,7 +701,15 @@ export async function calcularInformeEquipo(opciones: { ahora?: Date; excluirUsu
     devueltas: t.devueltas + f.devueltas, porCompletar: t.porCompletar + f.porCompletar,
   }), { ...sinResponsable });
 
-  const informe: InformeEquipo = { generadoEn: ahora, hoy, diaAnterior, colaboradores, sinResponsable, totales, actividadHoy, frases: [] };
+  // El seguimiento de mensajes es de quien pide el informe; si falla, el
+  // resto del informe sale igual.
+  const mensajes = opciones.excluirUsuarioId != null
+    ? await seguimientoMensajes(opciones.excluirUsuarioId, ahora).catch((error: any) => {
+        console.error("[Oficina] No se pudo armar el seguimiento de mensajes:", String(error?.message || error).slice(0, 200));
+        return undefined;
+      })
+    : undefined;
+  const informe: InformeEquipo = { generadoEn: ahora, hoy, diaAnterior, colaboradores, sinResponsable, totales, actividadHoy, mensajes, frases: [] };
   informe.frases = armarFrasesInforme(informe);
   return informe;
 }
@@ -549,7 +746,10 @@ export function armarFrasesInforme(informe: Omit<InformeEquipo, "frases">): stri
     ].filter(Boolean))}.`);
   }
 
-  // 3. Horas.
+  // 3. Mensajes de quien escucha que siguen sin leerse.
+  if (informe.mensajes) frases.push(...informe.mensajes.frases);
+
+  // 4. Horas.
   const conHoras = informe.colaboradores.filter(f => f.horas.mesMs + f.horas.semanaMs + f.horas.diaAnteriorMs > 0);
   if (conHoras.length === 0) frases.push("Horas trabajadas: nadie ha marcado jornada este mes.");
   else {
@@ -561,7 +761,7 @@ export function armarFrasesInforme(informe: Omit<InformeEquipo, "frases">): stri
     if (sinMarcar.length > 0) frases.push(`Sin marcaciones de jornada: ${enumerar(sinMarcar)}.`);
   }
 
-  // 4. Ranking.
+  // 5. Ranking.
   const puntuados = informe.colaboradores.filter(f => f.posicion != null);
   if (puntuados.length === 0) frases.push(`Ranking de eficiencia: todavía no hay suficientes entregas en los últimos ${DIAS_RANKING} días para armarlo.`);
   else {
@@ -589,6 +789,12 @@ export async function contextoChatEstadista(excluirUsuarioId?: number): Promise<
   return [
     `Estado del equipo (cifras reales al ${fechaLarga(informe.hoy)}; el puntaje es 50 % entregas a tiempo, 30 % entregas sin devolución y 20 % sin tareas vencidas, sobre los últimos ${DIAS_RANKING} días):`,
     ...lineas,
+    "",
+    informe.mensajes
+      ? (informe.mensajes.total === 0
+        ? "Mensajes de Arlex al equipo: todos leídos."
+        : `Mensajes de Arlex al equipo que siguen sin leerse (${informe.mensajes.total}):\n${informe.mensajes.mensajes.map(m => `- ${m.destinatario}: ${m.descripcion}, enviado hace ${m.dias} día(s), ${m.estado === "sin_leer" ? "sin leer" : "marcado como leído sin abrirlo"}.`).join("\n")}`)
+      : "",
     "",
     informe.actividadHoy.length > 0
       ? `Actividad de hoy:\n${informe.actividadHoy.map(e => `- ${e.cuando.toLocaleTimeString("es-CO", { timeZone: "America/Bogota", hour: "numeric", minute: "2-digit" })} ${e.texto}`).join("\n")}`

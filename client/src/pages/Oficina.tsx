@@ -19,6 +19,7 @@ import {
 import { toast } from "sonner";
 import { BandejaCorreoTab, BuzonesCorreoTab } from "@/components/oficina/CorreoAgente";
 import InformeEquipo, { BotonEscucharInforme } from "@/components/oficina/InformeEquipo";
+import MensajesSinLeer from "@/components/oficina/MensajesSinLeer";
 import { hablar, setVozActivada, useVozActivada } from "@/lib/vozOficina";
 
 const esfuerzoLabels: Record<string, string> = { low: "Piensa poco", medium: "Equilibrado", high: "Piensa mucho" };
@@ -226,6 +227,9 @@ export default function Oficina() {
             )}
           </CardContent>
         </Card>
+
+        {/* ---- Seguimiento: lo que escribí y el equipo no ha leído ---- */}
+        <MensajesSinLeer />
       </div>
 
       {agenteAbierto && (

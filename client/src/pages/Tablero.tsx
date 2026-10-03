@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { useAuth } from "@/_core/hooks/useAuth";
 import DashboardLayout from "@/components/DashboardLayout";
@@ -42,6 +42,17 @@ export default function Tablero() {
     obligationId: filtroObligacion === "todas" ? undefined : filtroObligacion === "general" ? 0 : parseInt(filtroObligacion),
     busqueda: busqueda.trim() || undefined,
   });
+
+  // Abrir el Tablero es leer lo publicado: sus avisos se dan por leídos
+  // aunque no se haya entrado por la campanita.
+  const utilsTablero = trpc.useUtils();
+  const marcarTableroLeido = trpc.notifications.markBoardRead.useMutation();
+  useEffect(() => {
+    marcarTableroLeido.mutateAsync()
+      .then((r) => { if (r.leidas > 0) { utilsTablero.notifications.unreadCount.invalidate(); utilsTablero.notifications.list.invalidate(); } })
+      .catch(() => { /* no impide ver el tablero */ });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const createPost = trpc.board.posts.create.useMutation();
   const uploadAttachment = trpc.board.posts.uploadAttachment.useMutation();

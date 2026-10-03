@@ -919,14 +919,79 @@ export async function getUnreadNotificationCount(userId: number) {
 /** Registra en la actividad de la Oficina que alguien leyó algo — nunca
  * debe impedir que la notificación se marque como leída, así que cualquier
  * fallo aquí (ej. la tabla aún sin migrar) solo se deja en el log. */
-async function registrarLectura(fila: InsertOficinaActividad): Promise<void> {
+async function registrarLecturas(filas: InsertOficinaActividad[]): Promise<void> {
+  if (filas.length === 0) return;
   try {
     const db = await getDb();
     if (!db) return;
-    await db.insert(oficinaActividad).values(fila);
+    await db.insert(oficinaActividad).values(filas);
   } catch (error: any) {
     console.error("[Oficina] No se pudo registrar la lectura:", String(error?.message || error).slice(0, 200));
   }
+}
+
+type NotificacionParaRemitente = { id: number; type: string; entityType: string; entityId: number; message: string | null; createdAt: Date };
+
+/** Quién envió cada notificación. La tabla no guarda el remitente, pero la
+ * notificación siempre nace en la misma operación que el comentario, la
+ * devolución o la publicación que la origina: se busca ese origen (misma
+ * tarea o vencimiento, mismo texto, misma hora) y se toma su autor.
+ * Devuelve null para las que no se pudo establecer. */
+export async function inferirRemitentes(notifs: NotificacionParaRemitente[]): Promise<Map<number, number | null>> {
+  const resultado = new Map<number, number | null>(notifs.map(n => [n.id, null]));
+  const db = await getDb();
+  if (!db || notifs.length === 0) return resultado;
+  const MARGEN_MS = 2 * 60 * 1000;
+  const cercano = <T extends { createdAt: Date }>(candidatos: T[], cuando: Date, margen = MARGEN_MS): T | null => {
+    let mejor: T | null = null, distancia = margen + 1;
+    for (const c of candidatos) {
+      const d = Math.abs(new Date(c.createdAt).getTime() - new Date(cuando).getTime());
+      if (d < distancia) { mejor = c; distancia = d; }
+    }
+    return mejor;
+  };
+  const ids = (lista: NotificacionParaRemitente[]) => Array.from(new Set(lista.map(n => n.entityId)));
+
+  // Publicaciones del tablero: el autor de la publicación.
+  const posts = notifs.filter(n => n.type === "tablero_post");
+  if (posts.length > 0) {
+    const filas = await db.select({ id: boardPosts.id, authorId: boardPosts.authorId }).from(boardPosts).where(inArray(boardPosts.id, ids(posts)));
+    const autor = new Map(filas.map(f => [f.id, f.authorId]));
+    for (const n of posts) resultado.set(n.id, autor.get(n.entityId) ?? null);
+  }
+
+  // Comentarios: el autor del comentario con ese mismo texto en ese momento.
+  const deComentario = notifs.filter(n => n.type === "comentario");
+  for (const tipo of ["task", "deadline", "board_post"] as const) {
+    const grupo = deComentario.filter(n => n.entityType === tipo);
+    if (grupo.length === 0) continue;
+    const filas = await db.select({ entityId: comments.entityId, authorId: comments.authorId, content: comments.content, createdAt: comments.createdAt })
+      .from(comments).where(and(eq(comments.entityType, tipo), inArray(comments.entityId, ids(grupo))));
+    for (const n of grupo) {
+      const delHilo = filas.filter(f => f.entityId === n.entityId);
+      const origen = cercano(delHilo.filter(f => n.message != null && f.content === n.message), n.createdAt) ?? cercano(delHilo, n.createdAt, 15_000);
+      resultado.set(n.id, origen?.authorId ?? null);
+    }
+  }
+
+  // Aprobaciones y devoluciones: quien hizo esa revisión.
+  const deRevision = notifs.filter(n => n.type === "aprobada" || n.type === "correccion_solicitada" || n.type === "completar_solicitado");
+  for (const tipo of ["task", "deadline"] as const) {
+    const grupo = deRevision.filter(n => n.entityType === tipo);
+    if (grupo.length === 0) continue;
+    const filas = await db.select({ entityId: historyEvents.entityId, eventType: historyEvents.eventType, userId: historyEvents.userId, createdAt: historyEvents.createdAt })
+      .from(historyEvents).where(and(eq(historyEvents.entityType, tipo), inArray(historyEvents.entityId, ids(grupo))));
+    for (const n of grupo) {
+      const origen = cercano(filas.filter(f => f.entityId === n.entityId && f.eventType === n.type), n.createdAt);
+      resultado.set(n.id, origen?.userId ?? null);
+    }
+  }
+  return resultado;
+}
+
+/** Igual que inferirRemitentes, pero sin tumbar la lectura si algo falla. */
+async function remitentesSeguro(notifs: NotificacionParaRemitente[]): Promise<Map<number, number | null>> {
+  try { return await inferirRemitentes(notifs); } catch { return new Map(notifs.map(n => [n.id, null])); }
 }
 
 export async function markNotificationRead(id: number, userId: number) {
@@ -937,41 +1002,91 @@ export async function markNotificationRead(id: number, userId: number) {
     .where(and(eq(notifications.id, id), eq(notifications.userId, userId), eq(notifications.isRead, false))).limit(1);
   await db.update(notifications).set({ isRead: true }).where(and(eq(notifications.id, id), eq(notifications.userId, userId)));
   if (pendiente) {
-    await registrarLectura({
+    const remitentes = await remitentesSeguro([pendiente]);
+    await registrarLecturas([{
       tipo: "notificacion_leida", userId,
       entityType: pendiente.entityType, entityId: pendiente.entityId, detalle: pendiente.type,
-    });
+      remitenteId: remitentes.get(pendiente.id) ?? null, mensajeAt: pendiente.createdAt,
+    }]);
   }
+}
+
+/** Marca como leídas las notificaciones sin leer que cumplen `filtro` y deja
+ * registrada la lectura: una por cada mensaje distinto (tipo + remitente),
+ * no una por notificación. Si antes las había marcado como leídas sin
+ * abrirlas ("marcar todas"), esta es la lectura de verdad y también cuenta. */
+async function leerNotificacionesDe(userId: number, filtro: { entityType: "task" | "deadline" | "board_post"; entityId?: number }): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const pendientes = await db.select().from(notifications).where(and(
+    eq(notifications.userId, userId), eq(notifications.entityType, filtro.entityType), eq(notifications.isRead, false),
+    ...(filtro.entityId != null ? [eq(notifications.entityId, filtro.entityId)] : []),
+  ));
+  const lecturas: InsertOficinaActividad[] = [];
+  if (pendientes.length > 0) {
+    await db.update(notifications).set({ isRead: true })
+      .where(and(eq(notifications.userId, userId), inArray(notifications.id, pendientes.map(p => p.id))));
+    const remitentes = await remitentesSeguro(pendientes);
+    const vistos = new Set<string>();
+    for (const p of pendientes) {
+      const remitenteId = remitentes.get(p.id) ?? null;
+      const clave = `${p.entityId}|${p.type}|${remitenteId}`;
+      if (vistos.has(clave)) continue;
+      vistos.add(clave);
+      lecturas.push({ tipo: "notificacion_leida", userId, entityType: p.entityType, entityId: p.entityId, detalle: p.type, remitenteId, mensajeAt: p.createdAt });
+    }
+  }
+  // Las que había marcado como leídas sin abrir y que ahora sí abrió.
+  try {
+    const actividad = await db.select().from(oficinaActividad).where(and(
+      eq(oficinaActividad.userId, userId), eq(oficinaActividad.entityType, filtro.entityType),
+      inArray(oficinaActividad.tipo, ["notificacion_marcada", "notificacion_leida"]),
+      ...(filtro.entityId != null ? [eq(oficinaActividad.entityId, filtro.entityId)] : []),
+    ));
+    const clave = (a: { entityId: number | null; detalle: string | null; remitenteId: number | null }) => `${a.entityId}|${a.detalle}|${a.remitenteId}`;
+    const ultimaLeida = new Map<string, number>();
+    for (const a of actividad) if (a.tipo === "notificacion_leida") ultimaLeida.set(clave(a), Math.max(ultimaLeida.get(clave(a)) || 0, new Date(a.createdAt).getTime()));
+    const yaAgregadas = new Set(lecturas.map(l => clave({ entityId: l.entityId ?? null, detalle: l.detalle ?? null, remitenteId: l.remitenteId ?? null })));
+    for (const a of actividad) {
+      if (a.tipo !== "notificacion_marcada" || yaAgregadas.has(clave(a))) continue;
+      if ((ultimaLeida.get(clave(a)) || 0) >= new Date(a.createdAt).getTime()) continue; // ya la abrió después de marcarla
+      yaAgregadas.add(clave(a));
+      lecturas.push({ tipo: "notificacion_leida", userId, entityType: a.entityType, entityId: a.entityId, detalle: a.detalle, remitenteId: a.remitenteId, mensajeAt: a.mensajeAt });
+    }
+  } catch { /* sin la migración de la Oficina todavía: solo se registran las de arriba */ }
+  await registrarLecturas(lecturas);
+  return pendientes.length;
 }
 
 /** Abrir la tarea o el vencimiento (donde están los comentarios y la
  * observación de la revisión) cuenta como leer sus notificaciones, aunque
- * no se haya entrado por la campanita: se marcan como leídas y queda la
- * lectura registrada — una por cada tipo de aviso, no una por notificación. */
+ * no se haya entrado por la campanita. */
 export async function markEntityNotificationsRead(userId: number, entityType: "task" | "deadline" | "board_post", entityId: number): Promise<number> {
-  const db = await getDb();
-  if (!db) return 0;
-  const pendientes = await db.select({ id: notifications.id, type: notifications.type }).from(notifications)
-    .where(and(eq(notifications.userId, userId), eq(notifications.entityType, entityType), eq(notifications.entityId, entityId), eq(notifications.isRead, false)));
-  if (pendientes.length === 0) return 0;
-  await db.update(notifications).set({ isRead: true })
-    .where(and(eq(notifications.userId, userId), inArray(notifications.id, pendientes.map(p => p.id))));
-  for (const tipo of Array.from(new Set(pendientes.map(p => p.type)))) {
-    await registrarLectura({ tipo: "notificacion_leida", userId, entityType, entityId, detalle: tipo });
-  }
-  return pendientes.length;
+  return leerNotificacionesDe(userId, { entityType, entityId });
+}
+
+/** Abrir el Tablero es leer lo que hay publicado en él. */
+export async function markBoardNotificationsRead(userId: number): Promise<number> {
+  return leerNotificacionesDe(userId, { entityType: "board_post" });
 }
 
 export async function markAllNotificationsRead(userId: number) {
   const db = await getDb();
   if (!db) return;
-  const [pendientes] = await db.select({ count: sql<number>`count(*)` }).from(notifications)
+  const pendientes = await db.select().from(notifications)
     .where(and(eq(notifications.userId, userId), eq(notifications.isRead, false)));
   await db.update(notifications).set({ isRead: true }).where(and(eq(notifications.userId, userId), eq(notifications.isRead, false)));
-  const cantidad = Number(pendientes?.count || 0);
+  if (pendientes.length === 0) return;
   // "Marcar todas como leídas" no es abrir cada una: se registra como un
-  // solo hecho, con la cantidad, para no anunciar lecturas que no ocurrieron.
-  if (cantidad > 0) await registrarLectura({ tipo: "notificaciones_marcadas", userId, cantidad });
+  // solo hecho, con la cantidad, para no anunciar lecturas que no ocurrieron…
+  await registrarLecturas([{ tipo: "notificaciones_marcadas", userId, cantidad: pendientes.length }]);
+  // …y una fila por notificación, para saber qué mensajes quedaron
+  // "leídos" sin haberse abierto (siguen pendientes de lectura real).
+  const remitentes = await remitentesSeguro(pendientes);
+  await registrarLecturas(pendientes.map(p => ({
+    tipo: "notificacion_marcada", userId, entityType: p.entityType, entityId: p.entityId, detalle: p.type,
+    remitenteId: remitentes.get(p.id) ?? null, mensajeAt: p.createdAt,
+  })));
 }
 
 /** Housekeeping — deletes already-read notifications older than a day, so

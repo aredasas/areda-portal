@@ -1926,6 +1926,10 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
       .mutation(async ({ input, ctx }) => {
         return { leidas: await db.markEntityNotificationsRead(ctx.user.id, input.entityType, input.entityId) };
       }),
+    // Abrir el Tablero es leer lo publicado: sus avisos se dan por leídos.
+    markBoardRead: protectedProcedure.mutation(async ({ ctx }) => {
+      return { leidas: await db.markBoardNotificationsRead(ctx.user.id) };
+    }),
   }),
 
   informes: router({
@@ -3793,6 +3797,12 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
       informe: protectedProcedure.query(async ({ ctx }) => {
         assertOficinaAccess(ctx.user.cedula);
         return oficinaEstadistaDb.calcularInformeEquipo({ excluirUsuarioId: ctx.user.id });
+      }),
+      // Seguimiento: lo que le escribí al equipo y sigue sin leerse
+      // (comentarios, devoluciones, publicaciones del tablero), por persona.
+      mensajesSinLeer: protectedProcedure.query(async ({ ctx }) => {
+        assertOficinaAccess(ctx.user.cedula);
+        return oficinaEstadistaDb.seguimientoMensajes(ctx.user.id);
       }),
     }),
     // Lo que va haciendo el equipo (entregas, comentarios, lecturas) desde

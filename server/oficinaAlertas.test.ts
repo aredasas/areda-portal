@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { alertasDeTarea, yaAtendida } from "./oficinaDb";
+import { armarSeguimiento } from "./oficinaEstadistaDb";
 import { trocear } from "../client/src/lib/vozOficina";
 
 // Hoy = 2 de octubre de 2026 (así guarda las fechas el portal: medianoche UTC).
@@ -65,5 +66,37 @@ describe("voz: frases cortas", () => {
     const trozos = trocear(sinPausas);
     expect(trozos.join(" ")).toBe(sinPausas);
     for (const t of trozos) expect(t.length).toBeLessThanOrEqual(190);
+  });
+});
+
+describe("seguimiento: mensajes míos que el equipo no ha leído", () => {
+  const nombres = new Map([[2, { nombre: "Jennifer Quiroz", nombreCorto: "Jennifer" }], [3, { nombre: "Jessica Ochoa", nombreCorto: "Jessica" }]]);
+  const mensaje = (clave: string, destinatarioId: number, dias: number, estado: "sin_leer" | "marcado_sin_abrir" = "sin_leer") => ({
+    clave, estado, destinatarioId, tipo: "comentario", descripcion: "Comentario en la tarea «X»", extracto: null,
+    enviadoAt: new Date(Date.UTC(2026, 9, 2 - dias, 15)), dias, enlace: "/tareas?taskId=1",
+  });
+
+  it("sin pendientes lo dice, en vez de callar", () => {
+    const s = armarSeguimiento([], nombres);
+    expect(s).toMatchObject({ total: 0, sinLeer: 0, marcadosSinAbrir: 0, porPersona: [], mensajes: [] });
+    expect(s.frases).toEqual(["Mensajes: todo lo que le has escrito al equipo está leído."]);
+  });
+
+  it("cuenta por persona, primero quien más tiene, y los mensajes del más antiguo al más reciente", () => {
+    const s = armarSeguimiento([
+      mensaje("a", 3, 1), mensaje("b", 2, 0), mensaje("c", 2, 5), mensaje("d", 2, 2, "marcado_sin_abrir"),
+    ], nombres);
+    expect(s).toMatchObject({ total: 4, sinLeer: 3, marcadosSinAbrir: 1 });
+    expect(s.porPersona).toEqual([
+      { usuarioId: 2, nombre: "Jennifer Quiroz", nombreCorto: "Jennifer", total: 3, sinLeer: 2, marcadosSinAbrir: 1, masAntiguoDias: 5 },
+      { usuarioId: 3, nombre: "Jessica Ochoa", nombreCorto: "Jessica", total: 1, sinLeer: 1, marcadosSinAbrir: 0, masAntiguoDias: 1 },
+    ]);
+    expect(s.mensajes.map(m => m.clave)).toEqual(["c", "d", "b", "a"]);
+    expect(s.mensajes[0].destinatario).toBe("Jennifer Quiroz");
+    expect(s.frases).toEqual([
+      "Mensajes tuyos pendientes de lectura: 4.",
+      "Jennifer: 2 sin leer y 1 marcado como leído sin abrirlo; el más antiguo es de hace 5 días.",
+      "Jessica: 1 sin leer; el más antiguo es de ayer.",
+    ]);
   });
 });

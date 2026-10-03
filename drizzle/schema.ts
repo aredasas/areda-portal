@@ -1187,9 +1187,10 @@ export type InsertOficinaRevision = typeof oficinaRevisiones.$inferInsert;
  * comentarios de `comments`; no se duplican aquí. */
 export const oficinaActividad = mysqlTable("oficinaActividad", {
   id: int("id").autoincrement().primaryKey(),
-  /** "notificacion_leida" (abrió una notificación) o
+  /** "notificacion_leida" (abrió una notificación, o la tarea donde está),
    * "notificaciones_marcadas" (pulsó "marcar todas como leídas", sin
-   * abrirlas — `cantidad` dice cuántas). */
+   * abrirlas — `cantidad` dice cuántas) y "notificacion_marcada" (una fila
+   * por cada notificación que quedó marcada así, sin haberse abierto). */
   tipo: varchar("tipo", { length: 40 }).notNull(),
   /** Quién hizo la acción. */
   userId: int("userId").notNull(),
@@ -1200,6 +1201,11 @@ export const oficinaActividad = mysqlTable("oficinaActividad", {
    * "completar_solicitado", "aprobada"… */
   detalle: varchar("detalle", { length: 60 }),
   cantidad: int("cantidad").default(1).notNull(),
+  /** Quién envió el mensaje que se leyó (o se marcó sin abrir) y cuándo
+   * lo envió — para el seguimiento de "mis mensajes sin leer". NULL si no
+   * se pudo establecer. */
+  remitenteId: int("remitenteId"),
+  mensajeAt: timestamp("mensajeAt"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 }, (table) => ({
   fechaIdx: index("oficinaActividad_fecha_idx").on(table.createdAt),
