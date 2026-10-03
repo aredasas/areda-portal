@@ -1919,6 +1919,13 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
       await db.markAllNotificationsRead(ctx.user.id);
       return { success: true };
     }),
+    // Al abrir una tarea o un vencimiento se dan por leídos sus avisos,
+    // aunque no se haya entrado por la campanita.
+    markEntityRead: protectedProcedure
+      .input(z.object({ entityType: z.enum(["task", "deadline", "board_post"]), entityId: z.number() }))
+      .mutation(async ({ input, ctx }) => {
+        return { leidas: await db.markEntityNotificationsRead(ctx.user.id, input.entityType, input.entityId) };
+      }),
   }),
 
   informes: router({
@@ -3792,13 +3799,18 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
     // un momento dado — lo consulta cada rato el aviso de voz, desde
     // cualquier página del portal.
     actividad: router({
+      // `desde: null` es la primera consulta de un navegador: no trae
+      // nada, solo la hora del servidor para empezar a contar desde ahí
+      // (la hora del computador puede estar corrida y se perderían avisos).
       nuevas: protectedProcedure
-        .input(z.object({ desde: z.string().datetime() }))
+        .input(z.object({ desde: z.string().datetime().nullable() }))
         .query(async ({ input, ctx }) => {
           assertOficinaAccess(ctx.user.cedula);
+          const ahora = new Date();
+          if (!input.desde) return { ahora, eventos: [] };
           // Como mucho 24 horas hacia atrás, aunque el navegador pida más.
-          const desde = new Date(Math.max(new Date(input.desde).getTime(), Date.now() - 24 * 60 * 60 * 1000));
-          return oficinaEstadistaDb.listarActividad({ desde, excluirUsuarioId: ctx.user.id, limite: 100 });
+          const desde = new Date(Math.max(new Date(input.desde).getTime(), ahora.getTime() - 24 * 60 * 60 * 1000));
+          return { ahora, eventos: await oficinaEstadistaDb.listarActividad({ desde, excluirUsuarioId: ctx.user.id, limite: 100 }) };
         }),
     }),
     // ---- Agente de Correo: buzones del Workspace (cuenta de servicio con

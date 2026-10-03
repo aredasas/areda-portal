@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -11,6 +11,19 @@ export default function CommentsSection({ entityType, entityId }: { entityType: 
   const [content, setContent] = useState("");
   const { data: commentsList, isLoading, refetch } = trpc.comments.list.useQuery({ entityType, entityId });
   const createComment = trpc.comments.create.useMutation();
+
+  // Abrir los comentarios de una tarea o un vencimiento es leerlos: sus
+  // avisos se marcan como leídos aunque no se haya entrado por la campanita
+  // (y quien los envió se entera de que ya se vieron).
+  const utils = trpc.useUtils();
+  const marcarLeidas = trpc.notifications.markEntityRead.useMutation();
+  useEffect(() => {
+    if (entityType !== "task" && entityType !== "deadline") return;
+    marcarLeidas.mutateAsync({ entityType, entityId })
+      .then((r) => { if (r.leidas > 0) { utils.notifications.unreadCount.invalidate(); utils.notifications.list.invalidate(); } })
+      .catch(() => { /* no impide ver los comentarios */ });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entityType, entityId]);
 
   const handleSend = async () => {
     if (!content.trim()) return;

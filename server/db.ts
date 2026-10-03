@@ -944,6 +944,24 @@ export async function markNotificationRead(id: number, userId: number) {
   }
 }
 
+/** Abrir la tarea o el vencimiento (donde están los comentarios y la
+ * observación de la revisión) cuenta como leer sus notificaciones, aunque
+ * no se haya entrado por la campanita: se marcan como leídas y queda la
+ * lectura registrada — una por cada tipo de aviso, no una por notificación. */
+export async function markEntityNotificationsRead(userId: number, entityType: "task" | "deadline" | "board_post", entityId: number): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const pendientes = await db.select({ id: notifications.id, type: notifications.type }).from(notifications)
+    .where(and(eq(notifications.userId, userId), eq(notifications.entityType, entityType), eq(notifications.entityId, entityId), eq(notifications.isRead, false)));
+  if (pendientes.length === 0) return 0;
+  await db.update(notifications).set({ isRead: true })
+    .where(and(eq(notifications.userId, userId), inArray(notifications.id, pendientes.map(p => p.id))));
+  for (const tipo of Array.from(new Set(pendientes.map(p => p.type)))) {
+    await registrarLectura({ tipo: "notificacion_leida", userId, entityType, entityId, detalle: tipo });
+  }
+  return pendientes.length;
+}
+
 export async function markAllNotificationsRead(userId: number) {
   const db = await getDb();
   if (!db) return;

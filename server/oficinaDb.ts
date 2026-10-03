@@ -1,4 +1,4 @@
-import { eq, and, desc, ne, isNull } from "drizzle-orm";
+import { eq, and, desc, ne, isNull, inArray } from "drizzle-orm";
 import { getDb } from "./db";
 import {
   oficinaAgentes, InsertOficinaAgente,
@@ -80,6 +80,8 @@ export async function listarAgentes() {
   const db = await getDb();
   if (!db) return [];
   await asegurarAgentesPorDefecto();
+  // Antes de contar: fuera las alertas de tareas que ya se resolvieron.
+  await depurarSolicitudesDeTareas();
   const filas = await db.select().from(oficinaAgentes).orderBy(oficinaAgentes.id);
   // Conteo de solicitudes pendientes por agente, para la mano levantada.
   const pendientes = await db.select({ agenteId: oficinaSolicitudes.agenteId })
@@ -215,6 +217,7 @@ export const TIPO_SOLICITUD_CORREO = "correo";
 export async function listarSolicitudes(agenteId?: number) {
   const db = await getDb();
   if (!db) return [];
+  await depurarSolicitudesDeTareas();
   const query = db.select().from(oficinaSolicitudes);
   const filas = agenteId
     ? await query.where(eq(oficinaSolicitudes.agenteId, agenteId)).orderBy(desc(oficinaSolicitudes.createdAt))
@@ -242,16 +245,22 @@ export async function resolverSolicitud(id: number, accion: "atender" | "descart
 }
 
 /** Crea la solicitud solo si no existe ya una pendiente con el mismo
- * tipo+refId — evita duplicar el mismo hallazgo en cada revisión. */
+ * tipo+refId — evita duplicar el mismo hallazgo en cada revisión. Si ya
+ * existe, se le actualiza el texto (pudo cambiar el responsable o la fecha). */
 export async function crearSolicitudSiNueva(db: NonNullable<Awaited<ReturnType<typeof getDb>>>, agenteId: number, tipo: string, refId: number | null, titulo: string, detalle: string, severidad: "info" | "atencion" | "urgente"): Promise<boolean> {
-  const existente = await db.select({ id: oficinaSolicitudes.id }).from(oficinaSolicitudes)
+  const existente = await db.select({ id: oficinaSolicitudes.id, titulo: oficinaSolicitudes.titulo, detalle: oficinaSolicitudes.detalle }).from(oficinaSolicitudes)
     .where(and(
       eq(oficinaSolicitudes.agenteId, agenteId),
       eq(oficinaSolicitudes.tipo, tipo),
       refId != null ? eq(oficinaSolicitudes.refId, refId) : isNull(oficinaSolicitudes.refId),
       eq(oficinaSolicitudes.estado, "pendiente"),
     )).limit(1);
-  if (existente.length > 0) return false;
+  if (existente.length > 0) {
+    if (existente[0].titulo !== titulo.slice(0, 255) || (existente[0].detalle || "") !== detalle) {
+      await db.update(oficinaSolicitudes).set({ titulo: titulo.slice(0, 255), detalle }).where(eq(oficinaSolicitudes.id, existente[0].id));
+    }
+    return false;
+  }
   await db.insert(oficinaSolicitudes).values({ agenteId, tipo, refId, titulo, detalle, severidad });
   return true;
 }
@@ -262,10 +271,68 @@ export async function crearSolicitudSiNueva(db: NonNullable<Awaited<ReturnType<t
 
 const DIAS_REPRESADA = 5; // sin movimiento en corrección/completar
 const DIAS_OLVIDADA = 10; // pendiente/en_progreso sin fecha límite, sin movimiento
+const DIA_MS = 24 * 60 * 60 * 1000;
 
 export type HallazgoEstadista = {
   tipo: string; refId: number | null; titulo: string; detalle: string; severidad: "info" | "atencion" | "urgente";
+  /** Último movimiento de la tarea: una alerta que ya se atendió no se
+   * vuelve a levantar mientras la tarea siga igual. */
+  movidaAt?: Date;
 };
+
+/** Alertas del Estadista que hablan de UNA tarea (su refId es el id de la tarea). */
+export const TIPOS_ALERTA_TAREA = ["tarea_vencida", "tarea_represada", "tarea_olvidada"] as const;
+export type TipoAlertaTarea = typeof TIPOS_ALERTA_TAREA[number];
+type TareaParaAlerta = { status: string; dueDate: Date | string | null; reviewStatus: string | null; updatedAt: Date | string };
+
+/** Qué alertas le corresponden HOY a una tarea. Es la única regla: la usan
+ * la revisión (para levantar alertas) y la depuración (para retirarlas
+ * cuando la tarea ya se terminó, se canceló o cambió de fecha). */
+export function alertasDeTarea(t: TareaParaAlerta, hoy: Date): TipoAlertaTarea[] {
+  if (t.status === "cancelada" || t.status === "completada") return [];
+  const alertas: TipoAlertaTarea[] = [];
+  const movida = new Date(t.updatedAt).getTime();
+  // Vencida: sin terminar y con la fecha límite ya pasada.
+  if (t.dueDate && new Date(t.dueDate) < hoy) alertas.push("tarea_vencida");
+  // Represada: devuelta para corregir o completar, sin movimiento hace días.
+  if ((t.reviewStatus === "correccion" || t.reviewStatus === "completar") && movida < hoy.getTime() - DIAS_REPRESADA * DIA_MS) alertas.push("tarea_represada");
+  // Olvidada: sin fecha límite, activa y sin tocarse hace mucho.
+  if (!t.dueDate && (t.status === "pendiente" || t.status === "en_progreso") && movida < hoy.getTime() - DIAS_OLVIDADA * DIA_MS) alertas.push("tarea_olvidada");
+  return alertas;
+}
+
+/** Retira de "pendientes" las alertas de tareas que ya no aplican: la tarea
+ * se terminó, se canceló, se eliminó o le cambiaron la fecha. Sin esto la
+ * alerta se quedaba hasta que alguien la cerrara a mano, aunque la tarea
+ * ya estuviera resuelta. Nunca debe tumbar el listado: si algo falla, se
+ * deja en el log y la lista sale como estaba. */
+export async function depurarSolicitudesDeTareas(): Promise<number> {
+  try {
+    const db = await getDb();
+    if (!db) return 0;
+    const pendientes = await db.select({ id: oficinaSolicitudes.id, agenteId: oficinaSolicitudes.agenteId, tipo: oficinaSolicitudes.tipo, refId: oficinaSolicitudes.refId })
+      .from(oficinaSolicitudes)
+      .where(and(eq(oficinaSolicitudes.estado, "pendiente"), inArray(oficinaSolicitudes.tipo, [...TIPOS_ALERTA_TAREA])));
+    if (pendientes.length === 0) return 0;
+    const ids = Array.from(new Set(pendientes.map(p => p.refId).filter((id): id is number => id != null)));
+    const filas = ids.length === 0 ? [] : await db.select({ id: tasks.id, status: tasks.status, dueDate: tasks.dueDate, reviewStatus: tasks.reviewStatus, updatedAt: tasks.updatedAt })
+      .from(tasks).where(inArray(tasks.id, ids));
+    const porId = new Map(filas.map(t => [t.id, t]));
+    const hoy = bogotaTodayUTCMidnight();
+    const sobran = pendientes.filter(p => {
+      const tarea = p.refId != null ? porId.get(p.refId) : undefined;
+      return !tarea || !alertasDeTarea(tarea, hoy).includes(p.tipo as TipoAlertaTarea);
+    });
+    if (sobran.length === 0) return 0;
+    await db.update(oficinaSolicitudes).set({ estado: "atendida", resueltaAt: new Date() })
+      .where(and(inArray(oficinaSolicitudes.id, sobran.map(p => p.id)), eq(oficinaSolicitudes.estado, "pendiente")));
+    for (const agenteId of Array.from(new Set(sobran.map(p => p.agenteId)))) await recalcularEstadoPorSolicitudes(agenteId);
+    return sobran.length;
+  } catch (error: any) {
+    console.error("[Oficina] No se pudieron depurar las alertas de tareas:", String(error?.message || error).slice(0, 200));
+    return 0;
+  }
+}
 
 /** El análisis en sí — 100% determinístico sobre datos reales de la BD,
  * sin IA (capa 3 del DOE). La IA solo se usa después para redactar el
@@ -273,8 +340,6 @@ export type HallazgoEstadista = {
  * los hechos. */
 async function calcularHallazgos(db: NonNullable<Awaited<ReturnType<typeof getDb>>>): Promise<{ hallazgos: HallazgoEstadista[]; metricas: Record<string, unknown> }> {
   const hoy = bogotaTodayUTCMidnight();
-  const limiteRepresada = new Date(hoy.getTime() - DIAS_REPRESADA * 24 * 60 * 60 * 1000);
-  const limiteOlvidada = new Date(hoy.getTime() - DIAS_OLVIDADA * 24 * 60 * 60 * 1000);
 
   const filas = await db.select({
     id: tasks.id, title: tasks.title, assignedToId: tasks.assignedToId, assignedToName: users.name,
@@ -287,14 +352,17 @@ async function calcularHallazgos(db: NonNullable<Awaited<ReturnType<typeof getDb
     .where(ne(tasks.status, "cancelada"));
 
   const hallazgos: HallazgoEstadista[] = [];
+  const conAlerta = (tipo: TipoAlertaTarea) => filas.filter(t => alertasDeTarea(t, hoy).includes(tipo));
+  const diasSinMovimiento = (t: { updatedAt: Date }) => Math.floor((hoy.getTime() - new Date(t.updatedAt).getTime()) / DIA_MS);
+  const nombreDe = (t: { title: string; clientName: string | null }) => `${t.title}${t.clientName ? ` (${t.clientName})` : ""}`;
 
   // 1) Vencidas: no completadas y con fecha límite ya pasada.
-  const vencidas = filas.filter(t => t.status !== "completada" && t.dueDate && new Date(t.dueDate) < hoy);
+  const vencidas = conAlerta("tarea_vencida");
   for (const t of vencidas) {
     hallazgos.push({
-      tipo: "tarea_vencida", refId: t.id,
-      titulo: `Vencida: ${t.title}${t.clientName ? ` (${t.clientName})` : ""}`,
-      detalle: `Responsable: ${t.assignedToName || "sin asignar"}. Venció el ${new Date(t.dueDate!).toLocaleDateString("es-CO")}.`,
+      tipo: "tarea_vencida", refId: t.id, movidaAt: new Date(t.updatedAt),
+      titulo: `Vencida: ${nombreDe(t)}`,
+      detalle: `Responsable: ${t.assignedToName || "sin asignar"}. Venció el ${new Date(t.dueDate!).toLocaleDateString("es-CO", { timeZone: "UTC" })}.`,
       severidad: "urgente",
     });
   }
@@ -302,31 +370,23 @@ async function calcularHallazgos(db: NonNullable<Awaited<ReturnType<typeof getDb
   // 2) Represadas: devueltas para corrección/completar y sin movimiento
   //    desde hace DIAS_REPRESADA días — quedaron "colgadas" sin que nadie
   //    responda a la observación.
-  const represadas = filas.filter(t =>
-    t.status !== "completada" && (t.reviewStatus === "correccion" || t.reviewStatus === "completar") &&
-    new Date(t.updatedAt) < limiteRepresada
-  );
+  const represadas = conAlerta("tarea_represada");
   for (const t of represadas) {
-    const dias = Math.floor((hoy.getTime() - new Date(t.updatedAt).getTime()) / (24 * 60 * 60 * 1000));
     hallazgos.push({
-      tipo: "tarea_represada", refId: t.id,
-      titulo: `Represada: ${t.title}${t.clientName ? ` (${t.clientName})` : ""}`,
-      detalle: `Responsable: ${t.assignedToName || "sin asignar"}. Lleva ${dias} días en "${t.reviewStatus === "correccion" ? "corrección" : "completar"}" sin movimiento.`,
+      tipo: "tarea_represada", refId: t.id, movidaAt: new Date(t.updatedAt),
+      titulo: `Represada: ${nombreDe(t)}`,
+      detalle: `Responsable: ${t.assignedToName || "sin asignar"}. Lleva ${diasSinMovimiento(t)} días en "${t.reviewStatus === "correccion" ? "corrección" : "completar"}" sin movimiento.`,
       severidad: "atencion",
     });
   }
 
   // 3) Olvidadas: sin fecha límite, activas desde hace mucho, sin tocarse.
-  const olvidadas = filas.filter(t =>
-    !t.dueDate && (t.status === "pendiente" || t.status === "en_progreso") &&
-    new Date(t.updatedAt) < limiteOlvidada
-  );
+  const olvidadas = conAlerta("tarea_olvidada");
   for (const t of olvidadas) {
-    const dias = Math.floor((hoy.getTime() - new Date(t.updatedAt).getTime()) / (24 * 60 * 60 * 1000));
     hallazgos.push({
-      tipo: "tarea_olvidada", refId: t.id,
-      titulo: `Olvidada: ${t.title}${t.clientName ? ` (${t.clientName})` : ""}`,
-      detalle: `Responsable: ${t.assignedToName || "sin asignar"}. Sin fecha límite y sin movimiento hace ${dias} días.`,
+      tipo: "tarea_olvidada", refId: t.id, movidaAt: new Date(t.updatedAt),
+      titulo: `Olvidada: ${nombreDe(t)}`,
+      detalle: `Responsable: ${t.assignedToName || "sin asignar"}. Sin fecha límite y sin movimiento hace ${diasSinMovimiento(t)} días.`,
       severidad: "info",
     });
   }
@@ -357,6 +417,13 @@ async function calcularHallazgos(db: NonNullable<Awaited<ReturnType<typeof getDb
   };
 }
 
+/** ¿La alerta de esta tarea ya se cerró y la tarea no se ha movido desde
+ * entonces? (un segundo de holgura: las fechas se guardan sin milisegundos). */
+export function yaAtendida(resueltaMs: number | undefined, movidaAt: Date | undefined): boolean {
+  if (!resueltaMs) return false;
+  return !movidaAt || movidaAt.getTime() <= resueltaMs + 1000;
+}
+
 export async function revisarAhoraEstadista(): Promise<{ resumen: string; solicitudesCreadas: number }> {
   const db = await getDb();
   if (!db) throw new Error("Base de datos no disponible");
@@ -378,8 +445,22 @@ export async function revisarAhoraEstadista(): Promise<{ resumen: string; solici
     }));
     (metricas as Record<string, unknown>).rankingDias = DIAS_RANKING;
 
+    // Primero salen de pendientes las alertas de tareas ya resueltas.
+    await depurarSolicitudesDeTareas();
+    // Una alerta que ya se atendió o se descartó no vuelve a aparecer en
+    // cada revisión: solo si la tarea tuvo movimiento después y sigue igual.
+    const resueltas = await db.select({ tipo: oficinaSolicitudes.tipo, refId: oficinaSolicitudes.refId, resueltaAt: oficinaSolicitudes.resueltaAt })
+      .from(oficinaSolicitudes)
+      .where(and(eq(oficinaSolicitudes.agenteId, agente.id), ne(oficinaSolicitudes.estado, "pendiente"), inArray(oficinaSolicitudes.tipo, [...TIPOS_ALERTA_TAREA])));
+    const ultimaResuelta = new Map<string, number>();
+    for (const r of resueltas) {
+      if (!r.resueltaAt) continue;
+      const clave = `${r.tipo}|${r.refId}`;
+      ultimaResuelta.set(clave, Math.max(ultimaResuelta.get(clave) || 0, new Date(r.resueltaAt).getTime()));
+    }
     let solicitudesCreadas = 0;
     for (const h of hallazgos) {
+      if (yaAtendida(ultimaResuelta.get(`${h.tipo}|${h.refId}`), h.movidaAt)) continue;
       const creada = await crearSolicitudSiNueva(db, agente.id, h.tipo, h.refId, h.titulo, h.detalle, h.severidad);
       if (creada) solicitudesCreadas++;
     }
