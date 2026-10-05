@@ -1611,6 +1611,12 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
   const [valorRetencion, setValorRetencion] = useState("");
   const [eliminarId, setEliminarId] = useState<number | null>(null);
 
+  // Al cambiar de cédula se limpia lo que estaba a medio digitar en
+  // deducciones/rentas exentas: los conceptos disponibles no son los mismos.
+  useEffect(() => {
+    setTipoDeduccion(""); setConceptoDeduccion(""); setValorDeduccion(""); setLimiteGeneralNuevo(false); setCalculoAutomaticoNuevo(false);
+  }, [cedulaSeleccionada]);
+
   const invalidarTodo = () => {
     utils.renta.liquidacion.list.invalidate({ rentaClienteId, seccion: "cedula" });
     utils.renta.reportes.resumenActual.invalidate({ rentaClienteId });
@@ -1633,6 +1639,12 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
   const tieneCostos = cedulaInfo?.tieneCostos ?? false;
 
   const itemsDeEstaCedula = todosItems.filter((it: any) => (it.cedula || "trabajo") === cedulaSeleccionada);
+  const esCedulaGeneralSeleccionada = CEDULAS_GENERAL.includes(cedulaSeleccionada);
+  const esCedulaPensiones = cedulaSeleccionada === "pensiones";
+  // Cada cédula ofrece solo las rentas exentas que le aplican: en la de
+  // Pensiones, la exención del Art. 206 núm. 5; en las demás, todas menos esa.
+  const tiposRentaExenta = (catalogoQuery.data?.tipos || []).filter((t: any) =>
+    t.tipoValor === "renta_exenta" && (esCedulaPensiones ? t.cedulas?.includes("pensiones") : !t.cedulas || t.cedulas.includes(cedulaSeleccionada)));
   const TIPOS_FUERA_LIMITE = ["dependiente_adicional_72uvt", "exceso_salario_militares", "compras_1pct_fe"];
   const porTipo = (tipo: string) => itemsDeEstaCedula.filter((it: any) => it.tipoValor === tipo && !TIPOS_FUERA_LIMITE.includes(it.tipoDeduccion));
   const porTipoFueraLimite = () => itemsDeEstaCedula.filter((it: any) => TIPOS_FUERA_LIMITE.includes(it.tipoDeduccion));
@@ -1727,6 +1739,16 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
       rentaClienteId, seccion: "cedula", cedula: cedulaSeleccionada as any,
       tipoValor: "costo_deduccion_procedente", concepto: conceptoCostos.trim(), valor: Number(valorCostos),
     }, { onSuccess: () => { setConceptoCostos(""); setValorCostos(""); } });
+  };
+  /** Al elegir la exención de pensiones se propone el concepto y, como
+   * valor, la renta líquida de la cédula que aún no está cubierta (lo más
+   * común es que toda la pensión sea exenta); se puede cambiar antes de agregar. */
+  const elegirTipoRentaExenta = (tipo: string) => {
+    setTipoDeduccion(tipo);
+    if (tipo !== "pensiones_exentas") return;
+    if (!conceptoDeduccion.trim()) setConceptoDeduccion("Pensión exenta");
+    const porCubrir = rentaLiquidaEstimadaCedula - totalRentasExentasLimitado;
+    if (!valorDeduccion && porCubrir > 0) setValorDeduccion(String(Math.round(porCubrir)));
   };
   const handleAgregarDeduccion = () => {
     const esAuto25 = tipoDeduccion === "renta_exenta_25_laboral" && calculoAutomaticoNuevo;
@@ -1897,9 +1919,18 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
         <span className="font-bold">{fmt(rentaLiquidaEstimadaCedula)}</span>
       </div>
 
-      {/* Deducciones */}
+      {/* Deducciones — a la Cédula de Pensiones solo se le resta su renta
+          exenta (Art. 337 E.T.): el bloque se oculta ahí, salvo que ya haya
+          deducciones cargadas (para poder verlas y quitarlas). */}
+      {(!esCedulaPensiones || porTipo("deduccion").length > 0) && (
       <div className="border-2 border-purple-200 rounded-md p-3 space-y-2 bg-purple-50/30">
         <span className="text-sm font-semibold text-purple-800">Deducciones</span>
+        {esCedulaPensiones && (
+          <p className="text-xs text-amber-700 flex items-start gap-1.5 bg-amber-50 rounded p-1.5">
+            <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+            En la Cédula de Pensiones no se restan deducciones: estas partidas no entran al cálculo. Elimínalas o pásalas a la cédula que corresponda.
+          </p>
+        )}
         {!!porTipo("deduccion").length && (
           <div className="space-y-1 max-h-48 overflow-y-auto">
             <div className="flex items-center gap-2 text-[10px] text-muted-foreground uppercase tracking-wide px-0.5">
@@ -1985,15 +2016,27 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
           </p>
         )}
       </div>
+      )}
 
       {/* Rentas Exentas */}
       <div className="border-2 border-teal-200 rounded-md p-3 space-y-2 bg-teal-50/30">
-        <span className="text-sm font-semibold text-teal-800">Rentas Exentas</span>
+        <span className="text-sm font-semibold text-teal-800">Rentas Exentas{esCedulaPensiones ? " de pensiones" : ""}</span>
+        {esCedulaPensiones && (
+          <p className="text-xs text-muted-foreground">
+            Las pensiones de jubilación, vejez, invalidez, sobrevivientes y riesgos laborales están exentas hasta 1.000 UVT por cada pago mensual (Art. 206 núm. 5 E.T.). Va en la casilla 102 y no compite por el tope del 40 % de la Cédula General.
+          </p>
+        )}
+        {esCedulaPensiones && totalIngresoBruto > 0 && porTipo("renta_exenta").length === 0 && (
+          <p className="text-xs text-amber-700 flex items-start gap-1.5 bg-amber-50 rounded p-1.5">
+            <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+            Hay ingresos por pensiones y todavía no se ha registrado su renta exenta: mientras falte, toda la pensión queda gravada.
+          </p>
+        )}
         {!!porTipo("renta_exenta").length && (
           <div className="space-y-1 max-h-48 overflow-y-auto">
             <div className="flex items-center gap-2 text-[10px] text-muted-foreground uppercase tracking-wide px-0.5">
               <span className="flex-1">Concepto</span>
-              <span className="w-20 text-center shrink-0">Lím. gral.</span>
+              {esCedulaGeneralSeleccionada && <span className="w-20 text-center shrink-0">Lím. gral.</span>}
               <span className="w-24 text-right shrink-0">Digitado</span>
               <span className="w-24 text-right shrink-0">Limitado</span>
               <span className="w-6 shrink-0" />
@@ -2008,13 +2051,15 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
                     <div className="truncate">{it.concepto}{esAuto && <span className="ml-1.5 text-[10px] text-teal-700 bg-teal-100 rounded px-1.5 py-0.5">automático</span>}</div>
                     <div className="text-xs text-muted-foreground">{nombreCatalogo(it.tipoDeduccion)}</div>
                   </div>
-                  <span className="w-20 flex justify-center shrink-0">
-                    <Checkbox
-                      checked={!!it.limiteGeneral}
-                      onCheckedChange={(v) => actualizarMutation.mutate({ id: it.id, limiteGeneral: !!v })}
-                      disabled={soloLectura}
-                    />
-                  </span>
+                  {esCedulaGeneralSeleccionada && (
+                    <span className="w-20 flex justify-center shrink-0">
+                      <Checkbox
+                        checked={!!it.limiteGeneral}
+                        onCheckedChange={(v) => actualizarMutation.mutate({ id: it.id, limiteGeneral: !!v })}
+                        disabled={soloLectura}
+                      />
+                    </span>
+                  )}
                   <span className="w-24 text-right shrink-0">{esAuto ? "—" : fmt(it.valor)}</span>
                   <span className={`w-24 text-right shrink-0 ${fueLimitado || esAuto ? "font-semibold text-teal-700" : ""}`}>{fmt(limitado)}</span>
                   <ComentarioItemBoton itemId={it.id} comentarioActual={it.comentario} soloLectura={soloLectura} />
@@ -2031,11 +2076,11 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
         <div className="grid sm:grid-cols-[1.2fr_1fr_120px_120px_auto] gap-2 items-end pt-1">
           <div className="space-y-1">
             <Label className="text-xs">Tipo</Label>
-            <Select value={tipoDeduccion} onValueChange={setTipoDeduccion}>
+            <Select value={tipoDeduccion} onValueChange={elegirTipoRentaExenta}>
               <SelectTrigger className="h-8"><SelectValue placeholder="Selecciona..." /></SelectTrigger>
               <SelectContent>
-                {catalogoQuery.data?.tipos.filter((t: any) => t.tipoValor === "renta_exenta").map((t: any) => (
-                  <SelectItem key={t.tipo} value={t.tipo}>{t.nombre}{t.topeUVT ? ` (tope ${t.topeUVT} UVT)` : ""}</SelectItem>
+                {tiposRentaExenta.map((t: any) => (
+                  <SelectItem key={t.tipo} value={t.tipo}>{t.nombre}{t.topeUVT ? ` (tope ${t.topeUVT.toLocaleString("es-CO")} UVT)` : ""}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
@@ -2060,10 +2105,12 @@ function IngresosDeduccionesPorCedulaCard({ rentaClienteId, soloLectura }: { ren
             <Plus className="w-3.5 h-3.5" /> Agregar
           </Button>
         </div>
-        <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
-          <Checkbox checked={limiteGeneralNuevo} onCheckedChange={(v) => setLimiteGeneralNuevo(!!v)} />
-          Límite general — si el conjunto de la Cédula General supera el 40%/1.340 UVT, esta partida absorbe el ajuste primero
-        </label>
+        {esCedulaGeneralSeleccionada && (
+          <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
+            <Checkbox checked={limiteGeneralNuevo} onCheckedChange={(v) => setLimiteGeneralNuevo(!!v)} />
+            Límite general — si el conjunto de la Cédula General supera el 40%/1.340 UVT, esta partida absorbe el ajuste primero
+          </label>
+        )}
         {tipoDeduccion === "renta_exenta_25_laboral" && cedulaSeleccionada === "trabajo" && (
           <label className="flex items-center gap-1.5 text-xs text-teal-800 cursor-pointer">
             <Checkbox checked={calculoAutomaticoNuevo} onCheckedChange={(v) => setCalculoAutomaticoNuevo(!!v)} />

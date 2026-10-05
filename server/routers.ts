@@ -3528,6 +3528,9 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
         .mutation(async ({ input, ctx }) => {
           assertRentaPNAccess(ctx.user.role);
           let alerta: string | null = null;
+          if (input.tipoDeduccion && !rentaDb.tipoPermitidoEnCedula(input.tipoDeduccion, input.cedula)) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: "Ese concepto es de la Cédula de Pensiones: selecciona esa cédula para registrarlo." });
+          }
           if (input.tipoDeduccion) {
             let ingresoBrutoCedula: number | undefined;
             if (input.tipoDeduccion === "aportes_voluntarios_pension_afc" && input.cedula) {

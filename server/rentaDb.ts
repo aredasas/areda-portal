@@ -178,6 +178,7 @@ export const TOPES_DEDUCCION_2025 = {
   compras: 1400,
   rentaExentaLaboral25: 790, // Art. 206 num. 10 E.T. — 25% rentas de trabajo
   aportesVoluntariosPensionAFC: 3800, // renta exenta, hasta 30% del ingreso
+  pensionesExentas: 12000, // Art. 206 núm. 5 E.T. — 1.000 UVT por cada pago mensual (12 meses)
   saludPrepagada: 192, // 16 UVT/mes
   dependientes: 384, // 32 UVT/mes, 10% del ingreso
   interesesVivienda: 1200, // Art. 119 E.T.
@@ -192,6 +193,9 @@ export const TOPES_DEDUCCION_2025 = {
  * (el contador debe verificarlo manualmente). */
 export const TIPOS_DEDUCCION_RENTA_EXENTA: {
   tipo: string; nombre: string; tipoValor: "deduccion" | "renta_exenta"; topeUVT: number | null; nota?: string;
+  /** Si viene, el concepto solo existe en esas cédulas (ej. la exención de
+   * pensiones solo en la Cédula de Pensiones). Sin esto, aplica a la Cédula General. */
+  cedulas?: string[];
 }[] = [
   { tipo: "renta_exenta_25_laboral", nombre: "25% renta exenta de rentas de trabajo", tipoValor: "renta_exenta", topeUVT: TOPES_DEDUCCION_2025.rentaExentaLaboral25 },
   { tipo: "cesantias_intereses", nombre: "Cesantías e intereses de cesantías (Art. 206 num. 4 E.T.)", tipoValor: "renta_exenta", topeUVT: null,
@@ -201,6 +205,10 @@ export const TIPOS_DEDUCCION_RENTA_EXENTA: {
   { tipo: "auxilio_funerario", nombre: "Auxilio funerario / gastos de entierro del trabajador (Art. 206 num. 3 E.T.)", tipoValor: "renta_exenta", topeUVT: null,
     nota: "Exenta en su totalidad." },
   { tipo: "aportes_voluntarios_pension_afc", nombre: "Aportes voluntarios pensión / cuentas AFC", tipoValor: "renta_exenta", topeUVT: TOPES_DEDUCCION_2025.aportesVoluntariosPensionAFC },
+  { tipo: "pensiones_exentas", nombre: "Pensiones de jubilación, vejez, invalidez, sobrevivientes y riesgos laborales (Art. 206 núm. 5 E.T.)", tipoValor: "renta_exenta", topeUVT: TOPES_DEDUCCION_2025.pensionesExentas, cedulas: ["pensiones"],
+    nota: "Exenta hasta 1.000 UVT por cada pago mensual ($49.799.000); el tope anual de 12.000 UVT supone 12 meses de pensión. La mesada adicional se suma al pago del mes en que se recibe (no tiene tope propio) y lo que exceda en un mes no se compensa con los demás: si la pensión se recibió por menos de 12 meses o algún pago mensual superó las 1.000 UVT, verificar el valor mes a mes. Aplica también a pensiones del exterior (Ley 2277 de 2022)." },
+  { tipo: "pension_indemnizacion_sustitutiva", nombre: "Indemnización sustitutiva de pensión / devolución de saldos (Art. 206 núm. 5 E.T.)", tipoValor: "renta_exenta", topeUVT: null, cedulas: ["pensiones"],
+    nota: "Exenta hasta 1.000 UVT por cada mes al que corresponda la indemnización o la devolución de saldos — calcular el tope con ese número de meses antes de tomar el valor completo." },
   { tipo: "salud_prepagada", nombre: "Medicina prepagada / seguros de salud", tipoValor: "deduccion", topeUVT: TOPES_DEDUCCION_2025.saludPrepagada },
   { tipo: "dependientes_economicos", nombre: "Dependientes económicos", tipoValor: "deduccion", topeUVT: TOPES_DEDUCCION_2025.dependientes },
   { tipo: "intereses_vivienda", nombre: "Intereses de vivienda (crédito hipotecario/leasing)", tipoValor: "deduccion", topeUVT: TOPES_DEDUCCION_2025.interesesVivienda },
@@ -214,6 +222,18 @@ export const TIPOS_DEDUCCION_RENTA_EXENTA: {
     nota: "Se resta DESPUÉS de calcular el tope del 40%/1.340 UVT, no compite por ese cupo ni entra en la base del 25% laboral (Art. 336 núm. 5.4 E.T.). Requiere factura electrónica con validación previa y pago bancarizado — no aplica a compras en efectivo." },
   { tipo: "otro", nombre: "Otra deducción/renta exenta (verificar manualmente)", tipoValor: "deduccion", topeUVT: null },
 ];
+
+/** Las rentas exentas propias de la Cédula de Pensiones (Art. 337 E.T.: a
+ * esa cédula solo se le resta la exención del numeral 5 del Art. 206). */
+export const TIPOS_RENTA_EXENTA_PENSIONES = new Set(TIPOS_DEDUCCION_RENTA_EXENTA.filter(t => t.cedulas?.includes("pensiones")).map(t => t.tipo));
+
+/** ¿Ese concepto se puede registrar en esa cédula? Los que declaran
+ * `cedulas` solo en ellas; los demás, en cualquiera (como siempre). */
+export function tipoPermitidoEnCedula(tipoDeduccion: string, cedula: string | null | undefined): boolean {
+  const catalogo = TIPOS_DEDUCCION_RENTA_EXENTA.find(t => t.tipo === tipoDeduccion);
+  if (!catalogo?.cedulas) return true;
+  return !!cedula && catalogo.cedulas.includes(cedula);
+}
 
 /** Deducciones/rentas exentas que la ley excluye EXPRESAMENTE del tope del
  * 40%/1.340 UVT de la Cédula General — se restan de la renta líquida
@@ -494,7 +514,7 @@ export type ResultadoLiquidacion = {
   totalDisponibleGeneral: number;
   valorDistribuido: number;
   rentaLiquidaCedulaGeneral: number;
-  ingresoBrutoPensiones: number; rentaLiquidaPensiones: number; rentaExentaPensiones: number; rentaLiquidaGravablePensiones: number;
+  ingresoBrutoPensiones: number; incrngoPensiones: number; rentaLiquidaPensiones: number; rentaExentaPensiones: number; rentaLiquidaGravablePensiones: number;
   ingresoBrutoDividendos: number;
   rentaLiquidaGravableTotal: number;
   impuestoRenta: { impuesto: number; tarifaMarginal: number; rangoUVT: string };
@@ -695,7 +715,11 @@ export function armarLiquidacion(datos: DatosLiquidacion): ResultadoLiquidacion 
   const ingresoBrutoPensiones = sumaItems(cPensiones.ingresoBruto);
   const incrngoPensiones = sumaItems(cPensiones.ingresoNoConstitutivo);
   const rentaLiquidaPensiones = Math.max(0, ingresoBrutoPensiones - incrngoPensiones);
-  const rentaExentaPensiones = cPensiones.rentaExenta.reduce((a, it) => a + calcularValorLimitado(it.valor, it.tipoDeduccion, ingresoBrutoPensiones), 0);
+  // Cada partida con su tope individual; y el conjunto nunca por encima de
+  // la renta líquida de la cédula (en el Formulario 210 la casilla 102 no
+  // puede superar la 101).
+  const rentaExentaPensionesRegistrada = cPensiones.rentaExenta.reduce((a, it) => a + calcularValorLimitado(it.valor, it.tipoDeduccion, ingresoBrutoPensiones), 0);
+  const rentaExentaPensiones = Math.min(rentaExentaPensionesRegistrada, rentaLiquidaPensiones);
   const rentaLiquidaGravablePensiones = Math.max(0, rentaLiquidaPensiones - rentaExentaPensiones);
 
   const cDividendos = datos.cedulas["dividendos"] || vacio;
@@ -779,7 +803,7 @@ export function armarLiquidacion(datos: DatosLiquidacion): ResultadoLiquidacion 
     totalFueraDeLimite40,
     baseCalculoLimite, limite40PorcientoOMil340UVT, totalDisponibleGeneral, valorDistribuido,
     rentaLiquidaCedulaGeneral,
-    ingresoBrutoPensiones, rentaLiquidaPensiones, rentaExentaPensiones, rentaLiquidaGravablePensiones,
+    ingresoBrutoPensiones, incrngoPensiones, rentaLiquidaPensiones, rentaExentaPensiones, rentaLiquidaGravablePensiones,
     ingresoBrutoDividendos,
     rentaLiquidaGravableTotal, impuestoRenta, totalRetenciones,
     totalDescuentosTributarios, impuestoNetoDespuesDescuentos,
@@ -890,6 +914,37 @@ export function validarRenta(
   const hayIngresos = SUBRENTAS_GENERAL.some(n => resultado.subRentas[n].ingresoBruto > 0) || resultado.ingresoBrutoPensiones > 0;
   if (hayIngresos && resultado.totalRetenciones === 0) {
     hallazgos.push({ severidad: "info", categoria: "Retenciones", mensaje: "No hay retenciones practicadas cargadas — confirmar si el cliente no tuvo, o si falta cargarlas (afecta el cálculo del anticipo)." });
+  }
+
+  // 7b. Cédula de pensiones: la renta exenta del Art. 206 núm. 5.
+  if (resultado.ingresoBrutoPensiones > 0) {
+    const exentas = datos.cedulas["pensiones"]?.rentaExenta || [];
+    const registrada = exentas.reduce((a, it) => a + calcularValorLimitado(it.valor, it.tipoDeduccion, resultado.ingresoBrutoPensiones), 0);
+    const topeAnual = redondearPesosDian(TOPES_DEDUCCION_2025.pensionesExentas * UVT_2025);
+    if (exentas.length === 0) {
+      hallazgos.push({
+        severidad: "advertencia", categoria: "Pensiones",
+        mensaje: `Hay ingresos por pensiones (${fmt(resultado.ingresoBrutoPensiones)}) y no se ha registrado su renta exenta — las pensiones están exentas hasta 1.000 UVT mensuales (Art. 206 núm. 5 E.T.). Sin ella, toda la renta líquida de la cédula (${fmt(resultado.rentaLiquidaPensiones)}) queda gravada.`,
+      });
+    } else if (registrada > resultado.rentaLiquidaPensiones + 0.5) {
+      hallazgos.push({
+        severidad: "advertencia", categoria: "Pensiones",
+        mensaje: `La renta exenta de pensiones registrada (${fmt(registrada)}) es mayor que la renta líquida de la cédula (${fmt(resultado.rentaLiquidaPensiones)}) — en la declaración se toma solo hasta la renta líquida. Revisar el valor digitado.`,
+      });
+    } else if (resultado.rentaLiquidaGravablePensiones > 0.5 && registrada < topeAnual) {
+      hallazgos.push({
+        severidad: "info", categoria: "Pensiones",
+        mensaje: `La renta exenta de pensiones (${fmt(registrada)}) no cubre toda la renta líquida de la cédula (${fmt(resultado.rentaLiquidaPensiones)}) y está por debajo del tope de 12.000 UVT: quedan ${fmt(resultado.rentaLiquidaGravablePensiones)} gravados. Confirmar que sea correcto (ej. algún pago mensual por encima de 1.000 UVT).`,
+      });
+    }
+  }
+  // 7c. Exención de pensiones registrada por fuera de la Cédula de Pensiones.
+  for (const [cedula, c] of Object.entries(datos.cedulas)) {
+    for (const it of c.rentaExenta) {
+      if (it.tipoDeduccion && !tipoPermitidoEnCedula(it.tipoDeduccion, cedula)) {
+        hallazgos.push({ severidad: "error", categoria: "Pensiones", mensaje: `"${it.concepto}" es una renta exenta de pensiones y está registrada en ${NOMBRE_CEDULA[cedula] || cedula} — debe ir en la Cédula de Pensiones.` });
+      }
+    }
   }
 
   // 8. Dividendos — recordatorio de tarifa especial no calculada aquí.
@@ -1132,6 +1187,7 @@ export async function generarBorrador210(
 
   ws.addRow(["CÉDULA DE PENSIONES"]).font = FONT_BOLD as any;
   filaCasilla(ws, CASILLAS_210.pensiones.ingresoBruto, "Ingresos brutos por rentas de pensiones", resultado.ingresoBrutoPensiones);
+  filaCasilla(ws, CASILLAS_210.pensiones.incrngo, "Ingresos no constitutivos de renta", resultado.incrngoPensiones ?? 0);
   filaCasilla(ws, CASILLAS_210.pensiones.rentaLiquida, "Renta líquida", resultado.rentaLiquidaPensiones);
   filaCasilla(ws, CASILLAS_210.pensiones.rentaExenta, "Rentas exentas de pensiones", resultado.rentaExentaPensiones);
   filaCasilla(ws, CASILLAS_210.pensiones.rentaLiquidaGravable, "Renta líquida gravable cédula de pensiones", resultado.rentaLiquidaGravablePensiones, true);
@@ -1466,11 +1522,23 @@ export async function generarAnexosRenta(
     for (const it of ingresoBrutoPensionesItems) { filaTexto(it.concepto, fmt(it.valor), { indent: 8 }); filaComentario(it.comentario); }
     if (ingresoBrutoPensionesItems.length > 1) filaTexto("Total ingresos", fmt(ingresoBrutoPensionesCedula), { indent: 8, negrita: true });
     for (const it of datos.cedulas["pensiones"]?.ingresoNoConstitutivo || []) { filaTexto(`${it.concepto} (INCRNGO)`, `-${fmt(it.valor)}`, { indent: 8, color: "#b91c1c" }); filaComentario(it.comentario); }
-    for (const it of datos.cedulas["pensiones"]?.rentaExenta || []) {
+    const exentasPensiones = datos.cedulas["pensiones"]?.rentaExenta || [];
+    if (exentasPensiones.length > 0) filaTexto("Renta líquida", fmt(resultado.rentaLiquidaPensiones), { indent: 8, negrita: true });
+    let exentaRegistradaPensiones = 0;
+    for (const it of exentasPensiones) {
       const limitado = calcularValorLimitado(it.valor, it.tipoDeduccion, ingresoBrutoPensionesCedula);
-      const nota = `renta exenta${limitado < it.valor ? `; digitado: ${fmt(it.valor)}` : ""}`;
+      exentaRegistradaPensiones += limitado;
+      const norma = it.tipoDeduccion && TIPOS_RENTA_EXENTA_PENSIONES.has(it.tipoDeduccion) ? ", Art. 206 núm. 5 E.T." : "";
+      const nota = `renta exenta${norma}${limitado < it.valor ? `; digitado: ${fmt(it.valor)}` : ""}`;
       filaTexto(`${it.concepto} (${nota})`, `-${fmt(limitado)}`, { indent: 8, color: "#b91c1c" });
       filaComentario(it.comentario);
+    }
+    // La exenta no puede pasar de la renta líquida de la cédula: si lo
+    // registrado es más, se dice cuánto se toma de verdad.
+    if (exentaRegistradaPensiones > resultado.rentaExentaPensiones + 0.5) {
+      filaTexto("Renta exenta que se toma (hasta la renta líquida)", `-${fmt(resultado.rentaExentaPensiones)}`, { indent: 8, negrita: true, color: "#b91c1c" });
+    } else if (exentasPensiones.length > 1) {
+      filaTexto("Total rentas exentas de pensiones", `-${fmt(resultado.rentaExentaPensiones)}`, { indent: 8, negrita: true, color: "#b91c1c" });
     }
     lineaDivisoria();
     filaTexto("Renta líquida gravable cédula de pensiones", fmt(resultado.rentaLiquidaGravablePensiones), { negrita: true });
