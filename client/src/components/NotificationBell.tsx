@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
+import { irADestino } from "@/lib/destinoNotificacion";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -37,22 +38,17 @@ export default function NotificationBell() {
   const markAllRead = trpc.notifications.markAllRead.useMutation();
 
   const handleClickNotification = async (n: any) => {
+    setOpen(false);
+    // Primero se navega (sin esperar al servidor) y se deja dicho qué
+    // resaltar; marcarla como leída va en paralelo.
+    irADestino({
+      entityType: n.entityType, entityId: n.entityId, clientId: n.clientId,
+      tipo: n.type, mensaje: n.message, cuando: n.createdAt,
+    }, setLocation);
     if (!n.isRead) {
-      await markRead.mutateAsync({ id: n.id });
+      try { await markRead.mutateAsync({ id: n.id }); } catch { /* se reintenta la próxima vez */ }
       refetchCount();
       refetchList();
-    }
-    setOpen(false);
-    if (n.entityType === "task") {
-      setLocation(`/tareas?taskId=${n.entityId}`);
-    } else if (n.entityType === "board_post") {
-      setLocation(`/tablero?postId=${n.entityId}`);
-    } else if (n.clientId) {
-      setLocation(`/vencimientos?clientId=${n.clientId}&deadlineId=${n.entityId}`);
-    } else {
-      // Older notifications created before clientId was tracked — fall
-      // back to just the page instead of a broken link.
-      setLocation("/vencimientos");
     }
   };
 

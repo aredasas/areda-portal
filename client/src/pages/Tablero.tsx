@@ -9,6 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { trpc } from "@/lib/trpc";
+import { comentarioNotificado, useDestinoNotificacion, type Destino } from "@/lib/destinoNotificacion";
 import {
   LayoutGrid,
   Loader2,
@@ -53,6 +54,29 @@ export default function Tablero() {
       .catch(() => { /* no impide ver el tablero */ });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Desde una notificación (campanita) o "/tablero?postId=X": se abre esa
+  // publicación (con sus comentarios), se lleva a la vista y se resalta. Si
+  // un filtro la estaba ocultando, se quitan los filtros.
+  const [destino, destinoAtendido] = useDestinoNotificacion("board_post");
+  const [postDestacado, setPostDestacado] = useState<Destino | null>(null);
+  useEffect(() => {
+    if (!destino || !posts) return;
+    const visible = posts.some((p: any) => p.id === destino.entityId);
+    if (!visible && (filtroObligacion !== "todas" || busqueda.trim())) {
+      setFiltroObligacion("todas"); setBusqueda("");
+      return; // vuelve a correr cuando cargue la lista sin filtros
+    }
+    if (visible) {
+      setPostExpandido(destino.entityId);
+      setPostDestacado(destino);
+      window.setTimeout(() => document.getElementById(`publicacion-${destino.entityId}`)?.scrollIntoView({ behavior: "smooth", block: "start" }), 200);
+      window.setTimeout(() => setPostDestacado(null), 6000);
+    } else {
+      toast.error("No se encontró la publicación de esta notificación: pudo haberse eliminado.");
+    }
+    destinoAtendido();
+  }, [destino, posts, filtroObligacion, busqueda, destinoAtendido]);
 
   const createPost = trpc.board.posts.create.useMutation();
   const uploadAttachment = trpc.board.posts.uploadAttachment.useMutation();
@@ -169,6 +193,7 @@ export default function Tablero() {
                 post={post}
                 isAdmin={isAdmin}
                 expandido={postExpandido === post.id}
+                destacado={postDestacado?.entityId === post.id ? postDestacado : null}
                 onToggleExpand={() => setPostExpandido(postExpandido === post.id ? null : post.id)}
                 onPin={() => setPinned.mutateAsync({ id: post.id, pinned: !post.pinned }).then(() => refetch())}
                 onDelete={() => {
@@ -194,14 +219,19 @@ function fileToBase64(file: File): Promise<string> {
   });
 }
 
-function PostCard({ post, isAdmin, expandido, onToggleExpand, onPin, onDelete }: {
+function PostCard({ post, isAdmin, expandido, destacado, onToggleExpand, onPin, onDelete }: {
   post: any; isAdmin: boolean; expandido: boolean; onToggleExpand: () => void; onPin: () => void; onDelete: () => void;
+  /** Viene de una notificación: se resalta la publicación (o el comentario notificado). */
+  destacado?: Destino | null;
 }) {
   const { data: attachments } = trpc.board.posts.getAttachments.useQuery({ postId: post.id }, { enabled: expandido });
   const { data: comentarios } = trpc.board.comments.list.useQuery({ postId: post.id }, { enabled: expandido });
 
   return (
-    <Card className={post.pinned ? "border-[#42302E]/40 bg-[#42302E]/[0.03]" : ""}>
+    <Card
+      id={`publicacion-${post.id}`}
+      className={`scroll-mt-20 transition-shadow duration-700 ${post.pinned ? "border-[#42302E]/40 bg-[#42302E]/[0.03]" : ""} ${destacado && destacado.tipo !== "comentario" ? "ring-2 ring-[#EDA011]" : ""}`}
+    >
       <CardHeader className="pb-2">
         <div className="flex items-start justify-between gap-2">
           <div className="flex items-center gap-2 flex-wrap">
@@ -244,7 +274,7 @@ function PostCard({ post, isAdmin, expandido, onToggleExpand, onPin, onDelete }:
                 ))}
               </div>
             )}
-            <PostComments postId={post.id} comentarios={comentarios} />
+            <PostComments postId={post.id} comentarios={comentarios} destacar={destacado?.tipo === "comentario" ? destacado : null} />
           </div>
         )}
       </CardContent>
@@ -266,8 +296,15 @@ function AttachmentRow({ attachment }: { attachment: any }) {
   );
 }
 
-function PostComments({ postId, comentarios }: { postId: number; comentarios: any }) {
+function PostComments({ postId, comentarios, destacar }: { postId: number; comentarios: any; destacar?: Destino | null }) {
   const [content, setContent] = useState("");
+  // El comentario notificado se lleva a la vista y se resalta.
+  const objetivo = destacar && comentarios ? comentarioNotificado(comentarios, destacar.mensaje, destacar.cuando) : null;
+  useEffect(() => {
+    if (!objetivo) return;
+    const t = window.setTimeout(() => document.getElementById(`comentario-tablero-${objetivo.id}`)?.scrollIntoView({ behavior: "smooth", block: "center" }), 300);
+    return () => window.clearTimeout(t);
+  }, [objetivo?.id]);
   const utils = trpc.useUtils();
   const createComment = trpc.board.comments.create.useMutation();
 
@@ -285,7 +322,7 @@ function PostComments({ postId, comentarios }: { postId: number; comentarios: an
   return (
     <div className="space-y-2">
       {comentarios?.map((c: any) => (
-        <div key={c.id} className="bg-muted/50 rounded-lg p-2 text-sm">
+        <div key={c.id} id={`comentario-tablero-${c.id}`} className={`rounded-lg p-2 text-sm transition-colors duration-700 ${objetivo?.id === c.id ? "bg-[#FFF1C7] ring-2 ring-[#EDA011]" : "bg-muted/50"}`}>
           <div className="flex items-center justify-between">
             <span className="font-medium text-xs">{c.authorName || "Usuario"}</span>
             <span className="text-xs text-muted-foreground">

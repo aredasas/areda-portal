@@ -13,6 +13,7 @@ import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { trpc } from "@/lib/trpc";
+import { useDestinoNotificacion } from "@/lib/destinoNotificacion";
 import { bogotaTodayUTCMidnight } from "@/lib/dateUtils";
 import { Calendar, Loader2, RefreshCw, Settings2, CheckCircle2, ChevronLeft, ChevronRight, List, CalendarDays, Pencil, Upload, FileText, FolderOpen, RotateCcw, X, MessageSquare } from "lucide-react";
 import { useState, useMemo, useRef, useEffect } from "react";
@@ -107,25 +108,33 @@ export default function Vencimientos() {
   const [selectedDeadlineSubfolder, setSelectedDeadlineSubfolder] = useState<string>("");
   const [newDeadlineSubfolderName, setNewDeadlineSubfolderName] = useState("");
 
-  // Coming from a notification click ("/vencimientos?clientId=X&deadlineId=Y")
-  // — select that client automatically so its deadlines load.
+  // Desde una notificación (campanita) o un enlace "/vencimientos?clientId=X&deadlineId=Y":
+  // se selecciona ese cliente y, cuando carguen sus vencimientos, se abren
+  // los comentarios del vencimiento notificado con el comentario resaltado.
+  // Funciona también si ya se estaba en esta página con otro cliente.
+  const [destino, destinoAtendido] = useDestinoNotificacion("deadline");
+  const [comentarioDestacado, setComentarioDestacado] = useState<{ mensaje?: string | null; cuando?: string | Date | null } | null>(null);
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const clientId = params.get("clientId");
-    if (clientId) setSelectedClient(clientId);
-  }, []);
-
-  // Once that client's deadlines have loaded, open the comments dialog for
-  // the specific one the notification was about, then clean the URL.
+    if (destino?.clientId && String(destino.clientId) !== selectedClient) setSelectedClient(String(destino.clientId));
+  }, [destino, selectedClient]);
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const deadlineId = params.get("deadlineId");
-    if (deadlineId && clientDeadlines) {
-      const match = clientDeadlines.find((d: any) => String(d.id) === deadlineId);
-      if (match) setCommentingDeadline(match);
-      window.history.replaceState({}, "", "/vencimientos");
+    if (!destino) return;
+    if (!destino.clientId) {
+      // Notificaciones antiguas, sin cliente: no hay cómo ubicar el vencimiento.
+      toast.error("Esta notificación es anterior y no trae el cliente: busca el vencimiento seleccionando el cliente.");
+      destinoAtendido();
+      return;
     }
-  }, [clientDeadlines]);
+    if (String(destino.clientId) !== selectedClient || !clientDeadlines) return;
+    const match = clientDeadlines.find((d: any) => d.id === destino.entityId);
+    if (match) {
+      setCommentingDeadline(match);
+      setComentarioDestacado(destino.mensaje ? { mensaje: destino.mensaje, cuando: destino.cuando } : null);
+    } else {
+      toast.error("No se encontró el vencimiento de esta notificación en el cliente seleccionado.");
+    }
+    destinoAtendido();
+  }, [destino, selectedClient, clientDeadlines, destinoAtendido]);
   const { data: isDriveConfigured } = trpc.googleDrive.isConfigured.useQuery();
   const { data: rememberedDeadlineSubfolders } = trpc.clients.getDriveSubfolders.useQuery(
     { clientId: completingDeadline?.clientId as number },
@@ -850,7 +859,7 @@ export default function Vencimientos() {
                                 variant="ghost"
                                 size="sm"
                                 className="text-muted-foreground"
-                                onClick={() => setCommentingDeadline(d)}
+                                onClick={() => { setCommentingDeadline(d); setComentarioDestacado(null); }}
                                 title="Comentarios"
                               >
                                 <MessageSquare className="h-3.5 w-3.5" />
@@ -1131,7 +1140,7 @@ export default function Vencimientos() {
         </Dialog>
 
         {/* Comments dialog */}
-        <Dialog open={!!commentingDeadline} onOpenChange={(open) => { if (!open) setCommentingDeadline(null); }}>
+        <Dialog open={!!commentingDeadline} onOpenChange={(open) => { if (!open) { setCommentingDeadline(null); setComentarioDestacado(null); } }}>
           <DialogContent className="sm:max-w-2xl max-h-[85vh] overflow-y-auto overflow-x-hidden">
             <DialogHeader>
               <DialogTitle>Comentarios</DialogTitle>
@@ -1143,7 +1152,7 @@ export default function Vencimientos() {
             </DialogHeader>
             {commentingDeadline && (
               <div className="min-w-0">
-                <CommentsSection entityType="deadline" entityId={commentingDeadline.id} />
+                <CommentsSection entityType="deadline" entityId={commentingDeadline.id} destacar={comentarioDestacado} />
               </div>
             )}
           </DialogContent>

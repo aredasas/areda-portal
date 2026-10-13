@@ -28,6 +28,18 @@ function assertRentaPNAccess(role: string | null | undefined) {
 // no son administradores solo pueden operar sobre sus clientes asignados
 // (mismo campo `managerId` que usa el resto de la app). Se valida por
 // cliente en cada endpoint que reciba un clienteId.
+/** Quién puede ver y escribir los comentarios de una tarea: los mismos a
+ * quienes se les notifica (encargado, quien la creó y quien ya comentó
+ * antes), además de los administradores. Antes solo el encargado: quien
+ * creó la tarea o participaba en la conversación recibía la notificación,
+ * pero al abrirla no podía ver ni responder el comentario. */
+async function assertParticipaEnTarea(user: { id: number; role: string | null }, task: { id: number; assignedToId: number | null; createdById: number | null }) {
+  if (user.role === "admin" || task.assignedToId === user.id || task.createdById === user.id) return;
+  const hilo = await db.getComments("task", task.id);
+  if (hilo.some((c: any) => c.authorId === user.id)) return;
+  throw new TRPCError({ code: "FORBIDDEN", message: "No tiene acceso a esta tarea" });
+}
+
 async function assertClienteAccesibleInformes(ctx: { user: { id: number; role: string | null } }, clienteId: number) {
   if (ctx.user.role === "admin") return;
   const cliente = await db.getClientById(clienteId);
@@ -1779,9 +1791,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
         if (input.entityType === "task") {
           const task = await db.getTaskById(input.entityId);
           if (!task) throw new Error("Tarea no encontrada");
-          if (ctx.user.role !== "admin" && task.assignedToId !== ctx.user.id) {
-            throw new TRPCError({ code: "FORBIDDEN", message: "No tiene acceso a esta tarea" });
-          }
+          await assertParticipaEnTarea(ctx.user, task);
         } else if (input.entityType === "renta_cliente") {
           assertRentaPNAccess(ctx.user.role);
         } else {
@@ -1802,9 +1812,7 @@ Responde basándote en esta información cuando sea posible. Si la pregunta requ
         if (input.entityType === "task") {
           const task = await db.getTaskById(input.entityId);
           if (!task) throw new Error("Tarea no encontrada");
-          if (ctx.user.role !== "admin" && task.assignedToId !== ctx.user.id) {
-            throw new TRPCError({ code: "FORBIDDEN", message: "No tiene acceso a esta tarea" });
-          }
+          await assertParticipaEnTarea(ctx.user, task);
           await db.createComment(input.entityType, input.entityId, ctx.user.id, input.content);
           // Notifica a todos los que han participado en la conversación de
           // esta tarea (encargado, quien la creó, y cualquiera que ya haya

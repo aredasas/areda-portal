@@ -13,6 +13,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { trpc } from "@/lib/trpc";
+import { useDestinoNotificacion } from "@/lib/destinoNotificacion";
 import { getEffectivePriority, priorityLabels, priorityColors } from "@/lib/priority";
 import { ClipboardList, Plus, Loader2, Calendar, Upload, CheckCircle2, RotateCcw, Paperclip, FileText, Eye, FolderOpen, XCircle, X, Repeat, Search, Pencil } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
@@ -81,22 +82,23 @@ export default function Tareas() {
   const [showDetailDialog, setShowDetailDialog] = useState(false);
   const [detailTask, setDetailTask] = useState<any>(null);
 
-  // Coming from a notification click ("/tareas?taskId=X") — open that
-  // task's detail automatically once the list has loaded.
+  // Desde una notificación (campanita) o un enlace "/tareas?taskId=X":
+  // se abre esa tarea apenas cargue la lista — también si ya se estaba en
+  // esta página — y se resalta el comentario notificado.
+  const [destino, destinoAtendido] = useDestinoNotificacion("task");
+  const [comentarioDestacado, setComentarioDestacado] = useState<{ mensaje?: string | null; cuando?: string | Date | null } | null>(null);
   useEffect(() => {
-    if (!tasks) return;
-    const params = new URLSearchParams(window.location.search);
-    const taskId = params.get("taskId");
-    if (taskId) {
-      const match = tasks.find((t: any) => String(t.id) === taskId);
-      if (match) {
-        setDetailTask(match);
-        setShowDetailDialog(true);
-      }
-      // Clean the URL so refreshing the page doesn't keep reopening it.
-      window.history.replaceState({}, "", "/tareas");
+    if (!destino || !tasks) return;
+    const match = tasks.find((t: any) => t.id === destino.entityId);
+    if (match) {
+      setDetailTask(match);
+      setShowDetailDialog(true);
+      setComentarioDestacado(destino.mensaje ? { mensaje: destino.mensaje, cuando: destino.cuando } : null);
+    } else {
+      toast.error("No se encontró la tarea de esta notificación: pudo haberse eliminado o ya no está asignada a ti.");
     }
-  }, [tasks]);
+    destinoAtendido();
+  }, [destino, tasks, destinoAtendido]);
   const [attachmentFile, setAttachmentFile] = useState<File | null>(null);
   const evidenceInputRef = useRef<HTMLInputElement>(null);
   const attachInputRef = useRef<HTMLInputElement>(null);
@@ -257,6 +259,7 @@ export default function Tareas() {
   const handleViewDetail = (task: any) => {
     setDetailTask(task);
     setShowDetailDialog(true);
+    setComentarioDestacado(null);
   };
 
   const handleUploadAttachment = async () => {
@@ -712,7 +715,7 @@ export default function Tareas() {
       </Dialog>
 
       {/* Task Detail Dialog (view attachments, add attachments) */}
-      <Dialog open={showDetailDialog} onOpenChange={(open) => { if (!open) { setShowDetailDialog(false); setDetailTask(null); setAttachmentFile(null); } }}>
+      <Dialog open={showDetailDialog} onOpenChange={(open) => { if (!open) { setShowDetailDialog(false); setDetailTask(null); setAttachmentFile(null); setComentarioDestacado(null); } }}>
         <DialogContent className="sm:max-w-3xl max-h-[85vh] overflow-y-auto overflow-x-hidden">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
@@ -839,7 +842,7 @@ export default function Tareas() {
               </div>
 
               <div className="border-t pt-3">
-                <CommentsSection entityType="task" entityId={detailTask.id} />
+                <CommentsSection entityType="task" entityId={detailTask.id} destacar={comentarioDestacado} />
               </div>
             </div>
           )}
